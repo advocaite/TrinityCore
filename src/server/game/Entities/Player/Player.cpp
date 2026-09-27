@@ -14991,14 +14991,24 @@ uint32 Player::GetGossipTextId(uint32 menuId, WorldObject* source)
 
     GossipMenusMapBounds menuBounds = sObjectMgr->GetGossipMenusMapBounds(menuId);
 
+    // Classic 1.60: a text whose conditions are met wins over an unconditioned one (vanilla content marks the
+    // special case with conditions and leaves the default text without)
+    bool conditionalText = false;
     for (GossipMenusContainer::const_iterator itr = menuBounds.first; itr != menuBounds.second; ++itr)
     {
         // continue if only checks menuid instead of text
         if (!itr->second.TextID)
             continue;
 
+        bool hasConditions = !itr->second.Conditions.IsEmpty();
+        if (conditionalText && !hasConditions)
+            continue;
+
         if (itr->second.Conditions.Meets(this, source))
+        {
             textId = itr->second.TextID;
+            conditionalText = hasConditions;
+        }
     }
 
     return textId;
