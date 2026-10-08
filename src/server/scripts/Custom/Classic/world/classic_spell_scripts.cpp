@@ -139,6 +139,81 @@ class classic_spell_heal_injured_druid : public SpellScript
     }
 };
 
+// Discipline (99134): the item's spell applies Motivated to a Deathguard, but its dummy aura does not
+// grant objective credit on its own.
+enum ClassicDiscipline
+{
+    QUEST_DISCIPLINE                  = 99134,
+    SPELL_MOTIVATED                   = 1319421,
+    NPC_DEATHGUARD_LINNEA            = 1495,
+    NPC_DEATHGUARD_DILLINGER         = 1496,
+    NPC_DEATHGUARD_SIMMER            = 1519,
+    NPC_DEATHGUARD_BURGESS           = 1652,
+    NPC_DEATHGUARD_ABRAHAM           = 1735,
+    NPC_DEATHGUARD_RANDOLPH          = 1736,
+    NPC_DEATHGUARD_OLIVER            = 1737,
+    NPC_DEATHGUARD_TERRENCE          = 1738,
+    NPC_DEATHGUARD_PHILLIP           = 1739,
+    NPC_DEATHGUARD_SALTAIN           = 1740,
+    NPC_DEATHGUARD_BARTRAND          = 1741,
+    NPC_DEATHGUARD_BARTHOLOMEW       = 1742,
+    NPC_DEATHGUARD_LAWRENCE          = 1743,
+    NPC_DEATHGUARD_MORT              = 1744,
+    NPC_DEATHGUARD_MORRIS            = 1745,
+    NPC_DEATHGUARD_CYRUS             = 1746,
+    NPC_DEATHGUARD_GAVIN             = 2209,
+    NPC_DEATHGUARD_ROYANN            = 2210,
+    NPC_DEATHGUARD_LUNDMARK          = 5725,
+    NPC_DEATHGUARD_KRISTOF           = 251001,
+    NPC_DEATHGUARD_BILLMUTH          = 257655,
+    NPC_DEATHGUARD_LIZABETHA         = 272101,
+    NPC_DEATHGUARD_VETERAN           = 275103
+};
+
+class classic_spell_executors_motivator : public AuraScript
+{
+    static bool IsDeathguard(uint32 entry)
+    {
+        switch (entry)
+        {
+            case NPC_DEATHGUARD_LINNEA: case NPC_DEATHGUARD_DILLINGER: case NPC_DEATHGUARD_SIMMER: case NPC_DEATHGUARD_BURGESS:
+            case NPC_DEATHGUARD_ABRAHAM: case NPC_DEATHGUARD_RANDOLPH: case NPC_DEATHGUARD_OLIVER: case NPC_DEATHGUARD_TERRENCE:
+            case NPC_DEATHGUARD_PHILLIP: case NPC_DEATHGUARD_SALTAIN: case NPC_DEATHGUARD_BARTRAND: case NPC_DEATHGUARD_BARTHOLOMEW:
+            case NPC_DEATHGUARD_LAWRENCE: case NPC_DEATHGUARD_MORT: case NPC_DEATHGUARD_MORRIS: case NPC_DEATHGUARD_CYRUS:
+            case NPC_DEATHGUARD_GAVIN: case NPC_DEATHGUARD_ROYANN: case NPC_DEATHGUARD_LUNDMARK: case NPC_DEATHGUARD_KRISTOF:
+            case NPC_DEATHGUARD_BILLMUTH: case NPC_DEATHGUARD_LIZABETHA: case NPC_DEATHGUARD_VETERAN:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return spellInfo->Id == SPELL_MOTIVATED;
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        Creature* deathguard = GetTarget()->ToCreature();
+        if (!player || !deathguard || !IsDeathguard(deathguard->GetEntry()) || player->GetQuestStatus(QUEST_DISCIPLINE) != QUEST_STATUS_INCOMPLETE)
+            return;
+
+        // Objective 479408 uses Cyrus's entry as credit for the Deathguard group, regardless of the guard hit.
+        std::function<bool(QuestObjective const*)> const isDisciplineObjective = [](QuestObjective const* objective)
+        {
+            return objective->QuestID == QUEST_DISCIPLINE;
+        };
+        player->UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_MONSTER, NPC_DEATHGUARD_CYRUS, 1, deathguard->GetGUID(), nullptr, &isDisciplineObjective);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_executors_motivator::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // Classic 1.60 (WoW Forever) profession books: Mining for Dummies (247840, 1245608), Wild Harvest (247841, 1245609), Pelt Collecting for
 // Beginners (247846, 1245610). "Increases your <profession> skill by $m1. Cannot raise <profession> skill over $m2. You will learn
 // <profession> if it is not already trained and you do not already know two other professions." Both effects are dummies.
@@ -467,8 +542,34 @@ class classic_spell_hun_taming_rod : public AuraScript
     }
 };
 
+// 348, 707, 1094, 2941, 11665, 11667, 11668, 25309 - Immolate: Classic 1.60 added a script effect (EFFECT_2) that puts the hidden
+// Immolate aura 1282590 on the target (sniff: both auras on the target, same caster). Every Conflagrate rank needs it
+// (SpellAuraRestrictions TargetAuraSpell 1282590), so without it Conflagrate could never be cast.
+class classic_spell_warl_immolate : public SpellScript
+{
+    static constexpr uint32 SPELL_IMMOLATE_CONFLAGRATE_MARKER = 1282590;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_IMMOLATE_CONFLAGRATE_MARKER }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        // the marker targets its caster, so the target casts it on itself for the warlock
+        Unit* target = GetHitUnit();
+        target->CastSpell(target, SPELL_IMMOLATE_CONFLAGRATE_MARKER, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetOriginalCaster(GetCaster()->GetGUID()));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warl_immolate::HandleScript, EFFECT_2, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
+    RegisterSpellScript(classic_spell_warl_immolate);
     RegisterSpellScript(classic_spell_hun_taming_rod);
     RegisterSpellScript(classic_spell_hun_tame_beast_channel);
     RegisterSpellScript(classic_spell_pal_holy_shock);
@@ -478,4 +579,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);
+    RegisterSpellScript(classic_spell_executors_motivator);
 }
