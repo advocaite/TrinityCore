@@ -703,6 +703,7 @@ class TC_GAME_API SpellMgr
 
         // Spell proc table
         SpellProcEntry const* GetSpellProcEntry(SpellInfo const* spellInfo) const;
+        static Optional<SpellProcEntry> GenerateDefaultSpellProcEntry(SpellInfo const& spellInfo);
         static bool CanSpellTriggerProcOnEvent(SpellProcEntry const& procEntry, ProcEventInfo& eventInfo);
 
         // Spell threat table
