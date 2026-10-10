@@ -2368,25 +2368,8 @@ void Player::UpdateClassicLegacyUnlock()
     if (earnedLegacyPoints > renown)
         ModifyCurrency(LegacyRenownCurrencyID, earnedLegacyPoints - renown);
 
-    // Legacy reward track (RenownRewards group 48): reaching a reward's level puts its "Legacy Reward" quest in the log, complete;
-    // it is turned in at Innkeeper Wiley in Ratchet (official 70338: the quest was ready at Wiley, the reward says "Visit Innkeeper
-    // Wiley in Ratchet to claim your reward"). Wiley also offers it again if it was abandoned (world 2026_10_10_05).
-    static constexpr std::pair<int32, uint32> LegacyRewardQuests[] =
-    {
-        { 15, 96339 },  // Replica Ironforge Air Rifle
-        { 25, 96340 },  // Spectral Bear Cub
-        { 40, 96341 },  // Spectral Bear Tabard
-        { 55, 96342 },  // Reins of the Spectral Bear
-    };
-    for (auto const& [points, questId] : LegacyRewardQuests)
-    {
-        if (earnedLegacyPoints < points || GetQuestStatus(questId) != QUEST_STATUS_NONE)
-            continue;
-
-        if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
-            if (CanAddQuest(quest, false))
-                AddQuestAndCheckCompletion(quest, nullptr);
-    }
+    // Legacy reward track (RenownRewards group 48): the Legacy Reward quests 96339-96342 are not put in the log; Innkeeper Wiley in
+    // Ratchet offers each one once its renown level is reached (conditions on the quest, world 2026_10_10_05), as on the official realm.
 
     if (!earnedLegacyPoints && GetLevel() < LegacyUnlockLevel)
         return;
