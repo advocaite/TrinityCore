@@ -21,16 +21,36 @@
 #include "Common.h"
 #include "Define.h"
 #include "DB2Store.h"
+#include "DB2Structure.h"
 
+#include <memory>
 #include <string_view>
 
 class Item;
 struct ItemTemplate;
 class SpellInfo;
+class Map;
 
 class UnitTestDataLoader
 {
     public:
+        // An empty real map for Spell lifecycle tests. No grids or world data
+        // are loaded, and the pre-existing map-store index is restored.
+        class MapFixture
+        {
+            public:
+                MapFixture();
+                ~MapFixture();
+                Map& Get() const { return *_map; }
+                MapFixture(MapFixture const&) = delete;
+                MapFixture& operator=(MapFixture const&) = delete;
+            private:
+                MapEntry _entry{};
+                char** _previousIndex;
+                uint32 _previousSize;
+                std::unique_ptr<Map> _map;
+        };
+
         static uint16 ResolveItemVisual(Item const& item, uint32 visibleEnchantmentId);
 
         template <typename T, uint32 T::*ID>

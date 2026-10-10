@@ -21,8 +21,43 @@
 #include "ItemDefines.h"
 #include "ItemTemplate.h"
 #include "ObjectMgr.h"
+#include "Map.h"
+#include "MMapManager.h"
 #include "SpellInfo.h"
+#include <algorithm>
 #include <cstring> // std::memset
+
+UnitTestDataLoader::MapFixture::MapFixture()
+    : _previousIndex(sMapStore._indexTable), _previousSize(sMapStore._indexTableSize)
+{
+    static bool const registered = []
+    {
+        MMAP::MMapManager* manager = MMAP::MMapManager::instance();
+        ASSERT(manager->getLoadedMapsCount() == 0, "MapFixture requires an isolated, uninitialized MMapManager");
+        manager->InitializeThreadUnsafe({ { 0, {} } });
+        return true;
+    }();
+    (void)registered;
+
+    _entry.ID = 0;
+    _entry.ParentMapID = _entry.CosmeticParentMapID = -1;
+    _entry.Directory = "unit-test";
+    _entry.MapName.Str.fill("unit-test");
+    sMapStore._indexTableSize = std::max<uint32>(_previousSize, 1);
+    sMapStore._indexTable = new char*[sMapStore._indexTableSize]{};
+    if (_previousSize)
+        std::copy_n(_previousIndex, _previousSize, sMapStore._indexTable);
+    sMapStore._indexTable[0] = reinterpret_cast<char*>(&_entry);
+    _map = std::make_unique<Map>(0, 1, 0, DIFFICULTY_NONE);
+}
+
+UnitTestDataLoader::MapFixture::~MapFixture()
+{
+    _map.reset();
+    delete[] sMapStore._indexTable;
+    sMapStore._indexTable = _previousIndex;
+    sMapStore._indexTableSize = _previousSize;
+}
 
 /*static*/ void UnitTestDataLoader::LoadSpellImmunities(SpellInfo& spellInfo)
 {
