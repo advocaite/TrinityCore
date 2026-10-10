@@ -1809,6 +1809,10 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
 
 void Aura::PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo const& eventInfo)
 {
+    // Failed attempts may burn a charge; unrelated event types must not.
+    if (GetSpellInfo()->HasAttribute(SPELL_ATTR15_UNK13) && !(eventInfo.GetTypeMask() & procEntry->ProcFlags))
+        return;
+
     // take one charge, aura expiration will be handled in Aura::TriggerProcOnEvent (if needed)
     if (!(procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES) && IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DO_NOT_CONSUME_RESOURCES)))
     {
