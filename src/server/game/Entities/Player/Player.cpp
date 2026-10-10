@@ -16,6 +16,7 @@
  */
 
 #include "Player.h"
+#include "ClassicItemSkillBonus.h"
 #include "CombatEnchantProc.h"
 #include "DeathRecap.h"
 #include "AreaTrigger.h"
@@ -5920,6 +5921,11 @@ void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
         for (AuraEffect* effect : GetAuraEffectsByType(SPELL_AURA_MOD_SKILL_TALENT))
             if (effect->GetMiscValue() == int32(id))
                 effect->HandleEffect(this, AURA_EFFECT_HANDLE_SKILL, true);
+
+        // An item may already be equipped before this skill is learned. Restore
+        // only this line; recursive ModifySkillBonus would double child bonuses.
+        ClassicItemSkillBonus::Restore(id, GetClassicItemSkillBonus(id), mSkillStatus,
+            *m_activePlayerData, m_values.ModifyValue(&Player::m_activePlayerData));
     };
 
     // Handle already stored skills
@@ -8462,6 +8468,18 @@ void Player::_ApplyClassicItemMod(int32 statType, int32 val, bool apply)
         for (UnitMods mod : { UNIT_MOD_RESISTANCE_FIRE, UNIT_MOD_RESISTANCE_NATURE, UNIT_MOD_RESISTANCE_FROST, UNIT_MOD_RESISTANCE_SHADOW, UNIT_MOD_RESISTANCE_ARCANE })
             HandleStatFlatModifier(mod, BASE_VALUE, float(val), apply);
     // penetration and the creature type bonuses are read when dealing damage
+}
+
+int32 Player::GetClassicItemSkillBonus(uint32 skill) const
+{
+    std::span<int32 const> amounts(m_classicItemMods);
+    return ClassicItemSkillBonus::StoredBonus(skill, ClassicItemModSkills,
+        amounts.subspan(ITEM_MOD_CLASSIC_TWOHANDED_AXES - ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE,
+            std::size(ClassicItemModSkills)), [](uint32 id)
+        {
+            SkillLineEntry const* entry = sSkillLineStore.LookupEntry(id);
+            return entry ? entry->ParentSkillLineID : 0u;
+        });
 }
 
 int32 Player::GetClassicSpellDamageDone(uint32 schoolMask) const

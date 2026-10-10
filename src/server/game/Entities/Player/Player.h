@@ -2265,6 +2265,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // Classic 1.60 item stats (ITEM_MOD_CLASSIC_*): the best value of the schools / creature types in the mask
         int32 GetClassicSpellDamageDone(uint32 schoolMask) const;
+        int32 GetClassicItemSkillBonus(uint32 skill) const;
         int32 GetClassicSpellPenetration(uint32 schoolMask) const;
         int32 GetClassicAttackPowerVersus(uint32 creatureTypeMask) const;
         int32 GetClassicSpellDamageVersus(uint32 creatureTypeMask) const;
