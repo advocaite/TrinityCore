@@ -1014,6 +1014,20 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
     return LearnResult::Ok;
 }
 
+LearnResult ValidateConfigForCommit(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player)
+{
+    // Classic has one specialization containing all talent trees. Purchases
+    // are incremental; the earned-currency and entry checks still apply.
+    ChrSpecializationEntry const* specialization = sChrSpecializationStore.LookupEntry(traitConfig.ChrSpecializationID);
+    bool classicTalents = traitConfig.Type == TraitConfigType::Combat && specialization
+        && !specialization->IsPetSpecialization() && specialization->OrderIndex == 0
+        && std::ranges::none_of(sChrSpecializationStore, [specialization](ChrSpecializationEntry const* other)
+        {
+            return other->ClassID == specialization->ClassID && other->ID != specialization->ID;
+        });
+    return ValidateConfig(traitConfig, player, !classicTalents);
+}
+
 bool CanApplyTraitNode(UF::TraitConfig const& traitConfig, UF::TraitEntry const& traitEntry)
 {
     Node const* node = Trinity::Containers::MapGetValuePtr(_traitNodes, traitEntry.TraitNodeID);

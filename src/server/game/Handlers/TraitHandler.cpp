@@ -128,7 +128,7 @@ void WorldSession::HandleTraitsCommitConfig(WorldPackets::Traits::TraitsCommitCo
             newConfigState.Entries.emplace_back() = newEntry;
     }
 
-    TraitMgr::LearnResult validationResult = TraitMgr::ValidateConfig(newConfigState, _player, true);
+    TraitMgr::LearnResult validationResult = TraitMgr::ValidateConfigForCommit(newConfigState, _player);
     if (validationResult != TraitMgr::LearnResult::Ok)
     {
         TC_LOG_INFO("entities.player", "Player {} talent/trait config {} commit rejected: LearnResult {}", _player->GetName(), configId, AsUnderlyingType(validationResult));
