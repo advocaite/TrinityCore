@@ -16,6 +16,8 @@
  */
 
 #include "InstanceLockMgr.h"
+#include "InstanceResetSchedule.h"
+#include "Util.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "Errors.h"
@@ -52,8 +54,11 @@ InstanceResetTimePoint InstanceLock::GetEffectiveExpiryTime() const
     if (IsExpired())
         return sInstanceLockMgr.GetNextResetTime(entries);
 
-    // if not expired, return expiration time + 1 reset period
-    return GetExpiryTime() + Seconds(entries.MapDifficulty->GetRaidDuration());
+    // Advance to the next calendar boundary, including alternating 3/4-day periods and DST.
+    auto reset = InstanceResetSchedule::GetResetTime(entries.MapDifficulty->ResetInterval,
+        TimeBreakdown(std::chrono::system_clock::to_time_t(GetExpiryTime())),
+        sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_HOUR), sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_WEEK_DAY));
+    return reset ? std::chrono::system_clock::from_time_t(*reset) : InstanceResetTimePoint::max();
 }
 
 SharedInstanceLockData::SharedInstanceLockData() = default;
@@ -507,7 +512,11 @@ void InstanceLockMgr::ResetInstanceLocksForPlayer(ObjectGuid const& playerGuid, 
         for (InstanceLock const* instanceLock : *locksReset)
         {
             MapDb2Entries entries(instanceLock->GetMapId(), instanceLock->GetDifficultyId());
-            InstanceResetTimePoint newExpiryTime = GetNextResetTime(entries) - Seconds(entries.MapDifficulty->GetRaidDuration());
+            auto previousReset = InstanceResetSchedule::GetResetTime(entries.MapDifficulty->ResetInterval,
+                *GameTime::GetDateAndTime(), sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_HOUR),
+                sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_WEEK_DAY), false);
+            InstanceResetTimePoint newExpiryTime = previousReset
+                ? std::chrono::system_clock::from_time_t(*previousReset) : GameTime::GetSystemTime() - Seconds(1);
             // set reset time to last reset time
             const_cast<InstanceLock*>(instanceLock)->SetExpiryTime(newExpiryTime);
             const_cast<InstanceLock*>(instanceLock)->SetExtended(false);
@@ -533,36 +542,10 @@ InstanceLocksStatistics InstanceLockMgr::GetStatistics() const
 
 InstanceResetTimePoint InstanceLockMgr::GetNextResetTime(MapDb2Entries const& entries)
 {
-    tm dateTime = *GameTime::GetDateAndTime();
-    dateTime.tm_sec = 0;
-    dateTime.tm_min = 0;
-    int32 resetHour = sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_HOUR);
-    switch (entries.MapDifficulty->ResetInterval)
-    {
-        case MAP_DIFFICULTY_RESET_DAILY:
-        {
-            if (dateTime.tm_hour >= resetHour)
-                ++dateTime.tm_mday;
-
-            dateTime.tm_hour = resetHour;
-            break;
-        }
-        case MAP_DIFFICULTY_RESET_WEEKLY:
-        {
-            int32 resetDay = sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_WEEK_DAY);
-            int32 daysAdjust = resetDay - dateTime.tm_wday;
-            if (dateTime.tm_wday > resetDay || (dateTime.tm_wday == resetDay && dateTime.tm_hour >= resetHour))
-                daysAdjust += 7; // passed it for current week, grab time from next week
-
-            dateTime.tm_hour = resetHour;
-            dateTime.tm_mday += daysAdjust;
-            break;
-        }
-        default:
-            break;
-    }
-
-    return std::chrono::system_clock::from_time_t(mktime(&dateTime));
+    auto reset = InstanceResetSchedule::GetResetTime(entries.MapDifficulty->ResetInterval,
+        *GameTime::GetDateAndTime(), sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_HOUR),
+        sWorld->getIntConfig(CONFIG_RESET_SCHEDULE_WEEK_DAY));
+    return reset ? std::chrono::system_clock::from_time_t(*reset) : InstanceResetTimePoint::max();
 }
 
 InstanceLockMgr& InstanceLockMgr::Instance()

@@ -3037,6 +3037,11 @@ struct MapDifficultyEntry
             return 86400;
         if (ResetInterval == MAP_DIFFICULTY_RESET_WEEKLY)
             return 604800;
+        if (ResetInterval == MAP_DIFFICULTY_RESET_THREE_DAYS)
+            return 3 * 86400;
+        if (ResetInterval == MAP_DIFFICULTY_RESET_FIVE_DAYS)
+            return 5 * 86400;
+        // Twice-weekly boundaries alternate between three and four calendar days.
         return 0;
     }
 
