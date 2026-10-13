@@ -18943,6 +18943,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     SetInventorySlotCount(fields.inventorySlots);
     SetBackpackAutoSortDisabled(fields.inventoryBagFlags.HasFlag(BagSlotFlags::DisableAutoSort));
     SetBackpackSellJunkDisabled(fields.inventoryBagFlags.HasFlag(BagSlotFlags::ExcludeJunkSell));
+    SetSortBagsRightToLeft(fields.inventoryBagFlags.HasFlag(BagSlotFlags::SortBagsRightToLeft));
+    SetInsertItemsLeftToRight(fields.inventoryBagFlags.HasFlag(BagSlotFlags::InsertItemsLeftToRight));
     for (uint32 bagIndex = 0; bagIndex < fields.bagSlotFlags.size(); ++bagIndex)
         ReplaceAllBagSlotFlags(bagIndex, fields.bagSlotFlags[bagIndex]);
     SetBankBagSlotCount(fields.bankSlots);
@@ -21182,6 +21184,10 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
                 inventoryFlags |= BagSlotFlags::DisableAutoSort;
             if (m_activePlayerData->BackpackSellJunkDisabled)
                 inventoryFlags |= BagSlotFlags::ExcludeJunkSell;
+            if (m_activePlayerData->SortBagsRightToLeft)
+                inventoryFlags |= BagSlotFlags::SortBagsRightToLeft;
+            if (m_activePlayerData->InsertItemsLeftToRight)
+                inventoryFlags |= BagSlotFlags::InsertItemsLeftToRight;
             return AsUnderlyingType(inventoryFlags);
         }());
         for (uint32 bagSlotFlag : m_activePlayerData->BagSlotFlags)
@@ -21307,6 +21313,10 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
                 inventoryFlags |= BagSlotFlags::DisableAutoSort;
             if (m_activePlayerData->BackpackSellJunkDisabled)
                 inventoryFlags |= BagSlotFlags::ExcludeJunkSell;
+            if (m_activePlayerData->SortBagsRightToLeft)
+                inventoryFlags |= BagSlotFlags::SortBagsRightToLeft;
+            if (m_activePlayerData->InsertItemsLeftToRight)
+                inventoryFlags |= BagSlotFlags::InsertItemsLeftToRight;
             return AsUnderlyingType(inventoryFlags);
         }());
         for (uint32 bagSlotFlag : m_activePlayerData->BagSlotFlags)

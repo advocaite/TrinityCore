@@ -603,6 +603,26 @@ namespace WorldPackets
             bool Disable = false;
         };
 
+        class SetSortBagsRightToLeft final : public ClientPacket
+        {
+        public:
+            explicit SetSortBagsRightToLeft(WorldPacket&& packet) : ClientPacket(CMSG_SET_SORT_BAGS_RIGHT_TO_LEFT, std::move(packet)) { }
+
+            void Read() override;
+
+            bool Enable = false;
+        };
+
+        class SetInsertItemsLeftToRight final : public ClientPacket
+        {
+        public:
+            explicit SetInsertItemsLeftToRight(WorldPacket&& packet) : ClientPacket(CMSG_SET_INSERT_ITEMS_LEFT_TO_RIGHT, std::move(packet)) { }
+
+            void Read() override;
+
+            bool Enable = false;
+        };
+
         class AddItemPassive final : public ServerPacket
         {
         public:

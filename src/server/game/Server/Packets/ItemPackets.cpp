@@ -404,6 +404,16 @@ void SetBankAutosortDisabled::Read()
     _worldPacket >> Bits<1>(Disable);
 }
 
+void SetSortBagsRightToLeft::Read()
+{
+    _worldPacket >> Bits<1>(Enable);
+}
+
+void SetInsertItemsLeftToRight::Read()
+{
+    _worldPacket >> Bits<1>(Enable);
+}
+
 WorldPacket const* AddItemPassive::Write()
 {
     _worldPacket << int32(SpellID);

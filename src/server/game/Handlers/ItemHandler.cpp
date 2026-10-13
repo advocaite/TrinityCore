@@ -1301,3 +1301,13 @@ void WorldSession::HandleSetBankAutosortDisabled(WorldPackets::Item::SetBankAuto
 {
     _player->SetBankAutoSortDisabled(setBankAutosortDisabled.Disable);
 }
+
+void WorldSession::HandleSetSortBagsRightToLeft(WorldPackets::Item::SetSortBagsRightToLeft const& setSortBagsRightToLeft)
+{
+    _player->SetSortBagsRightToLeft(setSortBagsRightToLeft.Enable);
+}
+
+void WorldSession::HandleSetInsertItemsLeftToRight(WorldPackets::Item::SetInsertItemsLeftToRight const& setInsertItemsLeftToRight)
+{
+    _player->SetInsertItemsLeftToRight(setInsertItemsLeftToRight.Enable);
+}
