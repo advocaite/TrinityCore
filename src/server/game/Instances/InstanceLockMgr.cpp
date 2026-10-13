@@ -314,8 +314,14 @@ InstanceLock* InstanceLockMgr::UpdateInstanceLockForPlayer(CharacterDatabaseTran
             ASSERT(sharedDataItr != _instanceLockDataById.end());
             ASSERT(!sharedDataItr->second.expired());
 
+            // The shared data of a fresh instance has InstanceId 0 until the first lock in it is saved. A player without a lock
+            // confirming a pending bind before that (e.g. the first player in was a GM who never binds) would assert below;
+            // the first saved lock names the instance.
+            std::shared_ptr<SharedInstanceLockData> sharedData = sharedDataItr->second.lock();
+            if (!sharedData->InstanceId)
+                sharedData->InstanceId = updateEvent.InstanceId;
             instanceLock = new SharedInstanceLock(entries.MapDifficulty->MapID, Difficulty(entries.MapDifficulty->DifficultyID),
-                GetNextResetTime(entries), updateEvent.InstanceId, sharedDataItr->second.lock());
+                GetNextResetTime(entries), updateEvent.InstanceId, std::move(sharedData));
             ASSERT(static_cast<SharedInstanceLock*>(instanceLock)->GetSharedData()->InstanceId == updateEvent.InstanceId);
         }
         else

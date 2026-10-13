@@ -33,6 +33,7 @@
 #include "SpellInfo.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
+#include "classic_boss_pack.h"
 #include "classic_script_text.h"
 #include "classic_temple_of_ahnqiraj.h"
 #include <algorithm>
@@ -505,6 +506,14 @@ public:
                     SetBossState(uiType, EncounterState(uiData));
                     break;
                 case TYPE_SARTURA:
+                {
+                    // a Sartura that resets alive brings back the Royal Guards killed in the failed attempt
+                    bool const wasFighting = GetBossState(uiType) == IN_PROGRESS;
+                    SetBossState(uiType, EncounterState(uiData));
+                    if (wasFighting && (uiData == NOT_STARTED || uiData == FAIL))
+                        ClassicRespawnBossPack(instance, NPC_BATTLEGUARD_SARTURA, { NPC_SARTURA_S_ROYAL_GUARD });
+                    break;
+                }
                 case TYPE_FANKRISS:
                 case TYPE_VISCIDUS:
                     SetBossState(uiType, EncounterState(uiData));

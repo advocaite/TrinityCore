@@ -43,6 +43,7 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "WorldSession.h"
+#include "classic_boss_pack.h"
 #include "classic_naxxramas.h"
 #include "classic_script_text.h"
 #include <vector>
@@ -877,6 +878,9 @@ void classic_instance_naxxramas_InstanceScript::SetData(uint32 uiType, uint32 ui
             UpdateManualDoor(GO_ARAC_ANUB_GATE, uiData);
             break;
         case TYPE_FAERLINA:
+            // a Faerlina that resets alive brings back the Worshippers and Followers killed in the failed attempt
+            if (m_auiEncounter[uiType] == IN_PROGRESS && (uiData == NOT_STARTED || uiData == FAIL))
+                ClassicRespawnBossPack(instance, NPC_FAERLINA, { NPC_NaxxramasFollower, NPC_NaxxramasWorshipper });
             m_auiEncounter[uiType] = uiData;
             UpdateAutomaticBossEntranceDoor(GO_ARAC_FAER_WEB, uiData);
 

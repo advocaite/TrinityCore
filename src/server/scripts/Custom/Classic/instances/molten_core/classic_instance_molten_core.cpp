@@ -30,6 +30,7 @@
 #include "MapReference.h"
 #include "Player.h"
 #include "TemporarySummon.h"
+#include "classic_boss_pack.h"
 #include "classic_molten_core.h"
 #include "classic_script_text.h"
 #include <array>
@@ -276,6 +277,29 @@ public:
                 SetData(CLASSIC_MC_TYPE_MAGMADAR, DONE);
         }
 
+        // A boss that is not killed resets with his pack: the adds the raid killed during the failed attempt come back.
+        void RespawnBossPack(uint32 bossType)
+        {
+            struct Pack { uint32 type; uint32 boss; std::vector<uint32> adds; };
+            static std::vector<Pack> const packs =
+            {
+                { CLASSIC_MC_TYPE_LUCIFRON,  CLASSIC_MC_NPC_LUCIFRON,  { CLASSIC_MC_NPC_FLAMEWAKER_PROTECTOR } },
+                { CLASSIC_MC_TYPE_GEHENNAS,  CLASSIC_MC_NPC_GEHENNAS,  { CLASSIC_MC_NPC_FLAMEWAKER } },
+                { CLASSIC_MC_TYPE_GARR,      CLASSIC_MC_NPC_GARR,      { CLASSIC_MC_NPC_FIRESWORN } },
+                { CLASSIC_MC_TYPE_SULFURON,  CLASSIC_MC_NPC_SULFURON,  { CLASSIC_MC_NPC_FLAMEWAKER_PRIEST } },
+                { CLASSIC_MC_TYPE_GOLEMAGG,  CLASSIC_MC_NPC_GOLEMAGG,  { CLASSIC_MC_NPC_CORE_RAGER } },
+                { CLASSIC_MC_TYPE_MAJORDOMO, CLASSIC_MC_NPC_MAJORDOMO, { CLASSIC_MC_NPC_FLAMEWAKER_HEALER, CLASSIC_MC_NPC_FLAMEWAKER_ELITE } },
+            };
+            Pack const* pack = nullptr;
+            for (Pack const& p : packs)
+                if (p.type == bossType)
+                    pack = &p;
+            if (!pack)
+                return;
+
+            ClassicRespawnBossPack(instance, pack->boss, pack->adds);
+        }
+
         void SetData(uint32 uiType, uint32 uiData) override
         {
             if (ClassicMcIsBossType(uiType))
@@ -284,7 +308,10 @@ public:
                 if (GetBossState(uiType) == DONE && uiData != DONE)
                     return;
 
+                bool const wasFighting = GetBossState(uiType) == IN_PROGRESS;
                 SetBossState(uiType, EncounterState(uiData));
+                if (wasFighting && (uiData == NOT_STARTED || uiData == FAIL))
+                    RespawnBossPack(uiType);
 
                 if (uiType == CLASSIC_MC_TYPE_MAJORDOMO && uiData == DONE)
                     DoRespawnGameObject(m_uiFirelordCacheGUID, Seconds(HOUR));

@@ -3226,6 +3226,9 @@ void InstanceMap::UpdateInstanceLock(UpdateBossStateSaveDataEvent const& updateS
 
                 player->GetSession()->SendCalendarRaidLockoutAdded(newLock);
             }
+
+            // the Classic raid info panel only refreshes from SMSG_INSTANCE_INFO
+            player->SendRaidInfo();
         }
 
         CharacterDatabase.CommitTransaction(trans);
@@ -3272,6 +3275,8 @@ void InstanceMap::UpdateInstanceLock(UpdateAdditionalSaveDataEvent const& update
 
                 player->GetSession()->SendCalendarRaidLockoutAdded(newLock);
             }
+
+            player->SendRaidInfo();
         }
 
         CharacterDatabase.CommitTransaction(trans);
@@ -3300,6 +3305,8 @@ void InstanceMap::CreateInstanceLockForPlayer(Player* player)
 
         player->GetSession()->SendCalendarRaidLockoutAdded(newLock);
     }
+
+    player->SendRaidInfo();
 }
 
 MapDifficultyEntry const* Map::GetMapDifficulty() const

@@ -234,6 +234,12 @@ Map* MapManager::CreateMap(uint32 mapId, Player* player, Optional<uint32> lfgDun
             else
                 player->SetRecentInstance(mapId, newInstanceId);
         }
+        // A map can outlive its group (raid disbanded or re-formed while the map is still loaded) and the owner is otherwise only
+        // set on creation, so the next group would fail Player::CheckInstanceValidity and be ported out. A group entering an
+        // unowned map becomes its owner; a map whose owner still exists is not touched.
+        else if (group)
+            if (InstanceMap* instanceMap = map->ToInstanceMap())
+                instanceMap->TrySetOwningGroup(group);
     }
     else if (entry->IsGarrison())
     {
