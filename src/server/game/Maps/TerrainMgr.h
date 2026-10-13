@@ -115,6 +115,8 @@ private:
     std::atomic<uint16> _referenceCountFromMap[MAX_NUMBER_OF_GRIDS][MAX_NUMBER_OF_GRIDS];
     std::array<uint64, MAX_NUMBER_OF_GRIDS> _loadedGrids;
     std::bitset<MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS> _gridFileExists; // cache what grids are available for this map (not including parent/child maps)
+    std::bitset<MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS> _vmapLoadFailed; // vmap tiles that failed to load, reported once
+    std::bitset<MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS> _mmapLoadFailed; // mmap tiles that failed to load, not retried
 
     static constexpr Milliseconds CleanupInterval = 1min;
 

@@ -659,6 +659,11 @@ public:
         if (!handler->extractPlayerTarget((char*)args, &target, &targetGuid))
             return false;
 
+        // a dead GM with a living player selected and no name given revives himself
+        if (target && (!args || !*args) && handler->GetSession())
+            if (Player* self = handler->GetSession()->GetPlayer(); self && !self->IsAlive() && target != self && target->IsAlive())
+                target = self;
+
         if (target)
         {
             target->SetHardcoreReviveAllowed(true);     // Classic 1.60 Hardcore realms: staff revive is the one allowed resurrection

@@ -754,9 +754,13 @@ public:
         uint32 const maxTime = _owner.GetGOInfo()->controlZone.maxTime;
         uint32 const maxSuperiority = _owner.GetGOInfo()->controlZone.maxSuperiority;
 
-        float const slope = static_cast<float>(minTime - maxTime) / static_cast<float>(std::max<uint32>(maxSuperiority - minSuperiority, 1));
+        // superiority above maxSuperiority captures at minTime, the line must not be extrapolated past it
+        uint32 const cappedDelta = std::min(delta, std::max(maxSuperiority, minSuperiority));
+
+        // subtract as float, minTime - maxTime in uint32 underflows
+        float const slope = (static_cast<float>(minTime) - static_cast<float>(maxTime)) / static_cast<float>(std::max<uint32>(maxSuperiority - minSuperiority, 1));
         float const intercept = static_cast<float>(maxTime) - slope * static_cast<float>(minSuperiority);
-        return slope * static_cast<float>(delta) + intercept;
+        return slope * static_cast<float>(cappedDelta) + intercept;
     }
 
     void HandleUnitEnterExit(std::vector<Player*> const& newTargetList)

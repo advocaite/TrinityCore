@@ -867,7 +867,7 @@ void Channel::Invite(Player const* player, std::string const& newname)
         return;
     }
 
-    if (!newp->GetSocial()->HasIgnore(guid, player->GetSession()->GetAccountGUID()))
+    if (!newp->GetSocial() || !newp->GetSocial()->HasIgnore(guid, player->GetSession()->GetAccountGUID()))
     {
         InviteAppend appender(guid);
         ChannelNameBuilder<InviteAppend> builder(this, appender);
@@ -994,7 +994,7 @@ void Channel::SendToAll(Builder& builder, ObjectGuid const& guid, ObjectGuid con
 
     for (PlayerContainer::value_type const& i : _playersStore)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(i.first))
-            if (guid.IsEmpty() || !player->GetSocial()->HasIgnore(guid, accountGuid))
+            if (guid.IsEmpty() || !player->GetSocial() || !player->GetSocial()->HasIgnore(guid, accountGuid))
                 localizer(player);
 }
 
@@ -1026,6 +1026,6 @@ void Channel::SendToAllWithAddon(Builder& builder, std::string const& addonPrefi
 
     for (PlayerContainer::value_type const& i : _playersStore)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(i.first))
-            if (player->GetSession()->IsAddonRegistered(addonPrefix) && (guid.IsEmpty() || !player->GetSocial()->HasIgnore(guid, accountGuid)))
+            if (player->GetSession()->IsAddonRegistered(addonPrefix) && (guid.IsEmpty() || !player->GetSocial() || !player->GetSocial()->HasIgnore(guid, accountGuid)))
                 localizer(player);
 }

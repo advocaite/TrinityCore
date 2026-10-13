@@ -148,6 +148,8 @@
 #include "VehiclePackets.h"
 #include "Vignette.h"
 #include "VignettePackets.h"
+#include "VMapFactory.h"
+#include "VMapManager.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -984,6 +986,8 @@ void Player::Update(uint32 p_time)
     CheckDuelDistance(now);
 
     UpdateAfkReport(now);
+
+    UpdateTradeState();
 
     if (GetCombatManager().HasPvPCombat())
         if (Aura* aura = GetAura(SPELL_PVP_RULES_ENABLED))
@@ -6809,6 +6813,23 @@ void Player::UpdateIndoorsOutdoorsAuras()
 {
     if (sWorld->getBoolConfig(CONFIG_VMAP_INDOOR_CHECK))
         RemoveAurasWithAttribute(IsOutdoors() ? SPELL_ATTR0_ONLY_INDOORS : SPELL_ATTR0_ONLY_OUTDOORS);
+
+    // Classic: walking indoors dismounts
+    if (HasAuraType(SPELL_AURA_MOUNTED) && IsMountRestrictedHere(false))
+        RemoveAurasByType(SPELL_AURA_MOUNTED);
+}
+
+// Classic.MountIndoorsRules: the mount spells of the client data do not carry SPELL_ATTR0_ONLY_OUTDOORS
+bool Player::IsMountRestrictedHere(bool checkStartArea) const
+{
+    if (!sWorld->getBoolConfig(CONFIG_CLASSIC_MOUNT_INDOORS_RULES))
+        return false;
+
+    if (Battleground const* bg = GetBattleground(); bg && !bg->isArena())
+        return bg->IsMountRefused(this, checkStartArea);
+
+    // the indoor state comes from the wmo data of the vmaps
+    return !IsOutdoors() && VMAP::VMapFactory::createOrGetVMapManager()->isLineOfSightCalcEnabled();
 }
 
 void Player::UpdateTavernRestingState()
@@ -13888,6 +13909,33 @@ void Player::TradeCancel(bool sendback, TradeStatus status /*= TRADE_STATUS_CANC
         delete trader->m_trade;
         trader->m_trade = nullptr;
     }
+}
+
+// cancels a trade whose partner is gone or out of range, a stale trade would block any new one until relog
+void Player::UpdateTradeState()
+{
+    if (!m_trade)
+        return;
+
+    Player* trader = m_trade->GetTrader();
+
+    // a partner on another map is updated by another thread, a new trade request or a logout clears that trade
+    if (trader->IsInWorld() && trader->GetMap() != GetMap())
+        return;
+
+    if (!trader->m_trade || trader->m_trade->GetTrader() != this)
+    {
+        // the partner is no longer in this trade, only our side is left
+        GetSession()->SendCancelTrade(TRADE_STATUS_CANCELLED);
+        delete m_trade;
+        m_trade = nullptr;
+        return;
+    }
+
+    if (!trader->IsInWorld())
+        TradeCancel(true);
+    else if (!IsWithinDistInMap(trader, TRADE_DISTANCE, false))
+        TradeCancel(true, TRADE_STATUS_TOO_FAR_AWAY);
 }
 
 void Player::UpdateSoulboundTradeItems()
@@ -22342,6 +22390,8 @@ void Player::_SaveStoredAuraTeleportLocations(CharacterDatabaseTransaction trans
             stmt->setFloat(5, storedLocation.Loc.GetPositionZ());
             stmt->setFloat(6, storedLocation.Loc.GetOrientation());
             trans->Append(stmt);
+
+            storedLocation.State = StoredAuraTeleportLocation::UNCHANGED;
         }
 
         ++itr;
@@ -29270,11 +29320,24 @@ void Player::_SaveTransmogOutfits(CharacterDatabaseTransaction trans)
 
 void Player::_SaveBGData(CharacterDatabaseTransaction trans)
 {
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_PLAYER_BGDATA);
-    stmt->setUInt64(0, GetGUID().GetCounter());
-    trans->Append(stmt);
+    bool const hasBgData = m_bgData.bgInstanceID != 0
+        || m_bgData.bgTeam != TEAM_OTHER
+        || m_bgData.joinPos.GetMapId() != MAPID_INVALID
+        || m_bgData.taxiPath[0] || m_bgData.taxiPath[1]
+        || m_bgData.mountSpell
+        || m_bgData.queueId != BATTLEGROUND_QUEUE_NONE;
+
+    // one statement per save: an all-empty row is never written, a row left by earlier data is removed
+    if (!hasBgData)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_PLAYER_BGDATA);
+        stmt->setUInt64(0, GetGUID().GetCounter());
+        trans->Append(stmt);
+        return;
+    }
+
     /* guid, bgInstanceID, bgTeam, x, y, z, o, map, taxi[0], taxi[1], mountSpell */
-    stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_PLAYER_BGDATA);
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_PLAYER_BGDATA);
     stmt->setUInt64(0, GetGUID().GetCounter());
     stmt->setUInt32(1, m_bgData.bgInstanceID);
     stmt->setUInt16(2, m_bgData.bgTeam);
@@ -29622,6 +29685,11 @@ void Player::_SaveTalents(CharacterDatabaseTransaction trans)
     for (uint8 group = 0; group < MAX_SPECIALIZATIONS; ++group)
     {
         PlayerPvpTalentMap const& talents = GetPvpTalentMap(group);
+
+        // an empty row loads the same as no row
+        if (std::ranges::all_of(talents, [](uint32 talentId) { return talentId == 0; }))
+            continue;
+
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_PVP_TALENT);
         stmt->setUInt64(0, GetGUID().GetCounter());
         stmt->setUInt32(1, talents[0]);

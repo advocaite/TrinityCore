@@ -131,7 +131,8 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
     m_playerRecentlyLogout(false),
     m_playerSave(false),
     m_sessionDbcLocale(sWorld->GetAvailableDbcLocale(locale)),
-    m_sessionDbLocaleIndex(locale),
+    // Load.Locales=0 loads enUS strings only, other locales would get empty query data
+    m_sessionDbLocaleIndex(sWorld->getBoolConfig(CONFIG_LOAD_LOCALES) ? locale : DEFAULT_LOCALE),
     _timezoneOffset(timezoneOffset),
     m_latency(0),
     _tutorials(),

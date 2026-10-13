@@ -314,7 +314,9 @@ class TC_GAME_API Battleground
         void RemoveFromBGFreeSlotQueue();                   //this method could delete whole BG instance, if another free is available
         void RemoveFromBGFreeSlotQueueOnShutdown() { m_InBGFreeSlotQueue = false; }
 
-        void DecreaseInvitedCount(Team team)      { (team == ALLIANCE) ? --m_InvitedAlliance : --m_InvitedHorde; }
+        // never below zero: a player who entered without a queue invitation was never counted, a wrapped counter closes the team for good
+        void DecreaseInvitedCount(Team team)      { uint32& invited = (team == ALLIANCE) ? m_InvitedAlliance : m_InvitedHorde; invited = AfterLeave(invited); }
+        static constexpr uint32 AfterLeave(uint32 invited) { return invited ? invited - 1 : 0; }
         void IncreaseInvitedCount(Team team)      { (team == ALLIANCE) ? ++m_InvitedAlliance : ++m_InvitedHorde; }
 
         uint32 GetInvitedCount(Team team) const   { return (team == ALLIANCE) ? m_InvitedAlliance : m_InvitedHorde; }
@@ -346,6 +348,13 @@ class TC_GAME_API Battleground
         BattlegroundMap* FindBgMap() const { return m_Map; }
 
         WorldSafeLocsEntry const* GetTeamStartPosition(TeamId teamId) const;
+
+        // Classic.MountIndoorsRules: mounting is refused in an enclosed start area while the doors are closed (checkStartArea) and indoors
+        bool IsMountRefused(Player const* player, bool checkStartArea) const;
+        // Warsong Gulch starts in the closed flag rooms, the Arathi Basin and Alterac Valley start areas are open ground
+        static constexpr bool IsEnclosedStartArea(uint32 mapId) { return mapId == 489; }
+        // the client's indoor test on the MOGP flags of the wmo group: interior (0x2000) and not exterior (0x8)
+        static constexpr bool IsIndoorWmoGroup(uint32 mogpFlags) { return (mogpFlags & 0x2000) != 0 && (mogpFlags & 0x8) == 0; }
 
         float GetStartMaxDist() const;
 

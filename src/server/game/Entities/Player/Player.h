@@ -1676,6 +1676,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Player* GetTrader() const;
         TradeData* GetTradeData() const { return m_trade; }
         void TradeCancel(bool sendback, TradeStatus status = TRADE_STATUS_CANCELLED);
+        void UpdateTradeState();
 
         CinematicMgr* GetCinematicMgr() const { return _cinematicMgr.get(); }
 
@@ -2488,6 +2489,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // These methods are used to periodically update certain area and aura based mechanics used in Heartbeat and Movement
         void UpdateZoneAndAreaId();
         void UpdateIndoorsOutdoorsAuras();
+        bool IsMountRestrictedHere(bool checkStartArea) const;
         void UpdateTavernRestingState();
 
         static Team TeamForRace(uint8 race);

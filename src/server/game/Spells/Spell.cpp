@@ -6976,6 +6976,11 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     SendMountResult(MountResult::Shapeshifted); // mount result gets sent before the cast result
                     return SPELL_FAILED_DONT_REPORT;
                 }
+
+                // Classic: no mounting indoors, nor in a closed battleground start room
+                if (!IsTriggered())
+                    if (Player const* player = unitCaster->ToPlayer(); player && player->IsMountRestrictedHere(true))
+                        return SPELL_FAILED_ONLY_OUTDOORS;
                 break;
             }
             case SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS:

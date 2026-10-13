@@ -315,12 +315,58 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
         return;
     }
 
+    // a leave whose ticket slot names none of our queues removes the player from the queues he really is in,
+    // otherwise he stays stuck in a queue the client cannot leave
+    auto leaveAllQueues = [&]
+    {
+        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        {
+            BattlegroundQueueTypeId queued = _player->GetBattlegroundQueueTypeId(i);
+            if (queued == BATTLEGROUND_QUEUE_NONE)
+                continue;
+
+            WorldPackets::Battleground::BattlefieldStatusNone battlefieldStatus;
+            battlefieldStatus.Ticket = battlefieldPort.Ticket;
+            battlefieldStatus.Ticket.Id = i;
+            SendPacket(battlefieldStatus.Write());
+
+            _player->RemoveBattlegroundQueueId(queued);
+            sBattlegroundMgr->GetBattlegroundQueue(queued).RemovePlayer(_player->GetGUID(), true);
+        }
+    };
+
+    // an accept with a ticket slot that is not the invited queue is pointed at the queue the player was really invited from
+    if (battlefieldPort.AcceptedInvite)
+    {
+        auto isInvited = [&](BattlegroundQueueTypeId queued)
+        {
+            GroupQueueInfo info;
+            return queued != BATTLEGROUND_QUEUE_NONE
+                && sBattlegroundMgr->GetBattlegroundQueue(queued).GetPlayerGroupInfoData(_player->GetGUID(), &info)
+                && info.IsInvitedToBGInstanceGUID;
+        };
+
+        if (!isInvited(_player->GetBattlegroundQueueTypeId(battlefieldPort.Ticket.Id)))
+        {
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                if (isInvited(_player->GetBattlegroundQueueTypeId(i)))
+                {
+                    battlefieldPort.Ticket.Id = i;
+                    break;
+                }
+            }
+        }
+    }
+
     BattlegroundQueueTypeId bgQueueTypeId = _player->GetBattlegroundQueueTypeId(battlefieldPort.Ticket.Id);
     if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Invalid queueSlot!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
         sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*invalid queue slot*/ 2, 0);
+        if (!battlefieldPort.AcceptedInvite)
+            leaveAllQueues();
         return;
     }
 
@@ -333,6 +379,8 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Player not in queue (No player Group Info)!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
         sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*no group info*/ 3, 0);
+        if (!battlefieldPort.AcceptedInvite)
+            leaveAllQueues();
         return;
     }
     // if action == 1, then player must have been invited to join

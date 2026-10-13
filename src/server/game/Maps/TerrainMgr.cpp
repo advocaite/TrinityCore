@@ -229,7 +229,12 @@ void TerrainInfo::LoadVMap(int32 gx, int32 gy)
             break;
         case VMAP::LoadResult::VersionMismatch:
         case VMAP::LoadResult::ReadFromFileFailed:
-            TC_LOG_ERROR("maps", "Could not load VMAP name:{}, id:{}, x:{}, y:{} (vmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
+            // the tile is still loaded (and unloaded) every time so the vmap tile refs stay balanced, only the error is reported once
+            if (!_vmapLoadFailed[GetBitsetIndex(gx, gy)])
+            {
+                _vmapLoadFailed[GetBitsetIndex(gx, gy)] = true;
+                TC_LOG_ERROR("maps", "Could not load VMAP name:{}, id:{}, x:{}, y:{} (vmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
+            }
             break;
         case VMAP::LoadResult::DisabledInConfig:
             TC_LOG_DEBUG("maps", "Ignored VMAP name:{}, id:{}, x:{}, y:{} (vmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
@@ -244,21 +249,34 @@ void TerrainInfo::LoadMMapImpl(uint32 instanceId, int32 gx, int32 gy)
     if (!DisableMgr::IsPathfindingEnabled(GetId()))
         return;
 
-    switch (MMAP::LoadResult mmapLoadResult = MMAP::MMapManager::instance()->loadMap(sWorld->GetDataPath(), GetId(), instanceId, gx, gy))
+    // a missing or broken tile is not retried (every instance of the map would try it again)
+    {
+        std::scoped_lock lock(_loadMutex);
+        if (_mmapLoadFailed[GetBitsetIndex(gx, gy)])
+            return;
+    }
+
+    MMAP::LoadResult mmapLoadResult = MMAP::MMapManager::instance()->loadMap(sWorld->GetDataPath(), GetId(), instanceId, gx, gy);
+    switch (mmapLoadResult)
     {
         case MMAP::LoadResult::Success:
             TC_LOG_DEBUG("mmaps.tiles", "MMAP loaded name:{}, id:{}, x:{}, y:{} (mmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
-            break;
+            return;
         case MMAP::LoadResult::AlreadyLoaded:
-            break;
-        case MMAP::LoadResult::FileNotFound:
-            if (_parentTerrain)
-                break; // don't log tile not found errors for child maps
-            [[fallthrough]];
+            return;
         default:
-            TC_LOG_WARN("mmaps.tiles", "Could not load MMAP name:{}, id:{}, x:{}, y:{} (mmap rep.: x:{}, y:{}) result: {}", GetMapName(), GetId(), gx, gy, gx, gy, AsUnderlyingType(mmapLoadResult));
             break;
     }
+
+    {
+        std::scoped_lock lock(_loadMutex);
+        _mmapLoadFailed[GetBitsetIndex(gx, gy)] = true;
+    }
+
+    if (mmapLoadResult == MMAP::LoadResult::FileNotFound && _parentTerrain)
+        return; // don't log tile not found errors for child maps
+
+    TC_LOG_WARN("mmaps.tiles", "Could not load MMAP name:{}, id:{}, x:{}, y:{} (mmap rep.: x:{}, y:{}) result: {}", GetMapName(), GetId(), gx, gy, gx, gy, AsUnderlyingType(mmapLoadResult));
 }
 
 void TerrainInfo::UnloadMap(int32 gx, int32 gy)

@@ -4637,6 +4637,15 @@ Classic.ClientMainGroupInsertIndex = 315
 
 Classic.OfficialFeatureFlags = 1
 
+#    Classic.MountIndoorsRules
+#        Description: Vanilla mount rules: no mounting indoors (buildings, caves), walking indoors dismounts, and no mounting
+#                     in the Warsong Gulch start rooms while the doors are closed. The indoor test uses the WMO flags of
+#                     the vmaps (needs vmap.enableLOS).
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Classic.MountIndoorsRules = 1
+
 #    Classic.Shop.Enabled
 #        Description: In-game Store: shop points, products from world.shop_* (.shop reload), the Gold Market, character
 #                     services, realm transfers and the character screen boost. 0 answers like the official server

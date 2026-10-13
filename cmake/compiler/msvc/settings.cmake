@@ -45,9 +45,11 @@ endif()
 
 if("${CMAKE_MAKE_PROGRAM}" MATCHES "MSBuild")
   # multithreaded compiling on VS
+  # Forces writes to the PDB file to be serialized through mspdbsrv.exe (/FS), avoids C1041 with /MP
   target_compile_options(trinity-compile-option-interface
     INTERFACE
-      /MP)
+      /MP
+      /FS)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   # Forces writes to the PDB file to be serialized through mspdbsrv.exe (/FS)
   # Enable faster PDB generation in parallel builds by minimizing RPC calls to mspdbsrv.exe (/Zf)

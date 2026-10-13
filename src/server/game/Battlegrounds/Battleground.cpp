@@ -45,8 +45,11 @@
 #include "ReputationMgr.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
+#include "TerrainMgr.h"
 #include "Transport.h"
 #include "Util.h"
+#include "VMapFactory.h"
+#include "VMapManager.h"
 #include "WorldStateMgr.h"
 #include <cstdarg>
 
@@ -512,6 +515,22 @@ WorldSafeLocsEntry const* Battleground::GetTeamStartPosition(TeamId teamId) cons
 {
     ASSERT(teamId < TEAM_NEUTRAL);
     return _battlegroundTemplate->StartLocation[teamId];
+}
+
+bool Battleground::IsMountRefused(Player const* player, bool checkStartArea) const
+{
+    if (checkStartArea && GetStatus() == STATUS_WAIT_JOIN && IsEnclosedStartArea(GetMapId()))
+        return true;
+
+    if (!VMAP::VMapFactory::createOrGetVMapManager()->isLineOfSightCalcEnabled())
+        return false;
+
+    // the wmo group under the player decides like on the client, not IsOutdoors(): its WMOAreaTable indoor override hits the wrong groups here
+    Map* map = player->GetMap();
+    uint32 mogpFlags = 0;
+    int32 adtId = 0, rootId = 0, groupId = 0;
+    return map->GetTerrain()->GetAreaInfo(player->GetPhaseShift(), map->GetId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        mogpFlags, adtId, rootId, groupId) && IsIndoorWmoGroup(mogpFlags);
 }
 
 float Battleground::GetStartMaxDist() const
