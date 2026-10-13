@@ -781,8 +781,10 @@ void CollectionMgr::AddItemAppearance(ItemModifiedAppearanceEntry const* itemMod
     {
         if (IsSetCompleted(set->ID))
         {
+            // the quest reward can grant the set again and call back into here
             if (Quest const* quest = sObjectMgr->GetQuestTemplate(set->TrackingQuestID))
-                owner->RewardQuest(quest, LootItemType::Item, 0, owner, false);
+                if (owner->GetQuestStatus(set->TrackingQuestID) != QUEST_STATUS_REWARDED)
+                    owner->RewardQuest(quest, LootItemType::Item, 0, owner, false);
 
             owner->UpdateCriteria(CriteriaType::CollectTransmogSetFromGroup, set->TransmogSetGroupID);
         }

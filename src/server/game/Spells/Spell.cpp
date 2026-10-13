@@ -7442,6 +7442,10 @@ void Spell::CheckDst()
 
 SpellCastResult Spell::CheckRange(bool strict) const
 {
+    // A trap picked its target by its own trigger radius; the effect spells of some traps have range 0
+    if (GameObject const* trap = m_caster->ToGameObject(); trap && trap->GetGoType() == GAMEOBJECT_TYPE_TRAP)
+        return SPELL_CAST_OK;
+
     // Don't check for instant cast spells
     if (!strict && m_casttime == 0)
         return SPELL_CAST_OK;
@@ -8541,6 +8545,10 @@ SpellEvent::~SpellEvent()
 {
     if (m_Spell->getState() != SPELL_STATE_FINISHED)
         m_Spell->cancel();
+
+    // events killed on logout or map change skip the handler that clears the spell mod owner's taking spell
+    if (Player* modOwner = m_Spell->GetCaster()->ToPlayer())
+        modOwner->SetSpellModTakingSpell(m_Spell.get(), false);
 
     if (!m_Spell->IsDeletable())
     {

@@ -1308,7 +1308,8 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
     if (duel && GetMapId() != teleportLocation.Location.GetMapId() && GetMap()->GetGameObject(m_playerData->DuelArbiter))
         DuelComplete(DUEL_FLED);
 
-    if (GetMapId() == teleportLocation.Location.GetMapId() && (!teleportLocation.InstanceId || GetInstanceId() == teleportLocation.InstanceId))
+    // a player out of the world (after a failed far teleport) still reports its old map id but is in no grid: take the far path
+    if (IsInWorld() && GetMapId() == teleportLocation.Location.GetMapId() && (!teleportLocation.InstanceId || GetInstanceId() == teleportLocation.InstanceId))
     {
         SetTeleportState(TeleportState::Initiated);
         //if teleport spell is cast in Unit::Update() func
@@ -16372,7 +16373,8 @@ bool Player::SatisfyQuestRace(Quest const* qInfo, bool msg) const
 bool Player::SatisfyQuestMinReputation(Quest const* qInfo, bool msg) const
 {
     uint32 fIdMin = qInfo->GetRequiredMinRepFaction();      //Min required rep
-    if (fIdMin && GetReputationMgr().GetReputation(fIdMin) < qInfo->GetRequiredMinRepValue())
+    // looked up as an entry: factions missing from the client data count as 0 standing without logging an error
+    if (fIdMin && GetReputationMgr().GetReputation(sFactionStore.LookupEntry(fIdMin)) < qInfo->GetRequiredMinRepValue())
     {
         if (msg)
         {
@@ -16389,7 +16391,7 @@ bool Player::SatisfyQuestMinReputation(Quest const* qInfo, bool msg) const
 bool Player::SatisfyQuestMaxReputation(Quest const* qInfo, bool msg) const
 {
     uint32 fIdMax = qInfo->GetRequiredMaxRepFaction();      //Max required rep
-    if (fIdMax && GetReputationMgr().GetReputation(fIdMax) >= qInfo->GetRequiredMaxRepValue())
+    if (fIdMax && GetReputationMgr().GetReputation(sFactionStore.LookupEntry(fIdMax)) >= qInfo->GetRequiredMaxRepValue())
     {
         if (msg)
         {
@@ -19262,7 +19264,11 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         m_InstanceValid = false;
 
     if (player_at_bg)
+    {
+        // the loaded bgTeam does not set the ArenaFaction field the client uses for friend / foe
+        SetBGTeam(GetBGTeam());
         map->ToBattlegroundMap()->GetBG()->AddPlayer(this, m_bgData.queueId);
+    }
 
     // randomize first save time in range [CONFIG_INTERVAL_SAVE] around [CONFIG_INTERVAL_SAVE]
     // this must help in case next save after mass player load after server startup
@@ -23097,6 +23103,9 @@ void Player::Whisper(std::string_view text, Language language, Player* target, b
 
     WorldPackets::Chat::Chat packet;
     packet.Initialize(CHAT_MSG_WHISPER, language, this, this, _text);
+    // send the names too, the receiver may not have the sender in its name cache
+    packet.SenderName = GetName();
+    packet.TargetName = GetName();
     target->SendDirectMessage(packet.Write());
 
     // rest stuff shouldn't happen in case of addon message
@@ -23104,6 +23113,8 @@ void Player::Whisper(std::string_view text, Language language, Player* target, b
         return;
 
     packet.Initialize(CHAT_MSG_WHISPER_INFORM, language, target, target, _text);
+    packet.SenderName = target->GetName();
+    packet.TargetName = target->GetName();
     SendDirectMessage(packet.Write());
 
     RecentAllies::OnWhisper(this, target);

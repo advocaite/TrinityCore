@@ -1442,6 +1442,10 @@ void Group::SetLfgRoles(ObjectGuid guid, uint8 roles)
     if (slot == m_memberSlots.end())
         return;
 
+    // unchanged roles need no party update
+    if (slot->roles == roles)
+        return;
+
     slot->roles = roles;
     SendUpdate();
 }

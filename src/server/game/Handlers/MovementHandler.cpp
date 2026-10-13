@@ -228,9 +228,12 @@ void WorldSession::HandleMoveWorldportAck()
     // relocate the player to the teleport destination
     // the CannotEnter checks are done in TeleporTo but conditions may change
     // while the player is in transit, for example the map may get full
-    if (!newMap || newMap->CannotEnter(player))
+    TransferAbortParams const denied = newMap ? newMap->CannotEnter(player) : TransferAbortParams(TRANSFER_ABORT_ERROR);
+    if (!newMap || denied)
     {
-        TC_LOG_ERROR("network", "Map {} ({}) could not be created for player {} ({}), porting player to homebind", loc.Location.GetMapId(), newMap ? newMap->GetMapName() : "Unknown", player->GetGUID().ToString(), player->GetName());
+        TC_LOG_ERROR("network", "Map {} ({}) could not be created for player {} ({}), porting player to homebind (reason {} arg {})",
+            loc.Location.GetMapId(), newMap ? newMap->GetMapName() : "Unknown", player->GetGUID().ToString(), player->GetName(),
+            uint32(denied.Reason), uint32(denied.Arg));
         player->TeleportTo(player->m_homebind);
         return;
     }
@@ -354,11 +357,13 @@ void WorldSession::HandleMoveWorldportAck()
             {
                 raidInstanceMessage.Locked = !playerLock->IsExpired();
                 raidInstanceMessage.Extended = playerLock->IsExtended();
+                raidInstanceMessage.TimeLeft = int32(std::max<int64>(std::chrono::duration_cast<Seconds>(playerLock->GetEffectiveExpiryTime() - GameTime::GetSystemTime()).count(), 0));
             }
             else
             {
                 raidInstanceMessage.Locked = false;
                 raidInstanceMessage.Extended = false;
+                raidInstanceMessage.TimeLeft = int32(std::max<int64>(std::chrono::duration_cast<Seconds>(InstanceLockMgr::GetNextResetTime(entries) - GameTime::GetSystemTime()).count(), 0));
             }
             SendPacket(raidInstanceMessage.Write());
         }
