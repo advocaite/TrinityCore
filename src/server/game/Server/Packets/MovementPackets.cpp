@@ -561,6 +561,14 @@ void CommonMovement::WriteMovementForceWithDirection(MovementForce const& moveme
     data.FlushBits();
 }
 
+// What the client reads back from one coordinate of a packed delta (11/11/10 bit two's complement, quarter yards, truncated toward zero).
+static float QuantizePackedDelta(float value, int32 bits)
+{
+    int32 const packed = int32(value * 4.0f) & ((1 << bits) - 1);
+    int32 const shift = 32 - bits;
+    return float((packed << shift) >> shift) * 0.25f;
+}
+
 void MonsterMove::InitializeSplineData(::Movement::MoveSpline const& moveSpline)
 {
     SplineData.ID = moveSpline.m_Id;
@@ -614,11 +622,25 @@ void MonsterMove::InitializeSplineData(::Movement::MoveSpline const& moveSpline)
     ::Movement::Spline<int32> const& spline = moveSpline.spline;
     std::vector<G3D::Vector3> const& array = spline.getPoints();
 
+    // The Classic client divides by the length of every segment of the path it rebuilds (start, points, end) and crashes on a
+    // zero one (FLT_DIVIDE_BY_ZERO, seen at Thorium Point: two intermediate points of a compressed path quantized onto the same
+    // quarter-yard node). Points that would sit closer than MinClientSegment to the previous node are left out of the packet;
+    // the last point is always kept.
+    constexpr float MinClientSegment = 0.1f;
+    auto const tooClose = [](G3D::Vector3 const& a, G3D::Vector3 const& b) { return (a - b).squaredLength() < MinClientSegment * MinClientSegment; };
+
     if (splineFlags.UncompressedPath)
     {
         uint32 count = spline.getPointCount() - (splineFlags.Cyclic ? 4 : 3);
+        G3D::Vector3 previous = array[1];   // the start node
         for (uint32 i = 0; i < count; ++i)
-            movementSpline.Points.emplace_back(array[i + 2].x, array[i + 2].y, array[i + 2].z);
+        {
+            G3D::Vector3 const& point = array[i + 2];
+            if (i + 1 < count && tooClose(point, previous))
+                continue;
+            movementSpline.Points.emplace_back(point.x, point.y, point.z);
+            previous = point;
+        }
     }
     else
     {
@@ -631,11 +653,17 @@ void MonsterMove::InitializeSplineData(::Movement::MoveSpline const& moveSpline)
         {
             G3D::Vector3 middle = (realPath[0] + realPath[lastIdx]) / 2.f;
 
-            // first and last points already appended
+            // first and last points already appended; an intermediate point is sent as middle - point in quarter yards, so compare the
+            // node the client gets (middle - quantized delta), not the point
+            G3D::Vector3 previous = realPath[0];
             for (uint32 i = 1; i < lastIdx; ++i)
             {
                 G3D::Vector3 delta = middle - realPath[i];
+                G3D::Vector3 const node = middle - G3D::Vector3(QuantizePackedDelta(delta.x, 11), QuantizePackedDelta(delta.y, 11), QuantizePackedDelta(delta.z, 10));
+                if (tooClose(node, previous) || tooClose(node, realPath[lastIdx]))
+                    continue;
                 movementSpline.PackedDeltas.emplace_back(delta.x, delta.y, delta.z);
+                previous = node;
             }
         }
     }

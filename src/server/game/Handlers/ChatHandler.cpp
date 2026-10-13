@@ -300,6 +300,9 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             }
             else
             {
+                // the unit menu hands over "Name " (name + empty surname): trim it, or the lookup says "No player named"
+                while (!target.empty() && (target.back() == ' ' || target.back() == '\t'))
+                    target.pop_back();
                 ExtendedPlayerName extName = ExtractExtendedPlayerName(target);
 
                 if (!normalizePlayerName(extName.Name))

@@ -163,6 +163,14 @@ bool normalizePlayerName(std::string& name)
     if (!Utf8toWStr(name, tmp))
         return false;
 
+    // The Classic client's unit menu passes "Name " (name + empty surname) to invite/whisper/ignore/friend:
+    // trim surrounding blanks (plain, non-breaking and zero-width) so every lookup that normalizes first finds the player
+    static wchar_t const* const blanks = L" \t\u00A0\u200B\u200C\u200D\u200E\u200F\uFEFF";
+    std::wstring::size_type first = tmp.find_first_not_of(blanks);
+    if (first == std::wstring::npos)
+        return false;
+    tmp = tmp.substr(first, tmp.find_last_not_of(blanks) - first + 1);
+
     wstrToLower(tmp);
     if (!tmp.empty())
         tmp[0] = wcharToUpper(tmp[0]);
