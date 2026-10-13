@@ -23,6 +23,7 @@
 #include "MapUtils.h"
 #include "Memory.h"
 #include <algorithm>
+#include <mutex>
 
 namespace MMAP
 {
@@ -43,6 +44,11 @@ namespace MMAP
     // dummy struct to hold map's mmap data
     struct MMapData
     {
+        // Serializes tile loading and unloading of one map. Instance copies of a map are updated by different map threads and can share
+        // one mesh (GetInstanceIdForMeshLookup), so two threads could run meshData.try_emplace and dtNavMesh::addTile/removeTile on it at
+        // once, which corrupts the tile link list (a later connectExtLinks walk then hangs until the freeze detector aborts).
+        std::mutex loadLock;
+
         MeshDataMap meshData;
 
         // we have to use single dtNavMeshQuery for every instance, since those are not thread safe
@@ -205,6 +211,13 @@ namespace MMAP
 
     LoadResult MMapManager::loadMap(std::string_view basePath, uint32 mapId, uint32 instanceId, int32 x, int32 y)
     {
+        // loadedMMaps is filled once at startup (InitializeThreadUnsafe), so this lookup is read only
+        MMapData* mmap = Trinity::Containers::MapGetValuePtr(loadedMMaps, mapId);
+        if (!mmap)
+            return LoadResult::FileNotFound;
+
+        std::lock_guard<std::mutex> lock(mmap->loadLock);
+
         // make sure the mmap is loaded and ready to load tiles
         switch (LoadResult mapResult = loadMapData(basePath, mapId, instanceId))
         {
@@ -216,7 +229,6 @@ namespace MMAP
         }
 
         // get this mmap data
-        MMapData* mmap = Trinity::Containers::MapGetValuePtr(loadedMMaps, mapId);
         MMapMapData& meshData = mmap->GetMeshData(mapId, instanceId).first->second;
 
         // check if we already have this tile loaded
@@ -304,6 +316,12 @@ namespace MMAP
 
     bool MMapManager::loadMapInstance(std::string_view basePath, uint32 meshMapId, uint32 instanceMapId, uint32 instanceId)
     {
+        MMapData* mmap = Trinity::Containers::MapGetValuePtr(loadedMMaps, meshMapId);
+        if (!mmap)
+            return false;
+
+        std::lock_guard<std::mutex> lock(mmap->loadLock);
+
         switch (loadMapData(basePath, meshMapId, instanceId))
         {
             case LoadResult::Success:
@@ -313,7 +331,6 @@ namespace MMAP
                 return false;
         }
 
-        MMapData* mmap = Trinity::Containers::MapGetValuePtr(loadedMMaps, meshMapId);
         auto [queryItr, inserted] = mmap->navMeshQueries.try_emplace({ instanceMapId, instanceId });
         if (!inserted)
             return true;
@@ -347,6 +364,7 @@ namespace MMAP
         }
 
         MMapData* mmap = itr->second.get();
+        std::lock_guard<std::mutex> lock(mmap->loadLock);
         uint32 packedGridPos = packTileID(x, y);
         for (auto& [instanceId, meshData] : mmap->meshData)
         {
@@ -381,6 +399,8 @@ namespace MMAP
             TC_LOG_DEBUG("maps", "MMAP:unloadMap: Asked to unload not loaded navmesh map {:04}", mapId);
             return;
         }
+
+        std::lock_guard<std::mutex> lock(itr->second->loadLock);
 
         if (!isRebuildingTilesEnabledOnMap(mapId))
         {
@@ -418,6 +438,7 @@ namespace MMAP
         }
 
         MMapData* mmap = itr->second.get();
+        std::lock_guard<std::mutex> lock(mmap->loadLock);
         std::size_t erased = mmap->navMeshQueries.erase({ instanceMapId, instanceId });
         if (!erased)
             TC_LOG_DEBUG("maps", "MMAP:unloadMapInstance: Asked to unload not loaded dtNavMeshQuery mapId {:04} instanceId {}", instanceMapId, instanceId);

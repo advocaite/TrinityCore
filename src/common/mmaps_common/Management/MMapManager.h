@@ -21,6 +21,7 @@
 #include "Define.h"
 #include "MMapDefines.h"
 #include <DetourNavMeshQuery.h>
+#include <atomic>
 #include <memory>
 #include <string_view>
 #include <unordered_map>
@@ -80,7 +81,7 @@ namespace MMAP
 
             MMapDataSet::const_iterator GetMMapData(uint32 mapId) const;
             MMapDataSet loadedMMaps;
-            uint32 loadedTiles = 0;
+            std::atomic<uint32> loadedTiles = 0;    // changed by several map threads (each map has its own load lock)
 
             std::unordered_map<uint32, uint32> parentMapData;
     };
