@@ -1323,6 +1323,14 @@ void ObjectMgr::CheckCreatureTemplate(CreatureTemplate const* cInfo)
         const_cast<CreatureTemplate*>(cInfo)->speed_run = 1.14286f;
     }
 
+    // the scale is the ObjectScale of the creature and of its summons: 0 draws a zero-sized model (client assert) and zeroes its
+    // bounding radius and combat reach
+    if (!(cInfo->scale > 0.0f))
+    {
+        TC_LOG_ERROR("sql.sql", "Creature (Entry: {}) has wrong value ({}) in scale, set to 1.", cInfo->Entry, cInfo->scale);
+        const_cast<CreatureTemplate*>(cInfo)->scale = 1.0f;
+    }
+
     if (cInfo->type && !sCreatureTypeStore.LookupEntry(cInfo->type))
     {
         TC_LOG_ERROR("sql.sql", "Creature (Entry: {}) has invalid creature type ({}) in `type`.", cInfo->Entry, cInfo->type);

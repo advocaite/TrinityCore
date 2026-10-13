@@ -172,6 +172,13 @@ void Player::ApplySpellPowerBonus(int32 amount, bool apply)
 
 void Player::UpdateSpellDamageAndHealingBonus()
 {
+    // SPELL_AURA_OVERRIDE_ATTACK_POWER_BY_SP_PCT together with SPELL_AURA_OVERRIDE_SPELL_POWER_BY_AP_PCT make this and
+    // UpdateAttackPowerAndDamage call each other without end
+    thread_local bool inSpellDamageUpdate = false;
+    if (inSpellDamageUpdate)
+        return;
+    inSpellDamageUpdate = true;
+
     // Magic damage modifiers implemented in Unit::SpellDamageBonusDone
     // This information for client side use only
     // Get healing bonus for all schools
@@ -196,6 +203,8 @@ void Player::UpdateSpellDamageAndHealingBonus()
         UpdateAttackPowerAndDamage();
         UpdateAttackPowerAndDamage(true);
     }
+
+    inSpellDamageUpdate = false;
 }
 
 bool Player::UpdateAllStats()

@@ -67,6 +67,7 @@
 #include "OutdoorPvP.h"
 #include "PartyPackets.h"
 #include "Pet.h"
+#include "PetFollowSpeed.h"
 #include "PetPackets.h"
 #include "PhasingHandler.h"
 #include "Player.h"
@@ -3090,6 +3091,18 @@ void Unit::_UpdateAutoRepeatSpell()
         return;
     }
 
+    // CheckCast below reads the explicit target pointer: resolve it again from its GUID, as Spell::update does,
+    // and stop when the target is gone (a stale pointer crashed in WorldObject::CanSeeOrDetect)
+    if (Spell* autoRepeatSpell = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]; autoRepeatSpell->getState() != SPELL_STATE_PREPARING)
+    {
+        ObjectGuid const targetGuid = autoRepeatSpell->m_targets.GetObjectTargetGUID();
+        if (!autoRepeatSpell->UpdatePointers() || (!targetGuid.IsEmpty() && !autoRepeatSpell->m_targets.GetObjectTarget()))
+        {
+            InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+            return;
+        }
+    }
+
     // castroutine
     if (isAttackReady(RANGED_ATTACK) && m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->getState() != SPELL_STATE_PREPARING)
     {
@@ -3620,8 +3633,12 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
     ASSERT(aurApp);
     if (!aurApp->GetEffectMask())
         _ApplyAura(aurApp, 1 << effIndex);
-    else
+    else if (!aurApp->HasEffect(effIndex))
         aurApp->_HandleEffect(effIndex, true);
+    else
+        // the caller's HasEffect check went stale: a handler of an earlier target re-entered the spell system and applied it
+        TC_LOG_ERROR("spells", "Unit::_ApplyAuraEffect: aura {} effect {} on {} was already applied (re-entry), effectMask 0x{:X}",
+            aura->GetId(), uint32(effIndex), GetGUID().ToString(), aurApp->GetEffectMask());
 }
 
 // handles effects of aura application
@@ -3665,7 +3682,13 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint32 effMask)
     {
         if (effMask & 1 << aurEff->GetEffIndex())
         {
-            aurApp->_HandleEffect(aurEff->GetEffIndex(), true);
+            // a handler above (linked cast, aura state cast, no-stack removal, an earlier effect) can re-enter the spell
+            // system and apply this effect through a nested hit of the same application; applying it twice doubles it
+            if (!aurApp->HasEffect(aurEff->GetEffIndex()))
+                aurApp->_HandleEffect(aurEff->GetEffIndex(), true);
+            else
+                TC_LOG_ERROR("spells", "Unit::_ApplyAura: aura {} effect {} on {} was already applied (re-entry), effectMask 0x{:X}",
+                    aura->GetId(), uint32(aurEff->GetEffIndex()), GetGUID().ToString(), aurApp->GetEffectMask());
             if (aurApp->GetRemoveMode())
                 break;
         }
@@ -9042,6 +9065,7 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             break;
     }
 
+    bool petCatchUp = false;
     if (Creature* creature = ToCreature())
     {
         if (creature->HasUnitTypeMask(UNIT_MASK_MINION) && !creature->IsInCombat())
@@ -9055,6 +9079,7 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
                     if (speed < ownerSpeed || creature->IsWithinDist3d(followed, 10.0f))
                         speed = ownerSpeed;
                     speed *= std::min(std::max(1.0f, 0.75f + (GetDistance(followed) - PET_FOLLOW_DIST) * 0.05f), 1.3f);
+                    petCatchUp = true;
                 }
             }
         }
@@ -9075,6 +9100,10 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
         if (speed < min_speed)
             speed = min_speed;
     }
+
+    // the catch-up scale drifts with every step, a packet for each drift floods the nearby clients
+    if (petCatchUp && !PetCatchUpSpeedWorthSending(m_speed_rate[mtype], speed))
+        return;
 
     SetSpeedRate(mtype, speed);
 }
@@ -10267,6 +10296,10 @@ void Unit::SetPower(Powers power, int32 val, bool withPowerUpdate /*= true*/)
     // energize changes the power without one. The client shows them only on UnitData ClassicComboTarget (Spell::EffectEnergize)
     if (power == POWER_COMBO_POINTS && IsPlayer() && oldPower != val)
         withPowerUpdate = true;
+
+    // no points left, no combo target (finishers, resets, logout)
+    if (power == POWER_COMBO_POINTS && !val && !GetClassicComboTarget().IsEmpty())
+        SetClassicComboTarget(ObjectGuid::Empty);
 
     if (IsInWorld() && withPowerUpdate)
     {
