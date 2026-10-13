@@ -17,6 +17,7 @@
 
 #include "ScriptMgr.h"
 #include "AuctionHouseBot.h"
+#include "AuctionHouseBotBuyerPolicy.h"
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Language.h"
@@ -72,6 +73,9 @@ public:
             { "rebuild",    HandleAHBotRebuildCommand,  rbac::RBAC_PERM_COMMAND_AHBOT_REBUILD,  Console::Yes },
             { "reload",     HandleAHBotReloadCommand,   rbac::RBAC_PERM_COMMAND_AHBOT_RELOAD,   Console::Yes },
             { "status",     HandleAHBotStatusCommand,   rbac::RBAC_PERM_COMMAND_AHBOT_STATUS,   Console::Yes },
+            { "refresh",    HandleAHBotRefreshCommand,  rbac::RBAC_PERM_COMMAND_AHBOT_REBUILD,  Console::Yes },
+            { "add",        HandleAHBotAddCommand,      rbac::RBAC_PERM_COMMAND_AHBOT_REBUILD,  Console::Yes },
+            { "stats",      HandleAHBotStatsCommand,    rbac::RBAC_PERM_COMMAND_AHBOT_STATUS,   Console::Yes },
         };
 
         static ChatCommandTable commandTable =
@@ -124,6 +128,35 @@ public:
     static bool HandleAHBotRebuildCommand(ChatHandler* /*handler*/, Optional<EXACT_SEQUENCE("all")> all)
     {
         sAuctionBot->Rebuild(all.has_value());
+        return true;
+    }
+
+    // .ahbot refresh: expire the bot's own listings that have no bid, the seller restocks on its next cycles
+    static bool HandleAHBotRefreshCommand(ChatHandler* handler)
+    {
+        sAuctionBot->Rebuild(false);
+        handler->SendSysMessage("AuctionHouseBot: bot listings without a bid expire now, the seller restocks on its next cycles.");
+        return true;
+    }
+
+    // .ahbot add [n]: raise every active quality target by n items (default 500) until the next .ahbot reload
+    static bool HandleAHBotAddCommand(ChatHandler* handler, Optional<uint32> amount)
+    {
+        uint32 const extra = amount.value_or(500);
+        for (AuctionQuality quality : EnumUtils::Iterate<AuctionQuality>())
+        {
+            uint32 const current = sAuctionBotConfig->GetConfigItemQualityAmount(quality);
+            if (current)
+                sAuctionBot->SetItemsAmountForQuality(quality, current + extra);
+        }
+        handler->PSendSysMessage("AuctionHouseBot: every active quality target raised by {} (until .ahbot reload).", extra);
+        return true;
+    }
+
+    // .ahbot stats: what the buyer has spent today and its limits
+    static bool HandleAHBotStatsCommand(ChatHandler* handler)
+    {
+        handler->SendSysMessage(AuctionBotBuyerPolicy::Describe().c_str());
         return true;
     }
 

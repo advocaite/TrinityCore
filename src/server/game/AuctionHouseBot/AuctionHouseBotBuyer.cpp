@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseBotBuyer.h"
+#include "AuctionHouseBotBuyerPolicy.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Item.h"
@@ -59,6 +60,8 @@ bool AuctionBotBuyer::Initialize()
 
 void AuctionBotBuyer::LoadConfig()
 {
+    AuctionBotBuyerPolicy::LoadConfig();
+
     for (int i = 0; i < MAX_AUCTION_HOUSE_TYPE; ++i)
     {
         _houseConfig[i].BuyerEnabled = sAuctionBotConfig->GetConfigBuyerEnabled(AuctionHouseType(i));
@@ -106,8 +109,8 @@ uint32 AuctionBotBuyer::GetItemInformation(BuyerConfiguration& config)
     {
         AuctionPosting* entry = &itr->second;
 
-        if (entry->IsCommodity())
-            continue; // skip commodities, there can be thousands of items in a single auction. TODO: partial buys?
+        if (entry->IsCommodity() && !AuctionBotBuyerPolicy::StacksEnabled())
+            continue; // stackable listings are only bought whole, and only with AuctionHouseBot.Buyer.Stacks = 1
 
         if (entry->Owner.IsEmpty() || sAuctionBotConfig->IsBotChar(entry->Owner))
             continue; // Skip auctions owned by AHBot
@@ -305,6 +308,13 @@ void AuctionBotBuyer::BuyAndBidItems(BuyerConfiguration& config)
             continue;
         }
 
+        // buying rules: listing too fresh, or hourly/daily limit spent
+        if (!AuctionBotBuyerPolicy::Eligible(auction))
+        {
+            ++itr;
+            continue;
+        }
+
         // price to bid if bidding
         uint64 bidPrice;
         if (auction->BidAmount)
@@ -326,8 +336,28 @@ void AuctionBotBuyer::BuyAndBidItems(BuyerConfiguration& config)
         TC_LOG_DEBUG("ahbot", "AHBot: Rolling for AHentry {}:", auction->Id);
 
         // Roll buy and bid chances
-        bool successBuy = RollBuyChance(ahInfo, auction);
-        bool successBid = RollBidChance(ahInfo, auction, bidPrice);
+        bool successBuy;
+        bool successBid;
+        if (AuctionBotBuyerPolicy::FairPricingEnabled())
+        {
+            uint32 const qualityChance = GetChanceMultiplier(auction->Items[0]->GetTemplate()->GetQuality());
+            successBuy = auction->BuyoutOrUnitPrice && AuctionBotBuyerPolicy::RollFair(auction, AuctionBotBuyerPolicy::PerItemPrice(auction, auction->BuyoutOrUnitPrice), qualityChance);
+            successBid = auction->MinBid && AuctionBotBuyerPolicy::RollFair(auction, AuctionBotBuyerPolicy::PerItemPrice(auction, bidPrice), qualityChance);
+        }
+        else
+        {
+            successBuy = RollBuyChance(ahInfo, auction);
+            successBid = RollBidChance(ahInfo, auction, bidPrice);
+        }
+
+        // never pay above the price cap (AuctionHouseBot.Buyer.MaxPriceMultiplier)
+        if (uint64 cap = AuctionBotBuyerPolicy::MaxUnitPrice(auction))
+        {
+            if (AuctionBotBuyerPolicy::PerItemPrice(auction, auction->BuyoutOrUnitPrice) > cap)
+                successBuy = false;
+            if (AuctionBotBuyerPolicy::PerItemPrice(auction, bidPrice) > cap)
+                successBid = false;
+        }
 
         // If roll bidding succesfully and bid price is above buyout -> buyout
         // If roll for buying was successful but not for bid, buyout directly
@@ -336,7 +366,11 @@ void AuctionBotBuyer::BuyAndBidItems(BuyerConfiguration& config)
         // Otherwise bid if roll for bid was successful
         if ((auction->BuyoutOrUnitPrice && successBid && bidPrice >= auction->BuyoutOrUnitPrice) ||
             (successBuy && (!successBid || urand(1, 5) == 1)))
+        {
+            AuctionBotBuyerPolicy::RecordBuy(auction, AuctionBotBuyerPolicy::TotalPrice(auction, auction->BuyoutOrUnitPrice),
+                AuctionBotConfig::GetHouseTypeName(config.GetHouseType()));
             BuyEntry(auction, auctionHouse); // buyout
+        }
         else if (successBid)
             PlaceBidToEntry(auction, auctionHouse, bidPrice); // bid
 
@@ -410,7 +444,8 @@ void AuctionBotBuyer::BuyEntry(AuctionPosting* auction, AuctionHouseObject* auct
 
     // Set bot as bidder and set new bid amount
     auction->Bidder = newBidder;
-    auction->BidAmount = auction->BuyoutOrUnitPrice;
+    // a stackable listing's price is per item, the whole listing is bought
+    auction->BidAmount = AuctionBotBuyerPolicy::TotalPrice(auction, auction->BuyoutOrUnitPrice);
 
     // Copy data before freeing AuctionPosting in auctionHouse->RemoveAuction
     // Because auctionHouse->SendAuctionWon can unload items if bidder is offline

@@ -3573,6 +3573,16 @@ Loot.SharedEncounterLoot = 1
 AuctionHouseBot.Account = 0
 
 #
+#    AuctionHouseBot.Sellers.Count
+#       Description: With AuctionHouseBot.Account set, make sure that account owns this many named
+#                    level-60 characters at startup (bare character rows, never logged in), so bot
+#                    listings show a seller name. Existing characters on the account count.
+#                    The account id must be below 2147483648.
+#       Default:     0 - (Disabled, no characters are created)
+
+AuctionHouseBot.Sellers.Count = 0
+
+#
 #    AuctionHouseBot.Update.Interval
 #       Description: Interval in seconds for AHBot to get updated
 #       Default:     20
@@ -3587,6 +3597,26 @@ AuctionHouseBot.Update.Interval = 20
 #                    1 - (Enabled)
 
 AuctionHouseBot.Seller.Enabled = 0
+
+#
+#    AuctionHouseBot.Vanilla.Only
+#       Description: Only list vanilla-era items: no items of a later expansion, no gems or glyphs,
+#                    quality up to epic, required level and item level within the limits below.
+#                    Items in AuctionHouseBot.forceIncludeItems are listed regardless.
+#       Default:     0 - (Disabled, every item that passes the other filters can be listed)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Vanilla.Only = 0
+
+#
+#    AuctionHouseBot.Vanilla.MaxReqLevel
+#    AuctionHouseBot.Vanilla.MaxItemLevel
+#       Description: Highest required level and item level listed with AuctionHouseBot.Vanilla.Only = 1.
+#       Default:     60  - (MaxReqLevel)
+#                    100 - (MaxItemLevel)
+
+AuctionHouseBot.Vanilla.MaxReqLevel = 60
+AuctionHouseBot.Vanilla.MaxItemLevel = 100
 
 #
 #    AuctionHouseBot.Alliance.Items.Amount.Ratio
@@ -4048,6 +4078,66 @@ AuctionHouseBot.Buyer.ChanceMultiplier.Yellow = 100
 #       Default:     20 (20min.)
 
 AuctionHouseBot.Buyer.Recheck.Interval = 20
+
+#
+#    AuctionHouseBot.Buyer.Stacks
+#       Description: Also buy stackable listings (herbs, ore, cloth...), always the whole listing.
+#       Default:     0 - (Disabled, only single items are bought)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Buyer.Stacks = 0
+
+#
+#    AuctionHouseBot.Buyer.MaxPriceMultiplier
+#       Description: Never pay more per item than this times its fair price (vendor buy price, or four
+#                    times the vendor sell price, at least 1 silver).
+#       Default:     0 - (No cap)
+
+AuctionHouseBot.Buyer.MaxPriceMultiplier = 0
+
+#
+#    AuctionHouseBot.Buyer.MinDelay
+#    AuctionHouseBot.Buyer.MaxDelay
+#       Description: Leave a new listing alone for a delay (in seconds) between these two values. The delay
+#                    differs per listing but never changes for one.
+#       Default:     0 - (MinDelay, no delay)
+#                    0 - (MaxDelay, no delay)
+
+AuctionHouseBot.Buyer.MinDelay = 0
+AuctionHouseBot.Buyer.MaxDelay = 0
+
+#
+#    AuctionHouseBot.Buyer.DailyBudgetGold
+#       Description: Gold the buyer may spend on buyouts per day.
+#       Default:     0 - (Unlimited)
+
+AuctionHouseBot.Buyer.DailyBudgetGold = 0
+
+#
+#    AuctionHouseBot.Buyer.MaxBuysPerHour
+#       Description: Buyouts the buyer may make per hour.
+#       Default:     0 - (Unlimited)
+
+AuctionHouseBot.Buyer.MaxBuysPerHour = 0
+
+#
+#    AuctionHouseBot.Buyer.FairPricing
+#       Description: Roll by fair price instead of AuctionHouseBot.Buyer.ChanceFactor: a listing at or under
+#                    the fair price is always bought, above it the chance falls linearly to
+#                    AuctionHouseBot.Buyer.FairMinChance percent at the price cap (MaxPriceMultiplier times
+#                    the fair price, or three times it when MaxPriceMultiplier is 0); nothing above the cap.
+#                    AuctionHouseBot.Buyer.ChanceMultiplier.QUALITY still applies.
+#       Default:     0 - (Disabled)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Buyer.FairPricing = 0
+
+#
+#    AuctionHouseBot.Buyer.FairMinChance
+#       Description: Chance (in percent) to buy a listing priced at the cap with AuctionHouseBot.Buyer.FairPricing = 1.
+#       Default:     35
+
+AuctionHouseBot.Buyer.FairMinChance = 35
 
 #
 ###################################################################################################

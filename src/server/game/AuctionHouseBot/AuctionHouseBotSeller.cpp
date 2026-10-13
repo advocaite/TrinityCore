@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseBotSeller.h"
+#include "AuctionHouseBotVanilla.h"
 #include "AuctionHouseMgr.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
@@ -44,6 +45,8 @@ bool AuctionBotSeller::Initialize()
     std::unordered_set<uint32> lootItems;
     std::unordered_set<uint32> includeItems;
     std::unordered_set<uint32> excludeItems;
+
+    AuctionBotVanilla::LoadConfig();
 
     TC_LOG_DEBUG("ahbot", "AHBot seller filters:");
 
@@ -127,6 +130,10 @@ bool AuctionBotSeller::Initialize()
             ++itemsAdded;
             continue;
         }
+
+        // vanilla-era filter (AuctionHouseBot.Vanilla.Only)
+        if (!AuctionBotVanilla::IsAllowed(prototype))
+            continue;
 
         // bounding filters
         switch (prototype->GetBonding())
@@ -898,7 +905,8 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
         if (!auction.IsCommodity())
             auction.MinBid = bidPrice;
 
-        auction.BuyoutOrUnitPrice = buyoutPrice;
+        // SetPricesOfItem prices the whole stack, a stackable listing stores the price per item
+        auction.BuyoutOrUnitPrice = auction.IsCommodity() ? std::max<uint32>(buyoutPrice / std::max<uint32>(stackCount, 1), 1) : buyoutPrice;
         auction.StartTime = GameTime::GetSystemTime();
         auction.EndTime = auction.StartTime + Hours(urand(config.GetMinTime(), config.GetMaxTime()));
 

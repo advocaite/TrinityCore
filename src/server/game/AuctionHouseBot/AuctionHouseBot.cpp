@@ -18,6 +18,7 @@
 #include "AuctionHouseBot.h"
 #include "AuctionHouseBotBuyer.h"
 #include "AuctionHouseBotSeller.h"
+#include "AuctionHouseBotSellers.h"
 #include "Config.h"
 #include "Containers.h"
 #include "DatabaseEnv.h"
@@ -77,6 +78,9 @@ bool AuctionBotConfig::Initialize()
 
     if (uint32 ahBotAccId = GetConfig(CONFIG_AHBOT_ACCOUNT_ID))
     {
+        // create named seller characters on the ahbot account (AuctionHouseBot.Sellers.Count)
+        AuctionBotSellers::EnsureCharacters(ahBotAccId);
+
         // find account guids associated with ahbot account
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
         stmt->setUInt32(0, ahBotAccId);
