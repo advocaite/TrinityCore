@@ -459,7 +459,7 @@ CREATE TABLE `character_action` (
   `guid` bigint unsigned NOT NULL DEFAULT '0',
   `spec` tinyint unsigned NOT NULL DEFAULT '0',
   `traitConfigId` int NOT NULL DEFAULT '0',
-  `button` tinyint unsigned NOT NULL DEFAULT '0',
+  `button` smallint unsigned NOT NULL DEFAULT '0',
   `action` bigint unsigned NOT NULL DEFAULT '0',
   `type` tinyint unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`guid`,`spec`,`traitConfigId`,`button`)

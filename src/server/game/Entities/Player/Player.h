@@ -428,9 +428,11 @@ struct ActionButton
     }
 };
 
-#define MAX_ACTION_BUTTONS 180
+// Classic 1.60.1.70009 sends 360 action buttons (SMSG_UPDATE_ACTION_BUTTONS decoder asserts 8 * 360 + 1); the
+// controller UI binds above 180, so the server stores all 360 (was 180).
+#define MAX_ACTION_BUTTONS 360
 
-typedef std::map<uint8, ActionButton> ActionButtonList;
+typedef std::map<uint16, ActionButton> ActionButtonList;
 
 struct PvPInfo
 {
@@ -2139,12 +2141,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetMovie() const { return m_movie; }
         void SetMovie(uint32 movie) { m_movie = movie; }
 
-        ActionButton* AddActionButton(uint8 button, uint64 action, uint8 type);
-        void RemoveActionButton(uint8 button);
-        ActionButton const* GetActionButton(uint8 button);
+        ActionButton* AddActionButton(uint16 button, uint64 action, uint8 type);
+        void RemoveActionButton(uint16 button);
+        ActionButton const* GetActionButton(uint16 button);
         void SendInitialActionButtons() const { SendActionButtons(0); }
         void SendActionButtons(uint32 state) const;
-        bool IsActionButtonDataValid(uint8 button, uint64 action, uint8 type) const;
+        bool IsActionButtonDataValid(uint16 button, uint64 action, uint8 type) const;
         void SetMultiActionBars(uint8 mask) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MultiActionBars), mask); }
 
         PvPInfo pvpInfo;
