@@ -600,6 +600,9 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
 
     NormalizePath();
 
+    RemoveNearCoincidentPathPoints();
+    pointCount = uint32(_pathPoints.size());
+
     // first point is always our current location - we need the next one
     SetActualEndPosition(_pathPoints[pointCount-1]);
 
@@ -629,6 +632,33 @@ void PathGenerator::NormalizePath()
 {
     for (uint32 i = 0; i < _pathPoints.size(); ++i)
         _source->UpdateAllowedPositionZ(_pathPoints[i].x, _pathPoints[i].y, _pathPoints[i].z);
+}
+
+// A segment shorter than 0.1 y makes MoveSplineInitArgs::_checkPathLengths() reject the whole spline and the unit does not move.
+// The smooth path walker and off-mesh links can emit such points, and NormalizePath() can move two near points onto each other.
+// The start and the destination are kept, a 2-point path is left alone.
+void PathGenerator::RemoveNearCoincidentPathPoints()
+{
+    if (_pathPoints.size() <= 2)
+        return;
+
+    size_t kept = 1;
+    for (size_t i = 1; i < _pathPoints.size(); ++i)
+    {
+        bool const isLast = i + 1 == _pathPoints.size();
+        if (!isLast && (_pathPoints[i] - _pathPoints[kept - 1]).squaredLength() < 0.01f)
+            continue;
+        _pathPoints[kept++] = _pathPoints[i];
+    }
+
+    // the destination landed on the point before it: drop that point instead
+    if (kept >= 3 && (_pathPoints[kept - 1] - _pathPoints[kept - 2]).squaredLength() < 0.01f)
+    {
+        _pathPoints[kept - 2] = _pathPoints[kept - 1];
+        --kept;
+    }
+
+    _pathPoints.resize(kept);
 }
 
 void PathGenerator::BuildShortcut()
@@ -1032,6 +1062,9 @@ void PathGenerator::ShortenPathUntilDist(G3D::Vector3 const& target, float dist)
     //   ... settle for a guesstimate since i'm not confident in doing trig on every chase motion tick...
     // (@todo review this)
     _pathPoints[i] += (_pathPoints[i - 1] - _pathPoints[i]).direction() * (dist - (_pathPoints[i] - target).length());
+    // the new end can land on _pathPoints[i - 1]; a segment shorter than 0.1 y makes _checkPathLengths() reject the spline
+    if (i >= 2 && (_pathPoints[i] - _pathPoints[i - 1]).squaredLength() < 0.01f)
+        --i;
     _pathPoints.resize(i+1);
 }
 

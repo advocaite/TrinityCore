@@ -132,6 +132,7 @@ class TC_GAME_API PathGenerator
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
         void BuildPointPath(float const* startPoint, float const* endPoint);
         void BuildShortcut();
+        void RemoveNearCoincidentPathPoints();
 
         NavTerrainFlag GetNavTerrain(float x, float y, float z) const;
         void CreateFilter();

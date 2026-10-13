@@ -22,6 +22,7 @@
 #include "PathGenerator.h"
 #include "Unit.h"
 #include "VehicleDefines.h"
+#include <cmath>
 
 namespace Movement
 {
@@ -113,6 +114,45 @@ namespace Movement
         // correct first vertex
         args.path[0] = real_position;
         args.initialOrientation = real_position.orientation;
+
+        // The client rejects a path with a non-finite point or a segment shorter than 0.1 y (BadSpline / FLT_DIVIDE_BY_ZERO) and
+        // Validate() does not check the first segment: the corrected start can coincide with path[1]. Drop such points so the server
+        // spline has no zero-length segment either. Paths whose points are indexed (cyclic, catmullrom, parabolic, falling, spell
+        // effect) are left alone.
+        if (!args.flags.Cyclic && !args.flags.Catmullrom && !args.flags.Parabolic && !args.flags.Falling &&
+            !args.spellEffectExtra && args.effect_start_point == 0)
+        {
+            auto const isFinite = [](Vector3 const& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+            size_t kept = 1;    // path[0] is the corrected start
+            for (size_t i = 1; i < args.path.size(); ++i)
+            {
+                if (!isFinite(args.path[i]))
+                    continue;
+                if ((args.path[i] - args.path[kept - 1]).squaredLength() < 0.01f)
+                {
+                    if (i == args.path.size() - 1 && kept > 1)
+                        args.path[kept - 1] = args.path[i];     // keep the exact destination
+                    continue;
+                }
+                args.path[kept++] = args.path[i];
+            }
+            args.path.resize(kept);
+            if (args.path.size() < 2)
+            {
+                // facing only (MoveSpline::splineIsFacingOnly), turn, animation and transport enter/exit splines in place keep the
+                // unit's own position twice
+                if (args.facing.type != MONSTER_MOVE_NORMAL || args.turnData || args.animTier || args.flags.TransportEnter || args.flags.TransportExit)
+                    args.path.push_back(args.path[0]);
+                else
+                {
+                    // nothing to move to, end the current movement instead
+                    if (!move_spline.Finalized())
+                        MoveSplineInit(unit).Stop(true);
+                    return 0;
+                }
+            }
+        }
+
         args.flags.Enter_Cycle = args.flags.Cyclic;
         move_spline.onTransport = transport;
 
