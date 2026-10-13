@@ -489,10 +489,14 @@ ByteBuffer& operator<<(ByteBuffer& data, LeaverInfo const& leaverInfo)
     return data;
 }
 
-ByteBuffer& operator<<(ByteBuffer& data, PartyPlayerInfo const& playerInfo)
+static ByteBuffer& WritePlayerInfo(ByteBuffer& data, PartyPlayerInfo const& playerInfo, bool classic70291)
 {
     data << SizedString::BitsSize<6>(playerInfo.Name);
-    data << SizedCString::BitsSize<6>(playerInfo.VoiceStateID);
+    // client 70291 reads the voice state id size in 9 bits (6 in retail and 70245): header 6 + 9 + 3 flags = 3 bytes
+    if (classic70291)
+        data << SizedCString::BitsSize<9>(playerInfo.VoiceStateID);
+    else
+        data << SizedCString::BitsSize<6>(playerInfo.VoiceStateID);
     data << Bits<1>(playerInfo.Connected);
     data << Bits<1>(playerInfo.FromSocialQueue);
     data << Bits<1>(playerInfo.VoiceChatSilenced);
@@ -570,13 +574,17 @@ WorldPacket const* PartyUpdate::Write()
     _worldPacket << int32(MyIndex);
     _worldPacket << PartyGUID;
     _worldPacket << uint32(SequenceNum);
+    if (Classic70291)
+        _worldPacket << int8(Classic70291_BeforeLeader);
     _worldPacket << LeaderGUID;
     _worldPacket << uint8(LeaderFactionGroup);
     _worldPacket << int32(PingRestriction);
+    if (Classic70291)
+        _worldPacket << uint64(Classic70291_BeforeMemberCount);
     _worldPacket << Size<uint32>(PlayerList);
 
     for (PartyPlayerInfo const& playerInfos : PlayerList)
-        _worldPacket << playerInfos;
+        WritePlayerInfo(_worldPacket, playerInfos, Classic70291);
 
     _worldPacket << OptionalInit(ChallengeMode);
     _worldPacket << OptionalInit(LfgInfos);

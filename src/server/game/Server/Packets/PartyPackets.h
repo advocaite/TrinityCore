@@ -19,6 +19,7 @@
 #define TRINITYCORE_PARTY_PACKETS_H
 
 #include "Packet.h"
+#include "ClassicOpcodes.h"
 #include "AuthenticationPackets.h"
 #include "ObjectGuid.h"
 #include "MythicPlusPacketsCommon.h"
@@ -603,6 +604,14 @@ namespace WorldPackets
             int32 SequenceNum = 0;
 
             RestrictPingsTo PingRestriction = { };
+
+            // Classic 1.60 client 70291 and later (official sniffs 70245 vs 70338); taken from the realm build
+            bool Classic70291 = ClassicOpcodes::IsBuild70291OrLater();
+
+            // client 70291: the Classic reader takes one signed byte before the leader guid and one 64 bit value before the member
+            // count that the retail layout does not have. The party handler does not use either (the official 70338 server sends 1 and 0).
+            int8 Classic70291_BeforeLeader = 0;
+            uint64 Classic70291_BeforeMemberCount = 0;
 
             std::vector<PartyPlayerInfo> PlayerList;
 
