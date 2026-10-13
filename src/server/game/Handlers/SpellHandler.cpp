@@ -236,6 +236,16 @@ void WorldSession::HandleCastSpellOpcode(WorldPackets::Spells::CastSpell& castRe
         return;
     }
 
+    // Classic 1.60: a rank the character has outgrown (stale action bar) casts the active higher rank
+    if (uint32 const resolved = _player->ResolveSupersededRank(spellInfo->Id); resolved != spellInfo->Id)
+    {
+        if (SpellInfo const* resolvedInfo = sSpellMgr->GetSpellInfo(resolved, _player->GetMap()->GetDifficultyID()))
+        {
+            castRequest.Cast.SpellID = int32(resolved);
+            spellInfo = resolvedInfo;
+        }
+    }
+
     if (castRequest.Cast.MoveUpdate.has_value())
         HandleMovementOpcode(CMSG_MOVE_STOP, *castRequest.Cast.MoveUpdate);
 

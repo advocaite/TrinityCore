@@ -24,6 +24,7 @@
 #include "BattlePetMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
+#include "ClassicOpcodes.h"
 #include "CollectionMgr.h"
 #include "CombatLogPackets.h"
 #include "Common.h"
@@ -5435,6 +5436,11 @@ void Spell::SendResurrectRequest(Player* target)
     resurrectRequest.Name = sentName;
     resurrectRequest.Sickness = m_caster->IsUnit() && m_caster->ToUnit()->IsSpiritHealer(); // "you'll be afflicted with resurrection sickness"
     resurrectRequest.UseTimer = !m_spellInfo->HasAttribute(SPELL_ATTR3_NO_RES_TIMER);
+    // Classic 70291: a player's resurrection is accepted at once and carries no sickness. That client reads the two flag bits of this
+    // packet at a different alignment than retail, so a set UseTimer showed a 10 second wait with resurrection sickness and a greyed
+    // Accept; both bits clear reads as "no timer, no sickness" at any alignment.
+    if (ClassicOpcodes::IsBuild70291OrLater() && !resurrectRequest.Sickness)
+        resurrectRequest.UseTimer = false;
     if (Pet* pet = target->GetPet())
         if (CharmInfo* charmInfo = pet->GetCharmInfo())
             resurrectRequest.PetNumber = charmInfo->GetPetNumber();
@@ -5579,6 +5585,11 @@ void Spell::TakePower()
         }
 
         unitCaster->ModifyPower(cost.Power, -cost.Amount);
+
+        // Classic 1.60 (vanilla): paying mana starts the five second rule (Player::GetPowerRegen, ClassicManaRegen.h)
+        if (cost.Power == POWER_MANA && cost.Amount > 0)
+            if (Player* manaPlayer = unitCaster->ToPlayer())
+                manaPlayer->InterruptPowerRegen(POWER_MANA);
     }
 }
 

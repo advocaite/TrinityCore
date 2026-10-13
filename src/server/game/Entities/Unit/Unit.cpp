@@ -6916,10 +6916,13 @@ void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, int32 damage, int3
 
 void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damage, Powers powerType)
 {
-    if (Player* player = victim->ToPlayer())
-        if (PowerTypeEntry const* powerTypeEntry = sDB2Manager.GetPowerTypeEntry(powerType))
-            if (powerTypeEntry->GetFlags().HasFlag(PowerTypeFlags::UseRegenInterrupt))
-                player->InterruptPowerRegen(powerType);
+    // Classic 1.60 (vanilla): only paying mana starts the five second rule (Spell::TakePower); receiving it does not (Judgement of
+    // Wisdom, Spiritual Attunement, Life Tap...), or a gain every few seconds would keep the window open. Other powers keep the retail rule.
+    if (powerType != POWER_MANA)
+        if (Player* player = victim->ToPlayer())
+            if (PowerTypeEntry const* powerTypeEntry = sDB2Manager.GetPowerTypeEntry(powerType))
+                if (powerTypeEntry->GetFlags().HasFlag(PowerTypeFlags::UseRegenInterrupt))
+                    player->InterruptPowerRegen(powerType);
 
     int32 gain = victim->ModifyPower(powerType, damage, false);
     int32 overEnergize = damage - gain;
@@ -12750,7 +12753,8 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     else
         missChance -= victim->GetTotalAuraModifier(SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE);
 
-    return std::max(missChance, 0.f);
+    // Classic 1.60 (vanilla, VMaNGOS): the miss chance is limited to 0..60%
+    return std::clamp(missChance, 0.f, 60.f);
 }
 
 void Unit::OnPhaseChange()

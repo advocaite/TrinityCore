@@ -195,6 +195,7 @@ void WorldSession::HandleMoveWorldportAck()
 
     // get the teleport destination
     TeleportLocation const& loc = player->GetTeleportDest();
+    uint32 const graveyardId = player->ConsumeGraveyardTeleportId();
 
     // possible errors in the coordinate validity check
     if (!MapManager::IsValidMapCoord(loc.Location))
@@ -234,8 +235,13 @@ void WorldSession::HandleMoveWorldportAck()
         return;
     }
 
-    float z = loc.Location.GetPositionZ() + player->GetHoverOffset();
-    player->Relocate(loc.Location.GetPositionX(), loc.Location.GetPositionY(), z, loc.Location.GetOrientation());
+    // Classic 1.60: a release to a graveyard on another map is checked for a buried Z here, once the map exists (Player::RepopAtGraveyard)
+    WorldLocation arrival = loc.Location;
+    if (graveyardId)
+        player->SnapBuriedLocToFloor(newMap, arrival, graveyardId);
+
+    float z = arrival.GetPositionZ() + player->GetHoverOffset();
+    player->Relocate(arrival.GetPositionX(), arrival.GetPositionY(), z, arrival.GetOrientation());
     player->SetFallInformation(0, player->GetPositionZ());
 
     player->ResetMap();

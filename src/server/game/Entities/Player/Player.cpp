@@ -47,6 +47,7 @@
 #include "ChatPackets.h"
 #include "ChatTextBuilder.h"
 #include "ClassicOpcodes.h"
+#include "ClassicSpellRank.h"
 #include "CinematicMgr.h"
 #include "ClubUtils.h"
 #include "CombatLogPackets.h"
@@ -191,6 +192,7 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
         SetAcceptWhispers(true);
 
     m_regenInterruptTimestamp = GameTime::Now();
+    m_manaSpentTimestamp = GameTime::Now();
     m_regenTimer = 0;
     m_regenTimerCount = 0;
     m_weaponChangeTimer = 0;
@@ -1752,6 +1754,8 @@ void Player::InterruptPowerRegen(Powers power)
         return;
 
     m_regenInterruptTimestamp = GameTime::Now();
+    if (power == POWER_MANA)
+        m_manaSpentTimestamp = m_regenInterruptTimestamp;
     m_powerFraction[powerIndex] = 0.0f;
     SendDirectMessage(WorldPackets::Combat::InterruptPowerRegen(power).Write());
 }
@@ -3850,6 +3854,17 @@ bool Player::HasSpell(uint32 spell) const
         !itr->second.disabled);
 }
 
+uint32 Player::ResolveSupersededRank(uint32 spellId) const
+{
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE);
+    if (!spellInfo || !spellInfo->IsRanked())
+        return spellId;
+
+    return ClassicSpellRank::Resolve(spellId, HasSpell(spellId) && !HasActiveSpell(spellId),
+        [](uint32 id) { return sSpellMgr->GetNextSpellInChain(id); },
+        [this](uint32 id) { return HasActiveSpell(id); });
+}
+
 bool Player::HasTalent(uint32 talentId, uint8 group) const
 {
     PlayerTalentMap::const_iterator itr = GetTalentMap(group)->find(talentId);
@@ -4920,6 +4935,46 @@ void Player::DurabilityRepair(uint16 pos, bool takeCost, float discountMod)
         _ApplyItemMods(item, pos & 255, true);
 }
 
+bool Player::SnapBuriedLocToFloor(Map* map, WorldLocation& loc, uint32 safeLocId) const
+{
+    float const x = loc.GetPositionX();
+    float const y = loc.GetPositionY();
+    float const z = loc.GetPositionZ();
+
+    float const terrain = map->GetGridHeight(GetPhaseShift(), x, y);
+    if (terrain <= INVALID_HEIGHT)
+    {
+        // a battleground floor is WMO only (no terrain grid): raise a point under it to the surface found above
+        if (!map->IsBattleground())
+            return false;
+
+        float const ground = map->GetHeight(GetPhaseShift(), x, y, z + 30.0f, true, 40.0f);
+        if (ground <= INVALID_HEIGHT || ground <= z + 1.0f)
+            return false;
+
+        TC_LOG_ERROR("misc", "Player::SnapBuriedLocToFloor: safe loc {} map {} ({:.1f}, {:.1f}) z {:.1f} is below the floor ({:.1f}), using the floor. Fix the world_safe_locs row.",
+            safeLocId, map->GetId(), x, y, z, ground);
+        loc.Relocate(x, y, ground + 0.5f);
+        return true;
+    }
+
+    // buried = more than a yard under the terrain and no WMO / model surface within reach of the point (a graveyard inside a building
+    // or a cave under the terrain stands on that surface and is left alone)
+    if (z >= terrain - 1.0f)
+        return false;
+
+    float const nearFloor = map->GetHeight(GetPhaseShift(), x, y, z + 2.0f, true, 6.0f);
+    if (nearFloor > INVALID_HEIGHT && nearFloor >= z - 1.0f && nearFloor <= z + 2.5f)
+        return false;
+
+    float const floor = map->GetHeight(GetPhaseShift(), x, y, terrain + 1.0f, true, 6.0f);
+    float const newZ = std::max(floor, terrain) + 0.5f;
+    TC_LOG_ERROR("misc", "Player::SnapBuriedLocToFloor: safe loc {} map {} ({:.1f}, {:.1f}) z {:.1f} is under the terrain ({:.1f}), using {:.1f}. Fix the world_safe_locs row.",
+        safeLocId, map->GetId(), x, y, z, terrain, newZ);
+    loc.Relocate(x, y, newZ);
+    return true;
+}
+
 void Player::RepopAtGraveyard()
 {
     // note: this can be called also when the player is alive
@@ -4951,12 +5006,24 @@ void Player::RepopAtGraveyard()
     // and don't show spirit healer location
     if (closestGrave)
     {
-        TeleportTo({ .Location = closestGrave->Loc, .TransportGuid = closestGrave->TransportSpawnId ? ObjectGuid::Create<HighGuid::Transport>(*closestGrave->TransportSpawnId) : ObjectGuid::Empty }, shouldResurrect ? TELE_REVIVE_AT_TELEPORT : TELE_TO_NONE);
+        // Classic 1.60: retail world_safe_locs rows keep retail Z values that the Classic terrain does not always match, and a graveyard
+        // under the terrain drops the ghost out of the world. Same map: raise it to the floor here. Another map (an instance releasing
+        // to the continent) is not loaded yet; the worldport ack does the same once it exists. Transport graveyards are left alone.
+        WorldLocation graveLoc = closestGrave->Loc;
+        if (!closestGrave->TransportSpawnId)
+        {
+            if (graveLoc.GetMapId() == GetMapId())
+                SnapBuriedLocToFloor(GetMap(), graveLoc, closestGrave->ID);
+            else
+                SetGraveyardTeleportId(closestGrave->ID);
+        }
+
+        TeleportTo({ .Location = graveLoc, .TransportGuid = closestGrave->TransportSpawnId ? ObjectGuid::Create<HighGuid::Transport>(*closestGrave->TransportSpawnId) : ObjectGuid::Empty }, shouldResurrect ? TELE_REVIVE_AT_TELEPORT : TELE_TO_NONE);
         if (isDead())                                        // not send if alive, because it used in TeleportTo()
         {
             WorldPackets::Misc::DeathReleaseLoc packet;
-            packet.MapID = closestGrave->Loc.GetMapId();
-            packet.Loc = closestGrave->Loc;
+            packet.MapID = graveLoc.GetMapId();
+            packet.Loc = graveLoc;
             SendDirectMessage(packet.Write());
         }
     }
@@ -25737,6 +25804,9 @@ void Player::SendInitialPacketsAfterAddToMap()
 
     GetSession()->SendLoadCUFProfiles();
 
+    // saved raid locks; the Classic client does not ask for them on its own
+    SendRaidInfo();
+
     CastSpell(this, 836, true);                             // LOGINEFFECT
 
     WorldPackets::Movement::MoveSetCompoundState setCompoundState;
@@ -29898,6 +29968,17 @@ void Player::StartLoadingActionButtons(std::function<void()>&& callback /*= null
 void Player::LoadActions(PreparedQueryResult result)
 {
     _LoadActions(result);
+
+    // Classic 1.60: buttons that still hold a rank the character has outgrown get the active rank (ClassicSpellRank.h)
+    for (auto& [button, actionButton] : m_actionButtons)
+    {
+        if (actionButton.uState == ACTIONBUTTON_DELETED || actionButton.GetType() != ACTION_BUTTON_SPELL)
+            continue;
+
+        uint32 const resolved = ResolveSupersededRank(uint32(actionButton.GetAction()));
+        if (resolved != actionButton.GetAction())
+            AddActionButton(button, resolved, ACTION_BUTTON_SPELL);
+    }
 
     SendActionButtons(1);
 }

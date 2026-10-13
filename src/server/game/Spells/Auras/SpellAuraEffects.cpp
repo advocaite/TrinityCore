@@ -1280,6 +1280,10 @@ void AuraEffect::Update(uint32 diff, Unit* caster)
 
 float AuraEffect::GetCritChanceFor(Unit const* caster, Unit const* target) const
 {
+    // a tick that cannot crit must not gain a chance from the target's side either (SpellCritChanceTaken adds those)
+    if (!GetBase()->CanPeriodicTickCrit())
+        return 0.0f;
+
     return target->SpellCritChanceTaken(caster, nullptr, this, GetSpellInfo()->GetSchoolMask(), CalcPeriodicCritChance(caster), GetSpellInfo()->GetAttackType());
 }
 

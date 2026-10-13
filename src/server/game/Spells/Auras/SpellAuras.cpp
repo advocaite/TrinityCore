@@ -526,6 +526,12 @@ bool Aura::CanPeriodicTickCrit() const
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR2_CANT_CRIT))
         return false;
 
+    // Classic 1.60 (vanilla): damage and healing over time never critically strike (Renew, Rejuvenation, Corruption, Immolate...).
+    // Ids from 1000000 on are spells new to Forever and keep their client attributes.
+    static constexpr uint32 FirstForeverSpellId = 1000000;
+    if (GetId() < FirstForeverSpellId)
+        return false;
+
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR8_PERIODIC_CAN_CRIT))
         return true;
 
