@@ -482,7 +482,7 @@ void WorldSession::HandleResurrectResponse(WorldPackets::Misc::ResurrectResponse
     {
         if (InstanceScript* instance = ressPlayer->GetInstanceScript())
         {
-            if (instance->IsEncounterInProgress())
+            if (sWorld->getBoolConfig(CONFIG_INSTANCE_COMBAT_RES_LIMIT) && instance->IsEncounterInProgress())
             {
                 if (!instance->GetCombatResurrectionCharges())
                     return;

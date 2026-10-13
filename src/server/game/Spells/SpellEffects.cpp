@@ -419,7 +419,7 @@ NonDefaultConstructible<SpellEffectHandlerFn> SpellEffectHandlers[TOTAL_SPELL_EF
     &Spell::EffectNULL,                                     //326 SPELL_EFFECT_326
     &Spell::EffectNULL,                                     //327 SPELL_EFFECT_327
     &Spell::EffectNULL,                                     //328 SPELL_EFFECT_328
-    &Spell::EffectNULL,                                     //329 SPELL_EFFECT_329
+    &Spell::EffectResurrectNew,                             //329 SPELL_EFFECT_RESURRECT_NEW
     &Spell::EffectNULL,                                     //330 SPELL_EFFECT_330
     &Spell::EffectNULL,                                     //331 SPELL_EFFECT_331
     &Spell::EffectNULL,                                     //332 SPELL_EFFECT_332

@@ -1674,7 +1674,7 @@ enum SpellEffects
     SPELL_EFFECT_326                                = 326,
     SPELL_EFFECT_327                                = 327,
     SPELL_EFFECT_328                                = 328,
-    SPELL_EFFECT_329                                = 329,
+    SPELL_EFFECT_RESURRECT_NEW                      = 329, // value = health, MiscValue = mana
     SPELL_EFFECT_330                                = 330,
     SPELL_EFFECT_331                                = 331,
     SPELL_EFFECT_332                                = 332,

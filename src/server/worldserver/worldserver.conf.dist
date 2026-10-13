@@ -1068,12 +1068,30 @@ CastUnstuck = 1
 Instance.IgnoreLevel = 0
 
 #
+#    Instance.IgnoreAttunement
+#        Description: Ignore attunement item and quest requirements when entering instances
+#                     (access_requirement item and quest columns).
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Instance.IgnoreAttunement = 0
+
+#
 #    Instance.IgnoreRaid
 #        Description: Ignore raid group requirement when entering instances.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 
 Instance.IgnoreRaid = 0
+
+#
+#    Instance.CombatResurrectionLimit
+#        Description: Limit resurrections during a boss encounter to the encounter's combat
+#                     resurrection charges. Classic has no such limit.
+#        Default:     0 - (Disabled, resurrection works at any time)
+#                     1 - (Enabled)
+
+Instance.CombatResurrectionLimit = 0
 
 #
 #    Instance.UnloadDelay

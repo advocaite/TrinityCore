@@ -20811,19 +20811,22 @@ bool Player::Satisfy(AccessRequirement const* ar, uint32 target_map, TransferAbo
                     LevelMax = ar->levelMax;
             }
 
-            if (ar->item)
+            if (!sWorld->getBoolConfig(CONFIG_INSTANCE_IGNORE_ATTUNEMENT))
             {
-                if (!HasItemCount(ar->item) &&
-                    (!ar->item2 || !HasItemCount(ar->item2)))
-                    missingItem = ar->item;
-            }
-            else if (ar->item2 && !HasItemCount(ar->item2))
-                missingItem = ar->item2;
+                if (ar->item)
+                {
+                    if (!HasItemCount(ar->item) &&
+                        (!ar->item2 || !HasItemCount(ar->item2)))
+                        missingItem = ar->item;
+                }
+                else if (ar->item2 && !HasItemCount(ar->item2))
+                    missingItem = ar->item2;
 
-            if (GetTeam() == ALLIANCE && ar->quest_A && !GetQuestRewardStatus(ar->quest_A))
-                missingQuest = ar->quest_A;
-            else if (GetTeam() == HORDE && ar->quest_H && !GetQuestRewardStatus(ar->quest_H))
-                missingQuest = ar->quest_H;
+                if (GetTeam() == ALLIANCE && ar->quest_A && !GetQuestRewardStatus(ar->quest_A))
+                    missingQuest = ar->quest_A;
+                else if (GetTeam() == HORDE && ar->quest_H && !GetQuestRewardStatus(ar->quest_H))
+                    missingQuest = ar->quest_H;
+            }
 
             Player* leader = this;
             ObjectGuid leaderGuid = group ? group->GetLeaderGUID() : GetGUID();

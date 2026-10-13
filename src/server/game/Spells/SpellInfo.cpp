@@ -37,6 +37,7 @@
 #include "SpellMgr.h"
 #include "TraitMgr.h"
 #include "Vehicle.h"
+#include "World.h"
 #include <boost/container/small_vector.hpp>
 #include <G3D/g3dmath.h>
 #include <bit>
@@ -1303,7 +1304,7 @@ std::array<SpellEffectInfo::StaticData, TOTAL_SPELL_EFFECTS> SpellEffectInfo::_d
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 326 SPELL_EFFECT_326
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 327 SPELL_EFFECT_327
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 328 SPELL_EFFECT_328
-    {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 329 SPELL_EFFECT_329
+    {EFFECT_IMPLICIT_TARGET_EXPLICIT, TARGET_OBJECT_TYPE_CORPSE_ALLY}, // 329 SPELL_EFFECT_RESURRECT_NEW
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 330 SPELL_EFFECT_330
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 331 SPELL_EFFECT_331
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 332 SPELL_EFFECT_332
@@ -2560,10 +2561,10 @@ SpellCastResult SpellInfo::CheckTarget(WorldObject const* caster, WorldObject co
         return SPELL_FAILED_TARGET_AURASTATE;
 
     if (unitTarget->HasAuraType(SPELL_AURA_PREVENT_RESURRECTION) && !HasAttribute(SPELL_ATTR7_BYPASS_NO_RESURRECT_AURA))
-        if (HasEffect(SPELL_EFFECT_SELF_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT))
+        if (HasEffect(SPELL_EFFECT_SELF_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT_NEW))
             return SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED;
 
-    if (HasAttribute(SPELL_ATTR8_ENFORCE_IN_COMBAT_RESSURECTION_LIMIT))
+    if (HasAttribute(SPELL_ATTR8_ENFORCE_IN_COMBAT_RESSURECTION_LIMIT) && sWorld->getBoolConfig(CONFIG_INSTANCE_COMBAT_RES_LIMIT))
         if (Map* map = caster->GetMap())
             if (InstanceMap* iMap = map->ToInstanceMap())
                 if (InstanceScript* instance = iMap->GetInstanceScript())
