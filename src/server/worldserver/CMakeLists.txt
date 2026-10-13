@@ -38,7 +38,9 @@ target_link_libraries(worldserver
     scripts
     game
     readline
-    gsoap)
+    gsoap
+  PRIVATE
+    modules)
 
 target_include_directories(worldserver
   PRIVATE
@@ -54,6 +56,9 @@ if(WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES)
   add_dependencies(worldserver ${WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES})
 endif()
 
+# Module configs (trinity_add_module CONFIGS) go to worldserver.conf.d/, which is loaded after worldserver.conf
+get_property(module_configs GLOBAL PROPERTY TRINITY_MODULE_CONFIGS)
+
 if(UNIX)
   install(TARGETS worldserver DESTINATION bin)
   if(COPY_CONF)
@@ -62,6 +67,14 @@ if(UNIX)
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/worldserver.conf.dist ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/../etc/worldserver.conf.dist
     )
     install(FILES worldserver.conf.dist DESTINATION ${CONF_DIR})
+    if(module_configs)
+      add_custom_command(TARGET worldserver
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/../etc/worldserver.conf.d
+        COMMAND ${CMAKE_COMMAND} -E copy ${module_configs} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/../etc/worldserver.conf.d/
+      )
+      install(FILES ${module_configs} DESTINATION ${CONF_DIR}/worldserver.conf.d)
+    endif()
   endif()
 elseif(WIN32)
   install(TARGETS worldserver DESTINATION "${CMAKE_INSTALL_PREFIX}")
@@ -71,6 +84,14 @@ elseif(WIN32)
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/worldserver.conf.dist ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/
     )
     install(FILES worldserver.conf.dist DESTINATION "${CMAKE_INSTALL_PREFIX}")
+    if(module_configs)
+      add_custom_command(TARGET worldserver
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/worldserver.conf.d
+        COMMAND ${CMAKE_COMMAND} -E copy ${module_configs} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/worldserver.conf.d/
+      )
+      install(FILES ${module_configs} DESTINATION "${CMAKE_INSTALL_PREFIX}/worldserver.conf.d")
+    endif()
   endif()
 endif()
 

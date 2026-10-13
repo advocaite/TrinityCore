@@ -32,6 +32,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "RBAC.h"
 #include "SharedDefines.h"
 #include "SocialMgr.h"
@@ -368,6 +369,8 @@ void LFGMgr::Update(uint32 diff)
                 else
                     SendLfgUpdateStatus(guid, LfgUpdateData(LFG_UPDATETYPE_PROPOSAL_BEGIN, GetSelectedDungeons(guid)), false);
                 SendLfgUpdateProposal(guid, proposal);
+                if (Player* candidate = ObjectAccessor::FindConnectedPlayer(guid))
+                    sScriptMgr->OnPlayerLfgProposal(candidate, proposalId);
             }
 
             if (proposal.state == LFG_PROPOSAL_SUCCESS)

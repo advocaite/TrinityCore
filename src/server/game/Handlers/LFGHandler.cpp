@@ -26,6 +26,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 
 void WorldSession::HandleLfgJoinOpcode(WorldPackets::LFG::DFJoin& dfJoin)
 {
@@ -51,6 +52,9 @@ void WorldSession::HandleLfgJoinOpcode(WorldPackets::LFG::DFJoin& dfJoin)
     TC_LOG_DEBUG("lfg", "CMSG_DF_JOIN {} roles: {}, Dungeons: {}", GetPlayerInfo(), dfJoin.Roles, uint8(newDungeons.size()));
 
     sLFGMgr->JoinLfg(GetPlayer(), uint8(dfJoin.Roles), newDungeons);
+
+    if (!newDungeons.empty() && sLFGMgr->GetState(GetPlayer()->GetGUID()) != lfg::LFG_STATE_NONE)
+        sScriptMgr->OnPlayerLfgJoin(GetPlayer(), *newDungeons.begin(), uint8(dfJoin.Roles));
 }
 
 void WorldSession::HandleLfgLeaveOpcode(WorldPackets::LFG::DFLeave& dfLeave)

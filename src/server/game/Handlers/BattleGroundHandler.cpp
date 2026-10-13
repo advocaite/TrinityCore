@@ -36,6 +36,7 @@
 #include "Object.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"
@@ -203,6 +204,8 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
         TC_LOG_DEBUG("bg.battleground", "Battleground: player joined queue for bg queue {{ BattlemasterListId: {}, Type: {}, Rated: {}, TeamSize: {} }}, {}, NAME {}",
             bgQueueTypeId.BattlemasterListId, uint32(bgQueueTypeId.Type), bgQueueTypeId.Rated ? "true" : "false", uint32(bgQueueTypeId.TeamSize),
             _player->GetGUID().ToString(), _player->GetName());
+
+        sScriptMgr->OnPlayerBattlegroundQueueJoin(_player, bgTypeId, bracketEntry->GetBracketId());
     }
     else
     {
@@ -246,6 +249,9 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
                 member->GetGUID().ToString(), member->GetName());
         }
         TC_LOG_DEBUG("bg.battleground", "Battleground: group end");
+
+        if (!err)
+            sScriptMgr->OnPlayerBattlegroundQueueJoin(_player, bgTypeId, bracketEntry->GetBracketId());
     }
 
     sBattlegroundMgr->ScheduleQueueUpdate(0, bgQueueTypeId, bracketEntry->GetBracketId());
@@ -284,6 +290,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Player not in queue!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*not in queue*/ 1, 0);
         return;
     }
 
@@ -292,6 +299,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Invalid queueSlot!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*invalid queue slot*/ 2, 0);
         return;
     }
 
@@ -303,6 +311,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Player not in queue (No player Group Info)!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*no group info*/ 3, 0);
         return;
     }
     // if action == 1, then player must have been invited to join
@@ -310,6 +319,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Player is not invited to any bg!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite));
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*not invited*/ 4, 0);
         return;
     }
 
@@ -330,6 +340,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Cant find BG with id {}!",
             GetPlayerInfo(), battlefieldPort.Ticket.Id, uint32(battlefieldPort.Ticket.Type), battlefieldPort.Ticket.Time.AsUnderlyingType(), uint32(battlefieldPort.AcceptedInvite), ginfo.IsInvitedToBGInstanceGUID);
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*instance gone*/ 5, ginfo.IsInvitedToBGInstanceGUID);
         return;
     }
     else if (bg)
@@ -341,7 +352,10 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     // expected bracket entry
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketByLevel(mapId, _player->GetLevel());
     if (!bracketEntry)
+    {
+        sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*no bracket*/ 6, ginfo.IsInvitedToBGInstanceGUID);
         return;
+    }
 
     //some checks if player isn't cheating - it is not exactly cheating, but we cannot allow it
     if (battlefieldPort.AcceptedInvite && bgQueue.GetQueueId().TeamSize == 0)
@@ -369,10 +383,16 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
     {
         // check Freeze debuff
         if (_player->HasAura(9454))
+        {
+            sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*frozen*/ 7, ginfo.IsInvitedToBGInstanceGUID);
             return;
+        }
 
         if (!_player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
+        {
+            sScriptMgr->OnPlayerBattlegroundPortFailed(_player, /*invite no longer valid*/ 8, ginfo.IsInvitedToBGInstanceGUID);
             return;                                 // cheating?
+        }
 
         if (!_player->InBattleground())
             _player->SetBattlegroundEntryPoint();

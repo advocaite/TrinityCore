@@ -11457,6 +11457,8 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
     if (attacker && !attacker->IsInMap(victim))
         attacker = nullptr;
 
+    sScriptMgr->OnUnitDeath(victim, attacker);
+
     // find player: owner of controlled `this` or `this` itself maybe
     Player* player = nullptr;
     if (attacker)

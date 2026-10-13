@@ -256,6 +256,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             }
 
             sender->Say(msg, lang);
+            sScriptMgr->OnPlayerChatSent(sender, type, lang, msg);
             break;
         }
         case CHAT_MSG_EMOTE:
@@ -286,6 +287,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             }
 
             sender->Yell(msg, lang);
+            sScriptMgr->OnPlayerChatSent(sender, type, lang, msg);
             break;
         }
         case CHAT_MSG_WHISPER:
@@ -343,6 +345,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
                 sender->AddWhisperWhiteList(receiver->GetGUID());
 
             GetPlayer()->Whisper(msg, lang, receiver);
+            sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, receiver);
             break;
         }
         case CHAT_MSG_PARTY:
@@ -363,6 +366,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             WorldPackets::Chat::Chat packet;
             packet.Initialize(ChatMsg(type), lang, sender, nullptr, msg);
             group->BroadcastPacket(packet.Write(), false, group->GetMemberGroup(GetPlayer()->GetGUID()));
+            sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, group);
             break;
         }
         case CHAT_MSG_GUILD:
@@ -374,6 +378,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
                     sScriptMgr->OnPlayerChat(GetPlayer(), type, lang, msg, guild);
 
                     guild->BroadcastToGuild(this, false, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+                    sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, guild);
                 }
             }
             break;
@@ -387,6 +392,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
                     sScriptMgr->OnPlayerChat(GetPlayer(), type, lang, msg, guild);
 
                     guild->BroadcastToGuild(this, true, msg, lang == LANG_ADDON ? LANG_ADDON : LANG_UNIVERSAL);
+                    sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, guild);
                 }
             }
             break;
@@ -405,6 +411,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             WorldPackets::Chat::Chat packet;
             packet.Initialize(ChatMsg(type), lang, sender, nullptr, msg);
             group->BroadcastPacket(packet.Write(), false);
+            sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, group);
             break;
         }
         case CHAT_MSG_RAID_WARNING:
@@ -427,6 +434,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             //in battleground, raid warning is sent only to players in battleground - code is ok
             packet.Initialize(CHAT_MSG_RAID_WARNING, lang, sender, nullptr, msg);
             group->BroadcastPacket(packet.Write(), false);
+            sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, group);
             break;
         }
         case CHAT_MSG_CHANNEL:
@@ -468,6 +476,7 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             WorldPackets::Chat::Chat packet;
             packet.Initialize(ChatMsg(type), lang, sender, nullptr, msg);
             group->BroadcastPacket(packet.Write(), false);
+            sScriptMgr->OnPlayerChatSent(GetPlayer(), type, lang, msg, group);
             break;
         }
         default:
@@ -554,6 +563,7 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
                 break;
 
             sender->WhisperAddon(text, prefix, isLogged, receiver);
+            sScriptMgr->OnPlayerAddonMessageSent(sender, type, prefix, text, receiver);
             break;
         }
         // Messages sent to "RAID" while in a party will get delivered to "PARTY"
@@ -579,6 +589,7 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
             WorldPackets::Chat::Chat packet;
             packet.Initialize(type, isLogged ? LANG_ADDON_LOGGED : LANG_ADDON, sender, nullptr, text, 0, "", DEFAULT_LOCALE, prefix);
             group->BroadcastAddonMessagePacket(packet.Write(), prefix, true, subGroup, sender->GetGUID());
+            sScriptMgr->OnPlayerAddonMessageSent(sender, type, prefix, text, group);
             break;
         }
         case CHAT_MSG_CHANNEL:

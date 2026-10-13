@@ -1057,6 +1057,7 @@ void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
 
     // Broadcast the changes to the group
     SendUpdate();
+    sScriptMgr->OnGroupSubgroupChange(this, guid, group);
 }
 
 void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
@@ -1102,6 +1103,8 @@ void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
     CharacterDatabase.CommitTransaction(trans);
 
     SendUpdate();
+    sScriptMgr->OnGroupSubgroupChange(this, slots[0]->guid, slots[0]->group);
+    sScriptMgr->OnGroupSubgroupChange(this, slots[1]->guid, slots[1]->group);
 }
 
 // Retrieve the next Round-Roubin player for the group

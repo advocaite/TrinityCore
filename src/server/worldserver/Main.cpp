@@ -125,6 +125,8 @@ int CreateAccountFromCommandLine(variables_map const& vm);
 void StopDB();
 void WorldUpdateLoop();
 void ClearOnlineAccounts(uint32 realmId);
+void AddModuleScripts();                             // generated from src/modules, empty when no module is built
+void AddAllScripts() { AddScripts(); AddModuleScripts(); }
 struct ShutdownTCSoapThread { void operator()(std::thread* thread) const; };
 struct ShutdownCLIThread { void operator()(std::thread* cliThread) const; };
 variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, fs::path& configDir, std::string& winServiceAction);
@@ -352,13 +354,15 @@ int main(int argc, char** argv)
 
     auto scriptReloadMgrHandle = Trinity::make_unique_ptr_with_deleter<&ScriptReloadMgr::Unload>(sScriptReloadMgr);
 
-    sScriptMgr->SetScriptLoader(AddScripts);
+    sScriptMgr->SetScriptLoader(AddAllScripts);
     auto sScriptMgrHandle = Trinity::make_unique_ptr_with_deleter<&ScriptMgr::Unload>(sScriptMgr);
 
     // Initialize the World
     sSecretMgr->Initialize(SECRET_OWNER_WORLDSERVER);
     if (!sWorld->SetInitialWorldSettings())
         return 1;
+
+    sScriptMgr->OnWorldInitialized();
 
     auto instanceLockMgrHandle = Trinity::make_unique_ptr_with_deleter<&InstanceLockMgr::Unload>(&sInstanceLockMgr);
 
