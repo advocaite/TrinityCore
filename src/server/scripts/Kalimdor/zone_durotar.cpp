@@ -54,6 +54,7 @@ enum LazyPeonYells
 enum LazyPeon
 {
     QUEST_LAZY_PEONS    = 37446,
+    QUEST_LAZY_PEONS_CLASSIC = 5441,
     GO_LUMBERPILE       = 175784,
     SPELL_BUFF_SLEEP    = 17743,
     SPELL_AWAKEN_PEON   = 19938
@@ -102,7 +103,7 @@ public:
                 return;
 
             Player* player = caster->ToPlayer();
-            if (player && player->GetQuestStatus(QUEST_LAZY_PEONS) == QUEST_STATUS_INCOMPLETE)
+            if (player && (player->GetQuestStatus(QUEST_LAZY_PEONS) == QUEST_STATUS_INCOMPLETE || player->GetQuestStatus(QUEST_LAZY_PEONS_CLASSIC) == QUEST_STATUS_INCOMPLETE))
             {
                 player->KilledMonsterCredit(me->GetEntry(), me->GetGUID());
                 Talk(SAY_SPELL_HIT, caster);
