@@ -4086,6 +4086,7 @@ BlackMarket.UpdatePeriod = 24
 #                         1 - (Console)
 #                         2 - (File)
 #                         3 - (DB)
+#                         4 - (Crash ring, in memory, see CrashRing below)
 #
 #                     LogLevel
 #                         0 - (Disabled)
@@ -4139,11 +4140,20 @@ BlackMarket.UpdatePeriod = 24
 #                         NOTE: Does not work with dynamic filenames.
 #                         Example:  536870912 (512 MB)
 #
+#                     MaxBackups: Number of rotated backups ("<file>.<timestamp>") to keep; older ones are deleted
+#                     (read as optional4 if Type = File). Leave blank to keep all. With MaxFileSize this caps the disk space.
+#                         Example:  5
+#
+#                     CrashRing (Type = 4): keeps the last N log lines in memory for the crash report (the .log file next to the
+#                     .dmp and .txt in the Crashes folder). optional1 = N (default 200, at most 1024). Link it to the loggers whose
+#                     lines should appear, as done for root and server below.
+#
 
 Appender.Console=1,3,0
 Appender.Server=2,2,0,Server.log,w
 Appender.GM=2,2,1,GM.log
 Appender.DBErrors=2,2,0,DBErrors.log,w
+Appender.CrashRing=4,3,7,300
 
 #  Logger config values: Given a logger "name"
 #    Logger.name
@@ -4163,8 +4173,8 @@ Appender.DBErrors=2,2,0,DBErrors.log,w
 #                     (Using spaces as separator).
 #
 
-Logger.root=5,Console Server
-Logger.server=3,Console Server
+Logger.root=5,Console Server CrashRing
+Logger.server=3,Console Server CrashRing
 Logger.commands.gm=3,Console GM
 Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors

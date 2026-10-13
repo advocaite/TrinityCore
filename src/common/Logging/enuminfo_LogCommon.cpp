@@ -89,12 +89,13 @@ TC_API_EXPORT EnumText EnumUtils<AppenderType>::ToString(AppenderType value)
         case APPENDER_CONSOLE: return { "APPENDER_CONSOLE", "APPENDER_CONSOLE", "" };
         case APPENDER_FILE: return { "APPENDER_FILE", "APPENDER_FILE", "" };
         case APPENDER_DB: return { "APPENDER_DB", "APPENDER_DB", "" };
+        case APPENDER_CRASH_RING: return { "APPENDER_CRASH_RING", "APPENDER_CRASH_RING", "" };
         default: throw std::out_of_range("value");
     }
 }
 
 template <>
-TC_API_EXPORT size_t EnumUtils<AppenderType>::Count() { return 4; }
+TC_API_EXPORT size_t EnumUtils<AppenderType>::Count() { return 5; }
 
 template <>
 TC_API_EXPORT AppenderType EnumUtils<AppenderType>::FromIndex(size_t index)
@@ -105,6 +106,7 @@ TC_API_EXPORT AppenderType EnumUtils<AppenderType>::FromIndex(size_t index)
         case 1: return APPENDER_CONSOLE;
         case 2: return APPENDER_FILE;
         case 3: return APPENDER_DB;
+        case 4: return APPENDER_CRASH_RING;
         default: throw std::out_of_range("index");
     }
 }
@@ -118,6 +120,7 @@ TC_API_EXPORT size_t EnumUtils<AppenderType>::ToIndex(AppenderType value)
         case APPENDER_CONSOLE: return 1;
         case APPENDER_FILE: return 2;
         case APPENDER_DB: return 3;
+        case APPENDER_CRASH_RING: return 4;
         default: throw std::out_of_range("value");
     }
 }

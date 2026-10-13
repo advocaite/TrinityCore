@@ -20,12 +20,14 @@
 #include "LogMessage.h"
 #include "StringConvert.h"
 #include <algorithm>
+#include <filesystem>
 
 AppenderFile::AppenderFile(uint8 id, std::string name, LogLevel level, AppenderFlags flags, std::vector<std::string_view> const& args) :
     Appender(id, std::move(name), level, flags),
     logfile(nullptr),
     _logDir(sLog->GetLogsDir()),
     _maxFileSize(0),
+    _maxBackups(0),
     _fileSize(0)
 {
     if (args.size() < 4)
@@ -52,6 +54,15 @@ AppenderFile::AppenderFile(uint8 id, std::string name, LogLevel level, AppenderF
             _maxFileSize = *size;
         else
             throw InvalidAppenderArgsException(Trinity::StringFormat("Log::CreateAppenderFromConfig: Invalid size '{}' for appender {}", args[5], name));
+    }
+
+    // optional4: how many rotated backups of this file to keep (0 = all). Together with MaxFileSize this caps the disk the log can use.
+    if (6 < args.size())
+    {
+        if (Optional<uint32> backups = Trinity::StringTo<uint32>(args[6]))
+            _maxBackups = *backups;
+        else
+            throw InvalidAppenderArgsException(Trinity::StringFormat("Log::CreateAppenderFromConfig: Invalid backup count '{}' for appender {}", args[6], name));
     }
 
     _dynamicName = std::string::npos != _fileName.find("%s");
@@ -110,6 +121,7 @@ FILE* AppenderFile::OpenFile(std::string const& filename, std::string const& mod
         newName.append(LogMessage::getTimeStr(time(nullptr)));
         std::replace(newName.begin(), newName.end(), ':', '-');
         rename(fullName.c_str(), newName.c_str()); // no error handling... if we couldn't make a backup, just ignore
+        PruneBackups(fullName);
     }
 
     if (FILE* ret = fopen(fullName.c_str(), mode.c_str()))
@@ -119,6 +131,31 @@ FILE* AppenderFile::OpenFile(std::string const& filename, std::string const& mod
     }
 
     return nullptr;
+}
+
+// Backups are named "<file>.<timestamp>" (see OpenFile); removes the oldest ones beyond _maxBackups.
+void AppenderFile::PruneBackups(std::string const& fullName) const
+{
+    if (!_maxBackups)
+        return;
+
+    namespace sfs = std::filesystem;
+    std::error_code ec;
+    sfs::path const file(fullName);
+    std::string const prefix = file.filename().string() + ".";
+
+    std::vector<sfs::path> backups;
+    for (sfs::directory_entry const& entry : sfs::directory_iterator(file.parent_path().empty() ? sfs::path(".") : file.parent_path(), ec))
+        if (entry.is_regular_file(ec) && entry.path().filename().string().starts_with(prefix))
+            backups.push_back(entry.path());
+
+    if (backups.size() <= _maxBackups)
+        return;
+
+    // the timestamp is part of the name, so the names sort oldest first
+    std::ranges::sort(backups);
+    for (size_t i = 0; i < backups.size() - _maxBackups; ++i)
+        sfs::remove(backups[i], ec);
 }
 
 void AppenderFile::CloseFile()

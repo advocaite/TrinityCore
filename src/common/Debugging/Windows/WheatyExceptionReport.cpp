@@ -4,6 +4,7 @@
 // FILE: WheatyExceptionReport.CPP
 //==========================================
 #include "WheatyExceptionReport.h"
+#include "AppenderCrashRing.h"
 #include "Errors.h"
 #include "GitRevision.h"
 #include "Memory.h"
@@ -222,6 +223,21 @@ LONG WheatyExceptionReport::UnhandledExceptionFilterImpl(PEXCEPTION_POINTERS pEx
 
         fclose(m_reportFile);
         m_reportFile = nullptr;
+    }
+
+    // the last log lines before the crash ({same name}.log): what the server was doing, not only where it stopped
+    {
+        static char lastLines[1 << 17];     // static: the heap may be what is corrupted
+        size_t const length = AppenderCrashRing::Snapshot(lastLines, sizeof(lastLines));
+        if (length)
+        {
+            _tcscpy_s(crashPath, m_tempPathBufferChars - (crashPath - m_tempPathBuffer), _T("log"));
+            if (FILE* logFile = _tfopen(m_tempPathBuffer, _T("wb")))
+            {
+                fwrite(lastLines, 1, length, logFile);
+                fclose(logFile);
+            }
+        }
     }
 
     if (m_previousFilter)

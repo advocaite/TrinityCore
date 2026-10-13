@@ -17,6 +17,7 @@
 
 #include "Log.h"
 #include "AppenderConsole.h"
+#include "AppenderCrashRing.h"
 #include "AppenderFile.h"
 #include "Config.h"
 #include "Errors.h"
@@ -32,6 +33,7 @@ Log::Log() : AppenderId(0), lowestLogLevel(LOG_LEVEL_FATAL), m_logsTimestamp('_'
 {
     RegisterAppender<AppenderConsole>();
     RegisterAppender<AppenderFile>();
+    RegisterAppender<AppenderCrashRing>();
 }
 
 Log::~Log()

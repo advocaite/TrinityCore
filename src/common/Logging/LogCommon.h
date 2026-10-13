@@ -42,6 +42,7 @@ enum AppenderType : uint8
     APPENDER_CONSOLE,
     APPENDER_FILE,
     APPENDER_DB,
+    APPENDER_CRASH_RING,
 
     APPENDER_INVALID = 0xFF // SKIP
 };

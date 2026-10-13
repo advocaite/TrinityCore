@@ -62,6 +62,9 @@
 #include <google/protobuf/stubs/common.h>
 #include <iostream>
 #include <csignal>
+#include <algorithm>
+#include <filesystem>
+#include <map>
 
 #include "Hacks/boost_program_options_with_filesystem_path.h"
 
@@ -125,6 +128,7 @@ int CreateAccountFromCommandLine(variables_map const& vm);
 void StopDB();
 void WorldUpdateLoop();
 void ClearOnlineAccounts(uint32 realmId);
+void PruneCrashFiles(size_t keep);
 void AddModuleScripts();                             // generated from src/modules, empty when no module is built
 void AddAllScripts() { AddScripts(); AddModuleScripts(); }
 struct ShutdownTCSoapThread { void operator()(std::thread* thread) const; };
@@ -330,6 +334,8 @@ int main(int argc, char** argv)
     std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm();
     if (!realm)
         return 1;
+
+    PruneCrashFiles(5);
 
     // Set server offline (not connectable)
     LoginDatabase.DirectPExecute("UPDATE realmlist SET flag = flag | {} WHERE id = '{}'", Trinity::Legacy::REALM_FLAG_OFFLINE, realmId);
@@ -706,6 +712,42 @@ void ClearOnlineAccounts(uint32 realmId)
 
     // Battleground instance ids reset at server restart
     CharacterDatabase.DirectExecute("UPDATE character_battleground_data SET instanceId = 0");
+}
+
+/// Keep only the newest `keep` crash reports (.dmp, .txt and .log of one crash share a name) in the Crashes folder
+void PruneCrashFiles(size_t keep)
+{
+    namespace sfs = std::filesystem;
+    std::error_code ec;
+    sfs::path const folder = sfs::path(boost::dll::program_location().remove_filename().string()) / "Crashes";
+    if (!sfs::is_directory(folder, ec))
+        return;
+
+    struct CrashSet { sfs::file_time_type newest{}; std::vector<sfs::path> files; };
+    std::map<std::string, CrashSet> crashes;
+    for (sfs::directory_entry const& entry : sfs::directory_iterator(folder, ec))
+    {
+        if (!entry.is_regular_file(ec))
+            continue;
+        std::string const extension = entry.path().extension().string();
+        if (extension != ".dmp" && extension != ".txt" && extension != ".log")
+            continue;
+        CrashSet& set = crashes[entry.path().stem().string()];
+        set.files.push_back(entry.path());
+        set.newest = std::max(set.newest, entry.last_write_time(ec));
+    }
+
+    std::vector<CrashSet*> byAge;
+    for (auto& [stem, set] : crashes)
+        byAge.push_back(&set);
+    std::ranges::sort(byAge, [](CrashSet const* a, CrashSet const* b) { return a->newest > b->newest; });
+
+    for (size_t i = keep; i < byAge.size(); ++i)
+        for (sfs::path const& file : byAge[i]->files)
+            sfs::remove(file, ec);
+
+    if (byAge.size() > keep)
+        TC_LOG_INFO("server.worldserver", "Removed {} old crash reports from {} (kept the newest {})", byAge.size() - keep, folder.string(), keep);
 }
 
 // Repack setup: the Windows console reader cannot take piped commands, so accounts are created from the command line
