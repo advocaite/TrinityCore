@@ -3549,6 +3549,16 @@ GameObject.CheckInvalidPosition = 0
 Loot.EnableAELoot = 1
 
 #
+#     Loot.SharedEncounterLoot
+#        Description: Dungeon and raid bosses drop their whole loot table on one corpse that the group loots
+#                     under its loot method, like vanilla. Disabled: retail personal encounter loot, where each
+#                     roll of the loot table goes to one random player.
+#        Default:     1  - (Shared encounter loot enabled)
+#                     0  - (Personal encounter loot)
+
+Loot.SharedEncounterLoot = 1
+
+#
 ###################################################################################################
 
 ###################################################################################################
