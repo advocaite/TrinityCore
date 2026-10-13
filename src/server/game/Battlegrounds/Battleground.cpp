@@ -895,6 +895,11 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
                 player->ResummonPetTemporaryUnSummonedIfAny();
             }
 
+            // close the match state opened at the start on every way out (leave, kick, teleport away, the leave after the scoreboard);
+            // the client keeps its PvP match (restricted addon environment) active until told otherwise and the chat box stays broken
+            if (SendPacket)
+                player->SendDirectMessage(WorldPackets::Battleground::PVPMatchSetState(WorldPackets::Battleground::PVPMatchState::Inactive).Write());
+
             if (SendPacket && bgQueueTypeId)
             {
                 WorldPackets::Battleground::BattlefieldStatusNone battlefieldStatus;
@@ -938,8 +943,10 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         // remove all criterias on bg leave
         player->FailCriteria(CriteriaFailEvent::LeaveBattleground, 0);
 
-        if (Transport)
-            player->TeleportToBGEntryPoint();
+        // a failed exit teleport strands the player on the battleground map once this object is deleted
+        if (Transport && !player->TeleportToBGEntryPoint())
+            TC_LOG_ERROR("bg.battleground", "Battleground::RemovePlayerAtLeave: exit teleport failed for {} ({}), player remains on battleground map {} (instance {})",
+                player->GetName(), guid.ToString(), GetMapId(), m_InstanceID);
 
         TC_LOG_DEBUG("bg.battleground", "Removed player {} from Battleground.", player->GetName());
     }
@@ -1359,7 +1366,10 @@ void Battleground::SendMessageToAll(uint32 entry, ChatMsg msgType, Player const*
 
 void Battleground::AddPlayerPosition(WorldPackets::Battleground::BattlegroundPlayerPosition const& position)
 {
+    // one entry per player: a script that registers the carrier itself and the position aura must not duplicate it
+    RemovePlayerPosition(position.Guid);
     _playerPositions.push_back(position);
+    m_LastPlayerPositionBroadcast = PLAYER_POSITION_UPDATE_INTERVAL;   // sent on the next update, not up to 5 s later
 }
 
 void Battleground::RemovePlayerPosition(ObjectGuid guid)

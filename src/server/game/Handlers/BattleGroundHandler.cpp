@@ -40,6 +40,7 @@
 #include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"
+#include "StringFormat.h"
 #include "World.h"
 
 void WorldSession::HandleBattlemasterHelloOpcode(WorldPackets::NPC::Hello& hello)
@@ -99,12 +100,20 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
 
     BattlegroundTemplate const* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(bgTypeId);
     if (!bgTemplate)
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: no battleground_template for type {}, join by {} ignored", uint32(bgTypeId), _player->GetName());
+        ChatHandler(this).SendSysMessage("This battleground is not available on this server.");
         return;
+    }
 
     // expected bracket entry
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketByLevel(bgTemplate->MapIDs.front(), _player->GetLevel());
     if (!bracketEntry)
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: no level bracket for map {} at level {}, join by {} ignored", bgTemplate->MapIDs.front(), uint32(_player->GetLevel()), _player->GetName());
+        ChatHandler(this).SendSysMessage("No level bracket exists for this battleground at your level.");
         return;
+    }
 
     GroupJoinBattlegroundResult err = ERR_BATTLEGROUND_NONE;
 
@@ -198,7 +207,7 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
         uint32 queueSlot = _player->AddBattlegroundQueueId(bgQueueTypeId);
 
         WorldPackets::Battleground::BattlefieldStatusQueued battlefieldStatus;
-        BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, _player, queueSlot, ginfo->JoinTime, bgQueueTypeId, avgTime, false);
+        BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, _player, queueSlot, _player->GetBattlegroundQueueJoinTime(bgQueueTypeId), bgQueueTypeId, avgTime, false);
         SendPacket(battlefieldStatus.Write());
 
         TC_LOG_DEBUG("bg.battleground", "Battleground: player joined queue for bg queue {{ BattlemasterListId: {}, Type: {}, Rated: {}, TeamSize: {} }}, {}, NAME {}",
@@ -227,6 +236,18 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
             avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
         }
 
+        if (err)
+        {
+            // the client closes the join window on a failed status without saying why
+            Player const* culprit = errorGuid.IsEmpty() ? nullptr : ObjectAccessor::FindPlayer(errorGuid);
+            ChatHandler(this).SendSysMessage(Trinity::StringFormat("Cannot join the battleground queue as a group: {} (error {}).{}",
+                err == ERR_BATTLEGROUND_JOIN_RANGE_INDEX ? "group members are in different level brackets" :
+                err == ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS ? "a group member is a deserter" :
+                err == ERR_BATTLEGROUND_TOO_MANY_QUEUES ? "a group member has no free queue slot" : "a group member is not eligible",
+                uint32(err), culprit ? " Check " + culprit->GetName() + "." : std::string()));
+            TC_LOG_DEBUG("bg.battleground", "Battleground: group queue of {} rejected, error {}, member {}", _player->GetName(), uint32(err), errorGuid.ToString());
+        }
+
         for (GroupReference const& itr : grp->GetMembers())
         {
             Player* member = itr.GetSource();
@@ -242,7 +263,7 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
             uint32 queueSlot = member->AddBattlegroundQueueId(bgQueueTypeId);
 
             WorldPackets::Battleground::BattlefieldStatusQueued battlefieldStatus;
-            BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, member, queueSlot, ginfo->JoinTime, bgQueueTypeId, avgTime, true);
+            BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, member, queueSlot, member->GetBattlegroundQueueJoinTime(bgQueueTypeId), bgQueueTypeId, avgTime, true);
             member->SendDirectMessage(battlefieldStatus.Write());
             TC_LOG_DEBUG("bg.battleground", "Battleground: player joined queue for bg queue {{ BattlemasterListId: {}, Type: {}, Rated: {}, TeamSize: {} }}, {}, NAME {}",
                 bgQueueTypeId.BattlemasterListId, uint32(bgQueueTypeId.Type), bgQueueTypeId.Rated ? "true" : "false", uint32(bgQueueTypeId.TeamSize),
@@ -443,7 +464,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
             sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, bgQueueTypeId, bracketEntry->GetBracketId());
 
         TC_LOG_DEBUG("bg.battleground", "Battleground: player {} ({}) left queue for bgtype {}, queue {{ BattlemasterListId: {}, Type: {}, Rated: {}, TeamSize: {} }}.",
-            _player->GetName(), _player->GetGUID().ToString(), bg->GetTypeID(),
+            _player->GetName(), _player->GetGUID().ToString(), bg ? bg->GetTypeID() : bgTypeId,
             bgQueueTypeId.BattlemasterListId, uint32(bgQueueTypeId.Type), bgQueueTypeId.Rated ? "true" : "false", uint32(bgQueueTypeId.TeamSize));
     }
 }
@@ -609,7 +630,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
         uint32 queueSlot = member->AddBattlegroundQueueId(bgQueueTypeId);
 
         WorldPackets::Battleground::BattlefieldStatusQueued battlefieldStatus;
-        BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, member, queueSlot, ginfo->JoinTime, bgQueueTypeId, avgTime, true);
+        BattlegroundMgr::BuildBattlegroundStatusQueued(&battlefieldStatus, member, queueSlot, member->GetBattlegroundQueueJoinTime(bgQueueTypeId), bgQueueTypeId, avgTime, true);
         member->SendDirectMessage(battlefieldStatus.Write());
 
         TC_LOG_DEBUG("bg.battleground", "Battleground: player joined queue for arena as group bg queue {{ BattlemasterListId: {}, Type: {}, Rated: {}, TeamSize: {} }}, {}, NAME {}",

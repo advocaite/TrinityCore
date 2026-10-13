@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
 #include "GameEventMgr.h"
+#include "GameTime.h"
 #include "GossipDef.h"
 #include "Language.h"
 #include "Log.h"
@@ -206,7 +207,10 @@ void BattlegroundMgr::BuildBattlegroundStatusQueued(WorldPackets::Battleground::
     battlefieldStatus->AsGroup = asGroup;
     battlefieldStatus->SuspendedQueue = false;
     battlefieldStatus->EligibleForMatchmaking = true;
-    battlefieldStatus->WaitTime = GetMSTimeDiffToNow(joinTime);
+    // joinTime is the player's queue join time in unix seconds (Player::AddBattlegroundQueueId), the same value as Ticket.Time.
+    // Taken as a getMSTime() tick it gave a wrapped 'Time In Queue' (28 days 23 hours) in the client.
+    time_t const now = GameTime::GetGameTime();
+    battlefieldStatus->WaitTime = (joinTime && time_t(joinTime) <= now) ? uint32(now - time_t(joinTime)) * IN_MILLISECONDS : 0u;
 }
 
 void BattlegroundMgr::BuildBattlegroundStatusFailed(WorldPackets::Battleground::BattlefieldStatusFailed* battlefieldStatus, BattlegroundQueueTypeId queueId, Player const* player, uint32 ticketId, GroupJoinBattlegroundResult result, ObjectGuid const* errorGuid /*= nullptr*/)
