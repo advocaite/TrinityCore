@@ -1608,7 +1608,7 @@ struct battleground_classic_alterac_valley : BattlegroundScript
         _mineTimer = { MineTickTimer, MineTickTimer };
         _mineReclaimTimer = { 0, 0 };
 
-        // VMaNGOS BattleGroundAV::Reset: the matching spawn groups have no manual flag
+        // VMaNGOS BattleGroundAV::Reset: the matching spawn groups are spawned in OnInit
         for (uint8 node = CAV_NODE_FIRSTAID_STATION; node <= CAV_NODE_STONEHEART_GRAVE; ++node)
             InitNode(node, CAV_TEAM_ALLIANCE, false);
         for (uint8 node = CAV_NODE_DUNBALDAR_SOUTH; node <= CAV_NODE_STONEHEART_BUNKER; ++node)
@@ -1654,6 +1654,16 @@ struct battleground_classic_alterac_valley : BattlegroundScript
             UpdateNodeWorldState(node);
         for (uint8 mine = 0; mine < 2; ++mine)
             SendMineWorldStates(mine);
+
+        // all event spawn groups are manual: a despawned group stays despawned
+        for (size_t event1 = 0; event1 < _activeEvents.size(); ++event1)
+        {
+            if (_activeEvents[event1] == EventNone)
+                continue;
+            uint32 const groupId = GroupFor(uint8(event1), _activeEvents[event1]);
+            if (battlegroundMap->GetSpawnGroupData(groupId))
+                battlegroundMap->SpawnGroupSpawn(groupId, true);
+        }
     }
 
     void OnStart() override

@@ -727,6 +727,11 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
         UpdateWorldState(WS_FLAG_STATE_ALLIANCE, 1);
         UpdateWorldState(WS_FLAG_STATE_HORDE, 1);
         UpdateWorldState(WS_BATTLE_IN_PROGRESS, 0, true);
+
+        // manual spawn groups: a despawned group stays despawned
+        battlegroundMap->SpawnGroupSpawn(SPAWN_GROUP_ALLIANCE_FLAG, true);
+        battlegroundMap->SpawnGroupSpawn(SPAWN_GROUP_HORDE_FLAG, true);
+        battlegroundMap->SpawnGroupSpawn(SPAWN_GROUP_GHOST_GATES, true);
     }
 
     void OnStart() override
@@ -734,7 +739,10 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
         using namespace ClassicWarsongGulch;
         for (ObjectGuid const& guid : _doors)
             if (GameObject* door = battlegroundMap->GetGameObject(guid))
+            {
                 door->UseDoorOrButton();
+                door->DespawnOrUnsummon(3s);
+            }
 
         battlegroundMap->SpawnGroupDespawn(SPAWN_GROUP_GHOST_GATES);
         battlegroundMap->SpawnGroupSpawn(SPAWN_GROUP_SPIRIT_GUIDES, true);
