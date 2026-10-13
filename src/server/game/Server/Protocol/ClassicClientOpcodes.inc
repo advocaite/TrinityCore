@@ -382,12 +382,16 @@
     { 0x3F00A9, 0x3E00A7 }, // CMSG_INSTANCE_LOCK_RESPONSE (0.0)
     { 0x3F00AA, 0x3E00AE }, // CMSG_LOW_LEVEL_RAID2 (0.0)
     { 0x3F00BD, 0x3E00BB }, // CMSG_OVERRIDE_SCREEN_FLASH (0.0)
+    { 0x3F00C0, 0x3E00BD }, // CMSG_BATTLEMASTER_JOIN (client 70205 battleground join)
     { 0x3F00C1, 0x3E00BE }, // CMSG_BATTLEMASTER_JOIN_ARENA (4.6)
-    { 0x3F00C2, 0x3E00C0 }, // CMSG_BATTLEMASTER_JOIN_RATED_BG_BLITZ (0.0)
-    { 0x3F00C3, 0x3E00C1 }, // CMSG_BATTLEMASTER_JOIN_SKIRMISH (0.0)
-    { 0x3F00C4, 0x3E00C4 }, // CMSG_BATTLEMASTER_JOIN_BRAWL (0.0)
-    { 0x3F00C7, 0x3E00C6 }, // CMSG_TRAINING_GROUNDS_JOIN (0.0)
-    { 0x3F00C9, 0x3E00C7 }, // CMSG_BATTLEFIELD_PORT (1.0)
+    // 0x3F00C2..0x3F00CA follow WowPacketParser's V1_60_69876 opcode table (the old guesses here were shifted by one, which sent the
+    // Enter/Leave Queue button (BATTLEFIELD_PORT, 0x3F00CA) to an unhandled opcode)
+    { 0x3F00C2, 0x3E00BF }, // CMSG_BATTLEMASTER_JOIN_RATED_SOLO_SHUFFLE
+    { 0x3F00C3, 0x3E00C0 }, // CMSG_BATTLEMASTER_JOIN_RATED_BG_BLITZ
+    { 0x3F00C4, 0x3E00C1 }, // CMSG_BATTLEMASTER_JOIN_SKIRMISH
+    { 0x3F00C7, 0x3E00C4 }, // CMSG_BATTLEMASTER_JOIN_BRAWL
+    { 0x3F00C9, 0x3E00C6 }, // CMSG_TRAINING_GROUNDS_JOIN
+    { 0x3F00CA, 0x3E00C7 }, // CMSG_BATTLEFIELD_PORT (accept/decline invite and leave queue)
     { 0x3F00CB, 0x3E00C8 }, // CMSG_REPOP_REQUEST (payload-verified: Release Spirit button sends 1 byte = CheckInstance bit; was mapped to CLIENT_PORT_GRAVEYARD)
     { 0x3F00CD, 0x3E00CA }, // CMSG_SET_SELECTION (3.8)
     { 0x3F00CE, 0x3E00CB }, // CMSG_INSPECT (3.8)
@@ -495,8 +499,8 @@
     { 0x420085, 0x410087 }, // CMSG_MOVE_DISABLE_STRAFING_ACK (1.0)
     { 0x440000, 0x430000 }, // CMSG_CONNECT_TO_FAILED (0.0)
     { 0x440004, 0x430004 }, // CMSG_ADDON_LIST (0.0)
-    { 0x440006, 0x430008 }, // CMSG_REQUEST_BATTLEFIELD_STATUS (0.0)
-    { 0x440008, 0x43000A }, // CMSG_START_WAR_GAME (0.0)
+    { 0x440008, 0x430008 }, // CMSG_REQUEST_BATTLEFIELD_STATUS (WowPacketParser V1_60_69876)
+    { 0x44000A, 0x43000A }, // CMSG_START_WAR_GAME (WowPacketParser V1_60_69876)
     { 0x44000B, 0x43000B }, // CMSG_START_SPECTATOR_WAR_GAME (0.0)
     { 0x44000C, 0x43000C }, // CMSG_ACCEPT_WARGAME_INVITE (0.0)
     { 0x44000F, 0x43000F }, // CMSG_REQUEST_RATED_PVP_INFO (0.0)
@@ -674,8 +678,10 @@
     { 0x45000D, 0x44000B }, // CMSG_LOG_STREAMING_ERROR (0.0)
     { 0x45000E, 0x44000D }, // CMSG_QUERY_PLAYER_NAME_BY_COMMUNITY_ID (0.0)
     { 0x45000F, 0x44000E }, // CMSG_QUERY_PLAYER_NAMES_FOR_COMMUNITY (0.0)
-    { 0x450010, 0x44000F }, // CMSG_LATENCY_REPORT (0.0)
-    { 0x450011, 0x440010 }, // CMSG_QUERY_PLAYER_NAMES (1.8)
+    // 0x450010 is CMSG_QUERY_PLAYER_NAMES, not LATENCY_REPORT: PC capture 2026-10-05 (70205), sent right after another
+    // player's create with uint32 count 1 + that player's packed guid; unanswered, every other player showed as "Unknown".
+    // Indices match retail again from here, so 0x450011 falls to the default mapping (retail 0x440011).
+    { 0x450010, 0x440010 }, // CMSG_QUERY_PLAYER_NAMES
     { 0x3F00E6, 0x3E00E3 }, // CMSG_EMOTE (region 0x3F00E0-0x3F00F0 = retail - 3, manual)
     { 0x3F00E8, 0x3E00E5 }, // CMSG_OPENING_CINEMATIC (region 0x3F00E0-0x3F00F0 = retail - 3, manual)
     { 0x3F00E9, 0x3E00E6 }, // CMSG_NEXT_CINEMATIC_CAMERA (region 0x3F00E0-0x3F00F0 = retail - 3, manual)

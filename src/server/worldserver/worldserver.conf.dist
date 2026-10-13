@@ -4617,10 +4617,11 @@ Classic.OpcodeGroupShift = -1
 
 #    Classic.MainGroupInsertIndex
 #        Description: Client 70291+: first 70245 index (decimal) of the main server message group that moved up by one.
-#                     The official sniff narrows it to 147..173 (0x93..0xAD: party, ready check, pet battle messages).
-#        Default:     147
+#                     152 (0x98): the official 70338 sniff has the party update (0x97) unchanged; with a lower value the
+#                     party frame never appeared.
+#        Default:     152
 
-Classic.MainGroupInsertIndex = 147
+Classic.MainGroupInsertIndex = 152
 
 #    Classic.ClientMainGroupInsertIndex
 #        Description: Client 70291+: 70291 index (decimal) of the message added to the main client group; the client messages
