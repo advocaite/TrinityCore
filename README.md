@@ -8,7 +8,8 @@ with a vanilla world (converted from VMaNGOS) and the Skyborne / Zephras Isle co
 **Just want to play?** Use the Windows repack from the releases: extract, run `Setup.bat`, start the servers in the
 Forever Launcher, press Play. No MySQL or compiling needed.
 
-**Server architecture and operations:** [Complete bnetserver and worldserver guide](doc/ServerGuide.md) — login flow, databases, networking, setup, administration, backups, and troubleshooting.
+**Letting other people play on your server?** See [Hosting for other players](#hosting-for-other-players). A full
+Linux (Ubuntu 24.04) setup, tested on a fresh cloud server, is in [doc/LinuxServerSetup.md](doc/LinuxServerSetup.md).
 
 ### Building from source
 
@@ -42,6 +43,11 @@ PrivateKeyFile = "./<your key>.pem"
 ```
 If worldserver stops right after `Realm running as realm ID 1`, `RealmID` is not 70.
 
+`Network.EnterEncryptedModeRegionGroup` is not in `worldserver.conf.dist`; add it by hand. The two `LoginREST`
+names are what the client is told to connect to, and bnetserver must be able to resolve them itself at startup, so
+the **server PC also needs the hosts entry** from step 3 (else bnetserver stops with "Could not resolve
+LoginREST.ExternalAddress"). On Linux, `contrib/linux/configure_server.sh` writes both configs from the `.dist` files.
+
 **Game data (maps, vmaps, mmaps).** Run the tools built from this branch in the **World of Warcraft** folder (the one that
 holds `.build.info` and `_classic_beta_`). The Forever client is the CASC product **`wow_classic_beta`**; this branch's
 extractors use it by default (TrinityCore's own default `wow` = retail fails with "Error opening casc storage / No locales
@@ -63,6 +69,30 @@ Then move `dbc`, `gt`, `maps`, `vmaps` and `mmaps` into the worldserver's `DataD
   The repack's `setup\Setup.ps1` shows the exact openssl commands.
 - start the client with the [Forever Launcher](https://github.com/advocaite/foreverlauncher-releases/releases), which sets the portal and
   the server's public key.
+
+### Hosting for other players
+
+Out of the box everything only works on the server PC itself. For other PCs:
+
+**Windows repack:** run `setup\host-for-others.bat` on the server PC. It opens the servers to the network, sets the
+realm addresses, adds a Windows Firewall rule and makes `ForeverFriendKit.zip`. Each player unzips the kit and runs
+`join-server.bat` (trusts your server certificate, sets their hosts line, checks the ports); `leave-server.bat` undoes
+it. For internet play, forward TCP 1119, 8081, 8085, 8095, 8105, 8115 in your router to the server PC.
+`host-for-others.bat -Undo` makes the server local-only again.
+
+**Built from source,** check all of these (each one alone stops remote players):
+
+| | What | Why |
+|---|---|---|
+| 1 | `BindIP = "0.0.0.0"` in bnetserver.conf and every worldserver.conf | `127.0.0.1` (the repack default) accepts this PC only |
+| 2 | `auth.realmlist.address` = your public IP (or LAN IP), `localAddress` = the server's LAN IP | the default `127.0.0.1` sends players to their own PC after login |
+| 3 | server PC: hosts entry `<server ip> trinity.actual.battle.net` | bnetserver must resolve the LoginREST names to start |
+| 4 | every player: hosts entry `<server ip> trinity.actual.battle.net` | the client logs in to that name |
+| 5 | every player trusts the root CA that signed your server certificate (give them the CA **certificate**, never its key) | the client checks the certificate; a repack's Setup.bat makes a different CA on every PC |
+| 6 | firewall / router: TCP 1119 (bnet), 8081 (LoginREST.Port) and every realm's WorldServerPort | the client needs all three kinds |
+| 7 | `LoginREST.ExternalAddress` stays `trinity.actual.battle.net`, not the IP | the certificate is only valid for that name |
+
+Never open MySQL (3306/3317), Remote Access (3443) or SOAP (7878) to the internet.
 
 [![Average time to resolve an issue](https://isitmaintained.com/badge/resolution/TrinityCore/TrinityCore.svg)](https://isitmaintained.com/project/TrinityCore/TrinityCore "Average time to resolve an issue") [![Percentage of issues still open](https://isitmaintained.com/badge/open/TrinityCore/TrinityCore.svg)](https://isitmaintained.com/project/TrinityCore/TrinityCore "Percentage of issues still open")
 

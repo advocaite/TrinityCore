@@ -149,7 +149,10 @@ UpdateFetcher::AppliedFileStorage UpdateFetcher::ReceiveAppliedFiles() const
 
 std::string UpdateFetcher::ReadSQLUpdate(boost::filesystem::path const& file) const
 {
-    std::ifstream in(file.c_str());
+    // Classic 1.60 fork: read binary and turn CRLF into LF ourselves. Text mode did this only on Windows, so a file with CRLF
+    // bytes in its git copy (the world baselines have line breaks inside text strings) hashed differently on Linux, and a
+    // database made on Windows re-ran those files there. This gives the hash Windows has always stored, on every platform.
+    std::ifstream in(file.c_str(), std::ios::binary);
     if (!in.is_open())
     {
         TC_LOG_FATAL("sql.updates", "Failed to open the sql update \"{}\" for reading! "
@@ -167,6 +170,12 @@ std::string UpdateFetcher::ReadSQLUpdate(boost::filesystem::path const& file) co
     }();
 
     in.close();
+
+    std::size_t out = 0;
+    for (std::size_t i = 0; i < update.size(); ++i)
+        if (update[i] != '\r' || i + 1 >= update.size() || update[i + 1] != '\n')
+            update[out++] = update[i];
+    update.resize(out);
     return update;
 }
 
