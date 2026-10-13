@@ -759,6 +759,8 @@ class TC_GAME_API Spell
         WeaponAttackType m_attackType;                      // For weapon based attack
 
         std::vector<SpellPowerCost> m_powerCost;            // Calculated spell cost initialized only in Spell::prepare
+        int32 m_comboPointsPending = 0;                     // combo points a finisher spends once its effects are done (they read the points)
+        void SpendPendingComboPoints();
         int32 m_casttime;                                   // Calculated spell cast time initialized only in Spell::prepare
         int32 m_channelDuration;                            // Calculated channeled spell duration in order to calculate correct pushback.
         bool m_canReflect;                                  // can reflect this spell?
