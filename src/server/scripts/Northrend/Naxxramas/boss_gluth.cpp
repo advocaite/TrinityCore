@@ -279,6 +279,14 @@ private:
 };
 
 // 28374, 54426 - Decimate
+// Forever binds this spell to the TrinityCore script AND runs the Classic port of the instance (classic_instance_*),
+// whose boss AI already handles the spell; without this check both fire and the effect is applied twice.
+static bool IsClassicPortInstance(WorldObject const* obj)
+{
+    InstanceMap const* map = obj && obj->FindMap() ? obj->FindMap()->ToInstanceMap() : nullptr;
+    return map && map->GetScriptName().starts_with("classic_");
+}
+
 class spell_gluth_decimate : public SpellScript
 {
     // handles the damaging effect of the decimate spell.
@@ -315,7 +323,7 @@ class spell_gluth_decimate : public SpellScript
 
     bool Load() override
     {
-        return GetCaster() && GetCaster()->GetEntry() == NPC_GLUTH;
+        return GetCaster() && GetCaster()->GetEntry() == NPC_GLUTH && !IsClassicPortInstance(GetCaster());
     }
 };
 

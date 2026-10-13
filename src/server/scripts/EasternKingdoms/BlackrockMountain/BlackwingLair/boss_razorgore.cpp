@@ -178,9 +178,23 @@ struct go_orb_of_domination : public GameObjectAI
     }
 };
 
+// Forever binds this spell to the TrinityCore script AND runs the Classic port of the instance (classic_instance_*),
+// whose egg GameObject AI handles the spell; the classic instance reads data id 2 (DATA_EGG_EVENT here) as
+// Broodlord Lashlayer's boss state, so this script must not run there.
+static bool IsClassicPortInstance(WorldObject const* obj)
+{
+    InstanceMap const* map = obj && obj->FindMap() ? obj->FindMap()->ToInstanceMap() : nullptr;
+    return map && map->GetScriptName().starts_with("classic_");
+}
+
 // 19873 - Destroy Egg
 class spell_egg_event : public SpellScript
 {
+    bool Load() override
+    {
+        return !IsClassicPortInstance(GetCaster());
+    }
+
     void HandleOnHit()
     {
         if (InstanceScript* instance = GetCaster()->GetInstanceScript())

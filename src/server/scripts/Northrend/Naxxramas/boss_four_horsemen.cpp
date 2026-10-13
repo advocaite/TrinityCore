@@ -645,12 +645,25 @@ struct boss_four_horsemen_sir : public boss_four_horsemen_baseAI
         bool _shouldSay; // throttle to make sure we only talk on first target hit by holy wrath
 };
 
+// Forever binds this spell to the TrinityCore script AND runs the Classic port of the instance (classic_instance_*),
+// whose boss AI already handles the spell; without this check both fire and the effect is applied twice.
+static bool IsClassicPortInstance(WorldObject const* obj)
+{
+    InstanceMap const* map = obj && obj->FindMap() ? obj->FindMap()->ToInstanceMap() : nullptr;
+    return map && map->GetScriptName().starts_with("classic_");
+}
+
 // 28832 - Mark of Korth'azz
 // 28833 - Mark of Blaumeux
 // 28834 - Mark of Rivendare
 // 28835 - Mark of Zeliek
 class spell_four_horsemen_mark : public AuraScript
 {
+    bool Load() override
+    {
+        return !IsClassicPortInstance(GetOwner());
+    }
+
     void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         if (Unit* caster = GetCaster())

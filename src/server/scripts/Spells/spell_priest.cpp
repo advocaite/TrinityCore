@@ -3946,8 +3946,17 @@ class spell_pri_holy_10_1_class_set_4pc_aura : public AuraScript
         if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
             return;
 
-        if (GetCaster()->HasAura(SPELL_PRIEST_HOLY_10_1_CLASS_SET_4P))
-            GetCaster()->CastSpell(GetCaster(), SPELL_PRIEST_HOLY_10_1_CLASS_SET_4P_EFFECT, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD).SetTriggeringAura(aurEff));
+        // Prayer of Mending caster can be offline / despawned by the time
+        // the aura expires (PoM has a long duration and bounces between
+        // targets). GetCaster() returns nullptr in that case and the
+        // unchecked HasAura/CastSpell on the next line crashed with
+        // ACCESS_VIOLATION on the world thread. Null-check before use.
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        if (caster->HasAura(SPELL_PRIEST_HOLY_10_1_CLASS_SET_4P))
+            caster->CastSpell(caster, SPELL_PRIEST_HOLY_10_1_CLASS_SET_4P_EFFECT, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD).SetTriggeringAura(aurEff));
     }
 
     void Register() override
@@ -5207,8 +5216,16 @@ class spell_pri_vampiric_embrace : public AuraScript
 
     static bool CheckProc(AuraScript const&, ProcEventInfo const& eventInfo)
     {
+        // Vampiric Embrace only leeches from spell damage, so a proc event with no
+        // DamageInfo (e.g. a cast-phase proc) has nothing to heal from -> don't proc.
+        // Without this guard a null DamageInfo crashes the whole server; it was hit
+        // live 2026-09-15 when a bot's spell_proc row for 15286 fired on cast phase.
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo || !damageInfo->GetSpellInfo())
+            return false;
+
         // Not proc from Mind Sear
-        return !(eventInfo.GetDamageInfo()->GetSpellInfo()->SpellFamilyFlags[1] & 0x80000);
+        return !(damageInfo->GetSpellInfo()->SpellFamilyFlags[1] & 0x80000);
     }
 
     void HandleEffectProc(AuraEffect const* aurEff, ProcEventInfo const& eventInfo)
