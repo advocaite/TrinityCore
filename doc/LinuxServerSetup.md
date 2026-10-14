@@ -254,9 +254,13 @@ the Windows dev setup.
    database made on Windows (dev, repack, our dump) therefore made a Linux worldserver re-run the
    65 MB baseline: it failed with `error 1136 ... Column count doesn't match value count` after
    already changing rows (creature 79422 -> 77149), and if it had succeeded it would have re-run
-   every later custom file too. Fix: ReadSQLUpdate reads binary and converts CRLF to LF itself, which
-   is the hash Windows has always stored, so no existing database sees a change.
-   After a failed run like this, re-import world from the dump before starting again.
+   every later custom file too. First fix (#52) hashed CRLF->LF everywhere, which then broke databases
+   **built on Linux** (they stored the raw hash) the same way. Final fix: the updater accepts either
+   hash (CRLF->LF or raw) as "already applied" and only re-hashes, and the baselines are never
+   applied again at all (a changed baseline is logged and re-hashed), because they are not safe to
+   re-run on a finished database. Tested on the droplet with a Windows-made DB, a Linux-made DB, a
+   changed baseline and a changed custom file.
+   After a failed run like this, rebuild or re-import the world database before starting again.
 7. **First start asks questions.** With `Updates.AutoSetup = 1`, worldserver asks
    `Database "auth" does not exist, do you want to create it?` (and the same for `characters`).
    Run the first start in the foreground (screen) and answer `yes`.

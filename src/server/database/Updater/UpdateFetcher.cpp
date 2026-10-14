@@ -149,9 +149,7 @@ UpdateFetcher::AppliedFileStorage UpdateFetcher::ReceiveAppliedFiles() const
 
 std::string UpdateFetcher::ReadSQLUpdate(boost::filesystem::path const& file) const
 {
-    // Classic 1.60 fork: read binary and turn CRLF into LF ourselves. Text mode did this only on Windows, so a file with CRLF
-    // bytes in its git copy (the world baselines have line breaks inside text strings) hashed differently on Linux, and a
-    // database made on Windows re-ran those files there. This gives the hash Windows has always stored, on every platform.
+    // Classic 1.60 fork: read the raw bytes on every platform (see SqlFileHashes for the two hashes made from them)
     std::ifstream in(file.c_str(), std::ios::binary);
     if (!in.is_open())
     {
@@ -170,13 +168,34 @@ std::string UpdateFetcher::ReadSQLUpdate(boost::filesystem::path const& file) co
     }();
 
     in.close();
-
-    std::size_t out = 0;
-    for (std::size_t i = 0; i < update.size(); ++i)
-        if (update[i] != '\r' || i + 1 >= update.size() || update[i + 1] != '\n')
-            update[out++] = update[i];
-    update.resize(out);
     return update;
+}
+
+namespace
+{
+// Classic 1.60 fork: a SQL file has two possible stored hashes. Before 2026-10-14 the file was read in text mode, which turns
+// CRLF into LF only on Windows: files with CRLF bytes in their git copy (the world baselines have line breaks inside text
+// strings) were stored with the LF hash by Windows and the raw hash by Linux. Both mean "already applied"; the LF hash is the one
+// stored from now on, so a database moved between Windows and Linux never re-runs a file just because of line endings.
+struct SqlFileHashes
+{
+    std::string Normalized; // CRLF -> LF, the hash stored from now on
+    std::string Raw;        // bytes as they are (what Linux stored before)
+
+    bool Matches(std::string const& stored) const { return stored == Normalized || stored == Raw; }
+};
+
+SqlFileHashes HashSqlFile(std::string const& raw)
+{
+    std::string normalized = raw;
+    std::size_t out = 0;
+    for (std::size_t i = 0; i < normalized.size(); ++i)
+        if (normalized[i] != '\r' || i + 1 >= normalized.size() || normalized[i + 1] != '\n')
+            normalized[out++] = normalized[i];
+    normalized.resize(out);
+
+    return { ByteArrayToHexStr(Trinity::Crypto::SHA1::GetDigestOf(normalized)), ByteArrayToHexStr(Trinity::Crypto::SHA1::GetDigestOf(raw)) };
+}
 }
 
 UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
@@ -207,8 +226,11 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
     // Classic 1.60 fork: our custom files build on each other (a later file changes rows an earlier one writes, e.g. the sniff
     // import and the fixes after it). Once a custom file is applied again because it changed, every later custom file is applied
     // again too, else the earlier file silently undoes their changes (2026-10-05: the skinning fix lost to a re-run sniff import).
-    // All custom files are written to be safe to run again.
+    // All custom files are written to be safe to run again, except the world baselines: they are a dump of the world at their
+    // place in the update order (plain VALUES lists that only fit the table layouts of that moment), so they are never applied
+    // again; a change to the rows they hold belongs in a new custom file.
     auto isCustomFile = [](Path const& path) { return path.generic_string().find("/custom/") != std::string::npos; };
+    auto isBaselineFile = [&](Path const& path) { return isCustomFile(path) && path.filename().string().find("_baseline_") != std::string::npos; };
     bool reapplyLaterCustomFiles = false;
 
     for (auto const& availableQuery : available)
@@ -238,7 +260,8 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         }
 
         // Calculate a Sha1 hash based on query content.
-        std::string const hash = ByteArrayToHexStr(Trinity::Crypto::SHA1::GetDigestOf(ReadSQLUpdate(availableQuery.first)));
+        SqlFileHashes const hashes = HashSqlFile(ReadSQLUpdate(availableQuery.first));
+        std::string const& hash = hashes.Normalized;
 
         UpdateMode mode = MODE_APPLY;
 
@@ -246,7 +269,9 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         if (iter == applied.end())
         {
             // Catch renames (different filename, but same hash)
-            HashToFileNameStorage::const_iterator const hashIter = hashToName.find(hash);
+            HashToFileNameStorage::const_iterator hashIter = hashToName.find(hashes.Normalized);
+            if (hashIter == hashToName.end())
+                hashIter = hashToName.find(hashes.Raw);
             if (hashIter != hashToName.end())
             {
                 // Check if the original file was removed. If not, we've got a problem.
@@ -288,16 +313,35 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
         }
         else
         {
+            bool const sameFile = hashes.Matches(iter->second.hash);
+
+            // A changed baseline is not run again (see isBaselineFile); only its hash is updated.
+            if (!sameFile && isBaselineFile(availableQuery.first))
+            {
+                mode = MODE_REHASH;
+
+                TC_LOG_ERROR("sql.updates", ">> Baseline \"{}\" changed \'{}\' -> \'{}\'. Baselines are never applied again (not safe to "
+                    "re-run on a finished database), only re-hashed. Rows it should change belong in a new sql/custom file.",
+                    availableQueryFilename, iter->second.hash.substr(0, 7), hash.substr(0, 7));
+            }
             // If the hash of the files differs from the one stored in our database, reapply the update (because it changed).
-            if (iter->second.hash != hash)
+            else if (!sameFile)
             {
                 TC_LOG_INFO("sql.updates", ">> Reapplying update \"{}\" \'{}\' -> \'{}\' (it changed)...", availableQueryFilename,
                     iter->second.hash.substr(0, 7), hash.substr(0, 7));
             }
-            else if (reapplyLaterCustomFiles && isCustomFile(availableQuery.first))
+            else if (reapplyLaterCustomFiles && isCustomFile(availableQuery.first) && !isBaselineFile(availableQuery.first))
             {
                 TC_LOG_INFO("sql.updates", ">> Reapplying update \"{}\" \'{}\' (an earlier custom file was applied again)...",
                     availableQueryFilename, hash.substr(0, 7));
+            }
+            // Same file, stored with the raw hash of an older Linux build: store the line-ending independent hash, do not run it.
+            else if (iter->second.hash != hash)
+            {
+                mode = MODE_REHASH;
+
+                TC_LOG_INFO("sql.updates", ">> Re-hashing update \"{}\" \'{}\' -> \'{}\' (same file, line-ending independent hash)...",
+                    availableQueryFilename, iter->second.hash.substr(0, 7), hash.substr(0, 7));
             }
             else
             {
