@@ -99,20 +99,20 @@ tar -cf - -C "PATH/TO/DATADIR" dbc gt maps vmaps cameras | ssh root@SERVER_IP "m
 
 ## 8. Databases
 
-world + hotfixes come from a dump of the dev database (the plan is to ship this dump instead of
-TDB). auth + characters are created fresh by worldserver's auto-setup, so no accounts or
-characters leave the dev machine.
-
-Dump on the dev PC (MySQL 8.4 client):
+All four databases are created by worldserver's auto-setup on the first start (section 10).
+world + hotfixes come from the Forever database release: download it into the bin folder and
+unpack it there.
 
 ```
-mysqldump --host=127.0.0.1 --port=3306 --user=trinity -p --single-transaction --hex-blob \
-  --set-gtid-purged=OFF --no-tablespaces --databases world hotfixes \
-  --ignore-table=world.updates_apply_check --ignore-table=hotfixes.updates_apply_check \
-  --result-file=forever_db.sql
-gzip -4 forever_db.sql          # 985 MB -> 277 MB
-scp forever_db.sql.gz root@SERVER_IP:/root/
+cd /root/server/bin
+wget https://github.com/advocaite/TrinityCore/releases/download/forever-tdb-2026-10-14/TDB_full_forever_2026_10_14.7z
+7z x TDB_full_forever_2026_10_14.7z
 ```
+
+(On the first test run, before that release existed, world + hotfixes were a `mysqldump` of the
+dev database imported with `zcat forever_db.sql.gz | mysql`. That dev DB turned out to hold
+leftovers of older SQL file versions and test edits; the release is built from source instead,
+see "Forever database release" below.)
 
 MySQL user (password generated and kept in a root-only file; MySQL on Ubuntu already listens on
 127.0.0.1 only, which is what we want):
@@ -124,13 +124,20 @@ mysql -e "CREATE USER trinity@localhost IDENTIFIED BY '$P';
   GRANT ALL PRIVILEGES ON auth.* TO trinity@localhost;   GRANT ALL PRIVILEGES ON characters.* TO trinity@localhost;"
 ```
 
-Import (4 minutes on the droplet):
+## Forever database release (how it is made)
 
-```
-zcat /root/forever_db.sql.gz | mysql
-```
-
-Check: same row counts as the dev DB (world.creature 79422, hotfixes.hotfix_data 24304).
+1. Build world + hotfixes from source into empty databases: TrinityCore's TDB 1210.26091 files in
+   the working folder, a worldserver config pointing at the new database names with
+   `Updates.EnableDatabases = 12` (world + hotfixes only), then `worldserver -u` (update and exit).
+   Took 6 minutes on the droplet.
+2. Compare with the dev database table by table (CHECKSUM TABLE, then `EXCEPT` row counts).
+3. Copy the website's generated `armory_icon` / `armory_item` / `armory_name` tables from dev.
+4. Dump each database on its own (no `CREATE DATABASE`/`USE`, so renamed databases work) without
+   `updates_apply_check`:
+   `mysqldump --single-transaction --hex-blob --set-gtid-purged=OFF --no-tablespaces --ignore-table=DB.updates_apply_check DB`
+5. Test: a new setup from the two files alone must import them and then apply nothing.
+6. Name them `TDB_full_{world,hotfixes}_forever_<date>.sql`, set the names in
+   `revision_data.h.in.cmake`, publish as a GitHub release.
 
 ## 9. Configs, certificate, firewall
 

@@ -15,14 +15,17 @@ Linux (Ubuntu 24.04) setup, tested on a fresh cloud server, is in [doc/LinuxServ
 
 Build the core as usual (see [Install](#install)), then:
 
-**1. Databases.** Use TrinityCore's normal auto-setup with `TDB_full_world_1210.26091_2026_09_09.sql` and
-`TDB_full_hotfixes_1210.26091_2026_09_09.sql` in the worldserver folder. worldserver then applies all updates and
-`sql/custom` files itself (`Updates.EnableDatabases = 15`); nothing else is needed. The vanilla world converted from
-VMaNGOS ships as plain SQL (`sql/custom/world/2026_09_27_00_world_forever_baseline_*.sql`, about 65 MB, so the first
-start takes a few minutes). The result is identical to the released database.
+**1. Databases.** Download the Forever database release
+[forever-tdb-2026-10-14](https://github.com/advocaite/TrinityCore/releases/tag/forever-tdb-2026-10-14), unpack it and
+put `TDB_full_world_forever_2026_10_14.sql` and `TDB_full_hotfixes_forever_2026_10_14.sql` in the worldserver folder
+(the folder you start worldserver from). On the first start worldserver's auto-setup imports them and then applies
+only the `sql/custom` files added after the release (`Updates.EnableDatabases = 15`); nothing else is needed. The
+release is the world built from source (TrinityCore TDB 1210.26091, all TrinityCore updates and all of our
+`sql/custom` files, including the vanilla world converted from VMaNGOS), so you skip that whole conversion.
 
-Already have a database from an older version (including one built with `vmangos_world`)? Just pull and start
-worldserver: it applies the new files on top, and `vmangos_world` can be dropped afterwards.
+Already have a database? Just pull and start worldserver: it applies the new files on top. Building from
+TrinityCore's own TDB 1210.26091 instead still works (rename it or change `revision_data.h.in.cmake`) but takes much
+longer and gives the same result.
 
 **2. Config.** The Classic client needs these (everything else can stay default):
 
