@@ -29,6 +29,7 @@
 #include "ObjectAccessor.h"
 #include "PartyPackets.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "World.h"
 
@@ -745,6 +746,8 @@ void WorldSession::HandleSendPingUnit(WorldPackets::Party::SendPingUnit const& p
 
         member->SendDirectMessage(broadcastPingUnit.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingUnit(_player, const_cast<Group*>(group), const_cast<Unit*>(target), static_cast<uint8>(pingUnit.Type));
 }
 
 void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPoint const& pingWorldPoint)
@@ -774,6 +777,8 @@ void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPo
 
         member->SendDirectMessage(broadcastPingWorldPoint.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingWorldPoint(_player, const_cast<Group*>(group), pingWorldPoint.Point.Pos, static_cast<uint8>(pingWorldPoint.Type));
 }
 
 void WorldSession::HandleSendPingCooldown(WorldPackets::Party::SendPingCooldown const& pingCooldown)

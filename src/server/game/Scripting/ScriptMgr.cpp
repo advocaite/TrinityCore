@@ -2132,6 +2132,16 @@ void ScriptMgr::OnPlayerAddonMessageSent(Player* player, uint32 type, std::strin
     FOREACH_SCRIPT(PlayerScript)->OnAddonMessageSent(player, type, prefix, text, group);
 }
 
+void ScriptMgr::OnPlayerPingUnit(Player* player, Group* group, Unit* target, uint8 type)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPingUnit(player, group, target, type);
+}
+
+void ScriptMgr::OnPlayerPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPingWorldPoint(player, group, point, type);
+}
+
 void ScriptMgr::OnPlayerClearEmote(Player* player)
 {
     FOREACH_SCRIPT(PlayerScript)->OnClearEmote(player);
@@ -3095,6 +3105,14 @@ void PlayerScript::OnAddonMessageSent(Player* /*player*/, uint32 /*type*/, std::
 }
 
 void PlayerScript::OnAddonMessageSent(Player* /*player*/, uint32 /*type*/, std::string const& /*prefix*/, std::string const& /*text*/, Group* /*group*/)
+{
+}
+
+void PlayerScript::OnPingUnit(Player* /*player*/, Group* /*group*/, Unit* /*target*/, uint8 /*type*/)
+{
+}
+
+void PlayerScript::OnPingWorldPoint(Player* /*player*/, Group* /*group*/, Position const& /*point*/, uint8 /*type*/)
 {
 }
 

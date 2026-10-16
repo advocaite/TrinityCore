@@ -774,6 +774,11 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         virtual void OnAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Group* group);
 
+        // Called after a group ping was relayed to the group (map thread). type is a PingSubjectType value.
+        virtual void OnPingUnit(Player* player, Group* group, Unit* target, uint8 type);
+
+        virtual void OnPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type);
+
         // Both of the below are called on emote opcodes.
         virtual void OnClearEmote(Player* player);
 
@@ -1288,6 +1293,8 @@ class TC_GAME_API ScriptMgr
         void OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Guild* guild);
         void OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Player* receiver);
         void OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Group* group);
+        void OnPlayerPingUnit(Player* player, Group* group, Unit* target, uint8 type);
+        void OnPlayerPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type);
         void OnPlayerClearEmote(Player* player);
         void OnPlayerTextEmote(Player* player, uint32 textEmote, uint32 emoteNum, ObjectGuid guid);
         void OnPlayerSpellCast(Player* player, Spell* spell, bool skipCheck);
