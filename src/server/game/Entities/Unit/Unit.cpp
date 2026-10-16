@@ -848,6 +848,8 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
         if (UnitAI* attackerAI = attacker ? attacker->GetAI() : nullptr)
             attackerAI->DamageDealt(victim, tmpDamage, damagetype);
 
+        sScriptMgr->OnDamageSpell(attacker, victim, tmpDamage, spellProto);
+
         // Hook for OnDamage Event
         sScriptMgr->OnDamage(attacker, victim, tmpDamage);
 

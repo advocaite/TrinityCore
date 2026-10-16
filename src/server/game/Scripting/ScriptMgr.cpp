@@ -2372,6 +2372,11 @@ void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint32& gain)
     FOREACH_SCRIPT(UnitScript)->OnHeal(healer, reciever, gain);
 }
 
+void ScriptMgr::OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo)
+{
+    FOREACH_SCRIPT(UnitScript)->OnDamageSpell(attacker, victim, damage, spellInfo);
+}
+
 void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint32& damage)
 {
     FOREACH_SCRIPT(UnitScript)->OnDamage(attacker, victim, damage);
@@ -2751,6 +2756,10 @@ UnitScript::UnitScript(char const* name) noexcept
 UnitScript::~UnitScript() = default;
 
 void UnitScript::OnHeal(Unit* /*healer*/, Unit* /*reciever*/, uint32& /*gain*/)
+{
+}
+
+void UnitScript::OnDamageSpell(Unit* /*attacker*/, Unit* /*victim*/, uint32 /*damage*/, SpellInfo const* /*spellInfo*/)
 {
 }
 

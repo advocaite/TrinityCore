@@ -436,6 +436,9 @@ class TC_GAME_API UnitScript : public ScriptObject
         // Called when a unit deals damage to another unit
         virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
 
+        // Called just before OnDamage with the spell that dealt the damage (null for a melee swing)
+        virtual void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
 
@@ -1347,6 +1350,7 @@ class TC_GAME_API ScriptMgr
 
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
+        void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);
