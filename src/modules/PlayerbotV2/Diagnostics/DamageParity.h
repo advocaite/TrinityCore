@@ -17,7 +17,7 @@ class Unit;
 
 namespace Playerbot::Diagnostics::Parity {
 
-// Economy: mana pool, regen in and out of combat and while casting, spell costs, heal sizes (a caster or healer, AI detached).
+// Economy: mana pool, regen in and out of combat and while casting, spell costs, heal sizes (a caster or healer, bot logic detached).
 // Incoming: a tank is hit by a level 63 dummy at bare / tier 1 / tier 3 armor, then by Firesworn, Magmadar and a Deadmines mob.
 // Trap: a hunter sets Explosive, Immolation, Frost and Freezing Trap out of combat, a target dummy is moved onto each, and the trap must fire
 // (the [trap_cast] line carries the cast result and the spell's effect targets) and do its job to the dummy.

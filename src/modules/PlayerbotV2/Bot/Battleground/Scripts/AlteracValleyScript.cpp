@@ -5,7 +5,7 @@
 // Vandar Stormpike ends the BG.
 //
 // Authoritative data from V1 (production-tested):
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Siege/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Siege/
 //     AlteracValleyData.h:35 (REINF_GAIN_PER_CAPTAIN), :128-130 (Vandar),
 //     :134-136 (Drek'Thar), :149-164 (Captains), :191+ (towers),
 //     :451-457 (spawns).
@@ -85,7 +85,7 @@ public:
             a.endgame_target_z =    98.5f;
             a.endgame_creature_entry = 11946;  // DREKTHAR_ENTRY
         }
-        // Captain staging (ike3 BattleGroundTacticsAV.cpp, the ike3-based playerbot code, named locations
+        // Captain staging (ike3 BattleGroundTacticsAV.cpp, Karrz1/wow-1.12 raid10-revamp bcc8b9fe, named locations
         // AV_ICEBLOOD_GARRISON_WAITING_ALLIANCE / AV_STONEHEART_OUTPOST_WAITING_HORDE): the squad for the enemy captain gathers here and
         // goes in together (BgTeamCoordinator::PlanNodeRace), not one bot after another. The Alliance hunts Galvangar, the Horde Balinda.
         if (s.is_horde())

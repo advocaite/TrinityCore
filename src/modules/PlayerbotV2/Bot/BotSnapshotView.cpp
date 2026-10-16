@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <mutex>
+#include <unordered_map>
 #include <cfloat>
 #include <cstring>
 #include <vector>
@@ -172,6 +174,18 @@ bool BotSnapshotView::is_ready(uint32 spell_id) const
             if (power(uint8(pw->PowerType)) < cost)
                 return false;
         }
+    // Mana: not ready when even the cheapest rank the bot knows costs more than it has (live Deadmines 2026-10-14: a level 14 shaman
+    // sent Lightning Shield and Healing Wave 14 times in 10 s, NO_POWER every time). The cheapest rank, not the one requested, so
+    // a healer that downranks to save mana still gets its cast; the DB2 cost is the untalented one, so a discounted cast waits a few
+    // points longer than the core would need - never fires early.
+    if (int32 cheapest = mana_cost(spell_id); cheapest > 0)
+    {
+        for (uint32 const r : known_ranks(spell_id))
+            if (int32 const c = mana_cost(r); c > 0 && c < cheapest)
+                cheapest = c;
+        if (power(POWER_MANA) < cheapest)
+            return false;
+    }
     auto cd = FindCooldownIndexed(s_->cooldowns, spell_id);
     if (!cd) return true;
     if (cd->charges > 0) return true;
@@ -765,7 +779,7 @@ BotSnapshotView::ThreatHold BotSnapshotView::threat_hold(ObjectGuid target, floa
     switch (ThreatVictim(u->victim_kind))
     {
         // Self-defence: the mob is already hitting this bot or another
-        // non-tank member - everyone fights (Karrz: "nobody holds back").
+        // non-tank member - everyone fights (the owner: "nobody holds back").
         case ThreatVictim::Me:
         case ThreatVictim::Member:
         // Someone outside the group: not our tank's fight.
@@ -835,14 +849,39 @@ NearbyUnit const* BotSnapshotView::assigned_tank_mob() const
 // target_reach: `range` is a spell's range, measured to the target's combat reach (Spell::GetMinMaxRange), so a big mob counts as in reach
 // from further off (MC Garr 2026-10-10: Firesworn 5-6 y from a tank, Taunt reach 4 y centre to centre, never taunted).
 // leash: the mob is walked to (a pickup chases it), so with a human owner in the group inside an instance it must stand within
-// kPickupLeashYd of the owner; a tank that chased every mob on every member dragged the fight away from him (Karrz, Deadmines
+// kPickupLeashYd of the owner; a tank that chased every mob on every member dragged the fight away from him (playtest, Deadmines
 // 2026-10-10: pickups 25-30 y out moved the melee spot 50 y from the group in four pulls). A taunt does not move the tank and is
 // not leashed. The owner is read from the friend sweep; out of it (or no owner) there is no leash.
 static constexpr float kPickupLeashYd = 25.0f;
 
+// A 5-man tank keeps the fight where its healer can see it: the point (x, y) is further than kHealerLeashYd from every healer in the
+// friend sweep (a heal reaches 40 y; the rest is the margin for the line of sight and a step). No healer in the sweep, no leash.
+// Deadmines 2026-10-15 n43 run 6: the tank followed a held Goblin Engineer 20 y out of the room, the healers had no sight line at
+// 29-42 y, and the tank died there with the priest unable to cast.
+static constexpr float kHealerLeashYd = 30.0f;
+static bool BeyondHealerLeash(BotSnapshot const& s, float x, float y)
+{
+    if (!s.instance_ctx.is_in_dungeon || s.instance_ctx.is_in_raid)
+        return false;
+    bool any_healer = false;
+    for (auto const& f : s.combat.nearby_friends)
+    {
+        if (f.role != Role::Healer || f.hp <= 0 || f.guid == s.guid) continue;
+        any_healer = true;
+        const float hx = x - f.x, hy = y - f.y;
+        if (hx * hx + hy * hy <= kHealerLeashYd * kHealerLeashYd)
+            return false;
+    }
+    return any_healer;
+}
+
 // A loose mob nobody was assigned goes to ONE tank: the nearest idle one that this bot's friend sweep shows (a tank busy with a
 // mob of its own is no contender; ties go to the lower guid). Without it every tank without an assignment ran at the same mob and
 // they taunted it back and forth (MC 2026-10-11: [tank_loose] from several tanks on one Firewalker, "claimed by another tank 0").
+// The nearer tank counts only while it can take the mob: within the pickup reach (n24 mc_garr: an idle tank 40 y off was the "nearest", every
+// other idle tank deferred to it and a Firesworn stood 7 y from Mctankwb on a healer for a minute).
+static constexpr float kOtherTankReachYd = 30.0f;
+
 static bool OtherTankTakesLoose(BotSnapshot const& s, NearbyUnit const& mob)
 {
     const float mdx = mob.x - s.position.x, mdy = mob.y - s.position.y;
@@ -856,10 +895,36 @@ static bool OtherTankTakesLoose(BotSnapshot const& s, NearbyUnit const& mob)
         if (busy) continue;
         const float dx = mob.x - f.x, dy = mob.y - f.y;
         const float theirs = dx * dx + dy * dy;
+        if (theirs > kOtherTankReachYd * kOtherTankReachYd) continue;
         if (theirs < mine || (theirs == mine && f.guid < s.guid))
             return true;
     }
     return false;
+}
+
+// How long a mob has stood on a group member without a tank on it (ms). The plan's claim on a mob (PveOrder::claimed_by_other_tanks) is
+// "its owner is on the way"; once the mob has been on a member for kClaimStaleMs the owner is not (n24 mc_garr: Firesworn killed seven
+// mages and healers while their claimed tanks held another mob), and any tank may take it. Mob-level state shared by all bots, written
+// only while the mob is seen loose; a gap of kLooseGapMs starts it again.
+static constexpr uint32 kClaimStaleMs = 3000;
+static constexpr uint32 kLooseGapMs   = 1500;
+static uint32 LooseOnMemberMs(ObjectGuid mob, uint32 now)
+{
+    struct Seen { uint32 since; uint32 last; };
+    static std::mutex mtx;
+    static std::unordered_map<uint64, Seen> seen;
+    std::lock_guard lock(mtx);
+    if (seen.size() > 512)
+        for (auto it = seen.begin(); it != seen.end();)
+            it = now - it->second.last > 10'000u ? seen.erase(it) : std::next(it);
+    auto [it, fresh] = seen.try_emplace(mob.GetCounter(), Seen{ now, now });
+    if (!fresh)
+    {
+        if (now - it->second.last > kLooseGapMs)
+            it->second.since = now;
+        it->second.last = now;
+    }
+    return now - it->second.since;
 }
 
 static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float range, bool target_reach = false, bool leash = false)
@@ -875,8 +940,17 @@ static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float rang
     {
         if (e.hp <= 0 || e.is_player || e.untargetable || e.is_pacified) continue;
         if (ThreatVictim(e.victim_kind) != ThreatVictim::Member) continue;
-        if (s.pve_order.active && s.pve_order.claimed_by_other_tank(e.guid)) continue;
+        if (s.pve_order.active && s.pve_order.claimed_by_other_tank(e.guid) && LooseOnMemberMs(e.guid, s.published_at_ms) < kClaimStaleMs) continue;
         if (OtherTankTakesLoose(s, e)) continue;
+        if (leash && BeyondHealerLeash(s, e.x, e.y))
+        {
+            static std::atomic<uint32> s_hleash_log{ 0 };
+            uint32 last = s_hleash_log.load(std::memory_order_relaxed);
+            if (s.published_at_ms - last >= 5000u && s_hleash_log.compare_exchange_strong(last, s.published_at_ms))
+                TC_LOG_INFO("playerbot.v2", "[tank_leash] {} leaves entry {} alone: further than {:.0f} y from every healer; no pickup chase",
+                            s.identity.name, e.entry, kHealerLeashYd);
+            continue;
+        }
         if (owner_unit)
         {
             const float ox = e.x - owner_unit->x, oy = e.y - owner_unit->y;
@@ -934,6 +1008,20 @@ NearbyUnit const* BotSnapshotView::taunt_candidate(float range) const
         }
     }
     return UnclaimedLooseAttacker(*s_, range, /*target_reach=*/true);
+}
+
+bool BotSnapshotView::claim_blocks(NearbyUnit const& u) const
+{
+    if (!s_->pve_order.active || !s_->pve_order.claimed_by_other_tank(u.guid))
+        return false;
+    if (ThreatVictim(u.victim_kind) != ThreatVictim::Member)
+        return true;
+    return LooseOnMemberMs(u.guid, s_->published_at_ms) < kClaimStaleMs;
+}
+
+bool BotSnapshotView::beyond_healer_leash(float x, float y) const
+{
+    return BeyondHealerLeash(*s_, x, y);
 }
 
 NearbyUnit const* BotSnapshotView::pickup_candidate() const
@@ -1026,7 +1114,7 @@ MailEntry const* BotSnapshotView::next_drainable_mail() const
         // owner to handle manually.
         if (m.cod > 0) continue;
         // Returned mails sit in the bot's box but can't be re-returned;
-        // include them — the AI may still want to delete or take items
+        // include them — the bot logic may still want to delete or take items
         // (returns from auctions land here too).
         if (m.money > 0 || m.item_count > 0) return &m;
     }

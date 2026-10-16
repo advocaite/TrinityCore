@@ -1,7 +1,7 @@
 #pragma once
 // Threat-dump trigger for DPS and healers: how close the bot is to pulling aggro off the tank.
 //
-// Idea from Karrz's VMaNGOS raid layer (the ike3-based playerbot code, playerbot/strategy/values/ThreatValues.cpp relative threat %,
+// Idea from Karrz's VMaNGOS raid layer (Karrz1/wow-1.12, playerbot/strategy/values/ThreatValues.cpp relative threat %,
 // GenericTriggers.cpp HighThreat / MediumThreat at 80% / 60%); rewritten against our snapshot (NearbyUnit::my_threat and
 // tank_threat, filled by the snapshot builder). Used to time Fade and Feint.
 

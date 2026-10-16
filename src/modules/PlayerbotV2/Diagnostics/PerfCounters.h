@@ -21,7 +21,7 @@ public:
     void record_event_pushed();
     void record_event_dropped();    // ring overflow
     // Intent producer couldn't push because the per-bot IntentQueue is full.
-    // Sustained increments mean an AI worker is producing faster than the
+    // Sustained increments mean an bot worker is producing faster than the
     // world thread drains, or the per-tick budget is too tight.
     void record_intent_dropped();
     // Bucketed by Result enum value (cast to size_t at the call site to avoid
@@ -225,7 +225,7 @@ private:
 
     // Per-(class, spec, bracket) BG outcome bucket store. Key encoding:
     // (cls << 24) | (spec << 8) | bracket_lo10. shared_mutex bridges
-    // multiple AI threads firing record_bg_outcome at near-simultaneous
+    // multiple bot logic threads firing record_bg_outcome at near-simultaneous
     // BG-end ticks; reads are infrequent (only on diag command).
 public:
     struct BgBucket { uint32_t wins = 0; uint32_t losses = 0; };

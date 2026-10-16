@@ -42,7 +42,7 @@
 //                      Clip (195645) - out-of-combat or positional utility.
 //   * Tranquilizing Shot (19801) / Camouflage (199483) - [M]-only class
 //                      talents, dispel / stealth logic lives outside the DPS ladder.
-//   * Eyes of the Beast ( 321297) - pet-vision toy, breaks bot AI control.
+//   * Eyes of the Beast ( 321297) - pet-vision toy, breaks bot bot logic control.
 
 #include "../ApRegistry.h"
 #include "../ApRotation.h"

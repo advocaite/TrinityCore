@@ -1,6 +1,7 @@
 #include "TownNpcIndex.h"
 
 #include "CreatureData.h"
+#include "GameObjectData.h"
 #include "DB2Stores.h"
 #include "DB2Structure.h"
 #include "Log.h"
@@ -98,7 +99,31 @@ void TownNpcIndex::Initialize()
         ++_count;
     }
 
+    size_t mailboxes = 0;
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllGameObjectData())
+    {
+        MapEntry const* map = sMapStore.LookupEntry(data.mapId);
+        if (!map || !map->IsWorldMap() || data.phaseId != 0 || data.phaseGroup != 0)
+            continue;
+        if (data.spawnGroupData && (data.spawnGroupData->flags & SPAWNGROUP_FLAG_MANUAL_SPAWN))
+            continue;
+        GameObjectTemplate const* tmpl = sObjectMgr->GetGameObjectTemplate(data.id);
+        if (!tmpl || tmpl->type != GAMEOBJECT_TYPE_MAILBOX)
+            continue;
+        TownNpc n;
+        n.spawn_id    = spawnId;
+        n.entry       = data.id;
+        n.map_id      = data.mapId;
+        n.x           = data.spawnPoint.GetPositionX();
+        n.y           = data.spawnPoint.GetPositionY();
+        n.z           = data.spawnPoint.GetPositionZ();
+        n.alliance_ok = n.horde_ok = true;
+        _mail[n.map_id].push_back(n);
+        ++mailboxes;
+    }
+
     _initialized.store(true, std::memory_order_release);
+    TC_LOG_INFO("playerbot.v2", "[TownNpcIndex] {} mailbox objects.", mailboxes);
     TC_LOG_INFO("playerbot.v2", "[TownNpcIndex] {} service NPC spawns on {} open-world maps in {} ms.",
         _count, _maps.size(),
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
@@ -167,6 +192,27 @@ TownNpc const* TownNpcIndex::Nearest(uint32 map, float x, float y, float z, uint
         // under the bot) is not the nearest one in walking terms.
         const float dz = std::fabs(n.z - z);
         if (dz > 30.0f && dz * dz > d2)
+            continue;
+        best = &n;
+        best_d2 = d2;
+    }
+    return best;
+}
+
+TownNpc const* TownNpcIndex::NearestMailbox(uint32 map, float x, float y, float z, float max_dist) const
+{
+    if (!_initialized.load(std::memory_order_acquire))
+        return nullptr;
+    auto it = _mail.find(map);
+    if (it == _mail.end())
+        return nullptr;
+    TownNpc const* best = nullptr;
+    float best_d2 = max_dist * max_dist;
+    for (TownNpc const& n : it->second)
+    {
+        const float dx = n.x - x, dy = n.y - y;
+        const float d2 = dx * dx + dy * dy;
+        if (d2 >= best_d2 || std::fabs(n.z - z) > 12.0f)
             continue;
         best = &n;
         best_d2 = d2;

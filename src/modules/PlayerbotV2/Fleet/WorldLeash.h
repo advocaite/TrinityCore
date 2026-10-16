@@ -1,5 +1,5 @@
 // WorldLeash - the open-world anchors (real players and recently left spots) as the world bot spawner sees them,
-// published for the bot AI worker threads. An ambient bot that picks a quest objective far from every anchor on its map
+// published for the bot bot worker threads. An ambient bot that picks a quest objective far from every anchor on its map
 // would walk out of the population bubble and be logged out as an orphan (levelling lost, a new bot spawned instead);
 // idle:pursue_quest_goal asks LeashBlocks() and takes another objective.
 #pragma once

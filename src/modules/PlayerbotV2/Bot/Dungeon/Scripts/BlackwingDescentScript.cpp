@@ -22,7 +22,7 @@ public:
         DungeonAdvice a;
         // TC has no boss scripts for BWD; generic combat applies.
         // Boss progression — NPC entries from TC's blackwing_descent.h
-        // (the instance script defines them even though boss AI doesn't).
+        // (the instance script defines them even though boss bot logic doesn't).
         // Omnotron Defense System isn't in the TC header — standard
         // entries 42180-42183 (Arcanotron/Electron/Magmatron/Toxitron);
         // listing the lead controller entry only.

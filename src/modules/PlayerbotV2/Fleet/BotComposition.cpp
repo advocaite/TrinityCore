@@ -120,7 +120,8 @@ bool IsVanillaCombo(uint8 race, uint8 cls)
         case RACE_NIGHTELF: mask = bit(CLASS_WARRIOR) | bit(CLASS_HUNTER) | bit(CLASS_ROGUE) | bit(CLASS_PRIEST) | bit(CLASS_DRUID); break;
         case RACE_GNOME:    mask = bit(CLASS_WARRIOR) | bit(CLASS_ROGUE) | bit(CLASS_MAGE) | bit(CLASS_WARLOCK); break;
         case RACE_ORC:      mask = bit(CLASS_WARRIOR) | bit(CLASS_HUNTER) | bit(CLASS_ROGUE) | bit(CLASS_SHAMAN) | bit(CLASS_WARLOCK); break;
-        case RACE_UNDEAD_PLAYER: mask = bit(CLASS_WARRIOR) | bit(CLASS_ROGUE) | bit(CLASS_PRIEST) | bit(CLASS_MAGE) | bit(CLASS_WARLOCK); break;
+        // Undead Paladin is a Classic 1.60 combination (CharBaseInfo; sql/custom/world/2026_09_30_00_world_classic_undead_paladin.sql).
+        case RACE_UNDEAD_PLAYER: mask = bit(CLASS_WARRIOR) | bit(CLASS_PALADIN) | bit(CLASS_ROGUE) | bit(CLASS_PRIEST) | bit(CLASS_MAGE) | bit(CLASS_WARLOCK); break;
         case RACE_TAUREN:   mask = bit(CLASS_WARRIOR) | bit(CLASS_HUNTER) | bit(CLASS_SHAMAN) | bit(CLASS_DRUID); break;
         case RACE_TROLL:    mask = bit(CLASS_WARRIOR) | bit(CLASS_HUNTER) | bit(CLASS_ROGUE) | bit(CLASS_PRIEST) | bit(CLASS_SHAMAN) | bit(CLASS_MAGE); break;
         // Classic 1.60 Skyborne: the combinations of CharBaseInfo.db2, from Fleet/SkyborneIsle.h

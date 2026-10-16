@@ -1,10 +1,10 @@
 // ThreatDiscipline.h - shared group threat rules for non-tank damage, AoE and
-// healing (port of Karrz's ike3-based bots GroupPveRestraint / MCRaidHoldDamage,
+// healing (port of Karrz's wow-1.12 GroupPveRestraint / MCRaidHoldDamage,
 // generalised to any group with a tank).
 //
 // Pure functions of the bot's snapshot (NearbyUnit my_threat / tank_threat /
 // victim_kind / is_cc_locked / unit_in_combat, stamped by BotSnapshotBuilder
-// from each mob's ThreatManager), so they are safe on the AI worker threads
+// from each mob's ThreatManager), so they are safe on the bot worker threads
 // and usable from the class rotations (Combat/Apl) as well as the states.
 //
 //   * ThreatOpeningLead: the threat a tank must hold on a mob before the rest
@@ -35,7 +35,7 @@
 
 namespace Playerbot {
 
-// True once per `interval_ms` for `key`. Shared across the AI worker threads.
+// True once per `interval_ms` for `key`. Shared across the bot worker threads.
 inline bool RaidLogDue(uint64 key, uint32 now_ms, uint32 interval_ms)
 {
     static std::mutex mu;
@@ -57,6 +57,7 @@ enum class RaidLogKind : uint8
 {
     ThreatHold = 1, AoeHold = 2, PullHeld = 4, PullSkip = 5,
     OpenerHold = 6,                            // [raid_pull] non-tank opener on an unpulled mob (PrologueRules)
+    PullBackOpener = 7,                        // [pull_back] no ranged opener for this tank (PrologueRules)
     Escape = 16, CancelHeal = 17, Rez = 18,   // [raid_escape], overheal cancel, rez spread
     Interrupt = 32, Tranq = 33, FearHold = 34, // [raid_interrupt], [raid_tranq], [raid_threat] fear hold
     Hazard = 48, Los = 49, Cone = 50,          // [raid_hazard], [raid_los], [raid_cone] (State_Idle)
@@ -81,7 +82,7 @@ inline bool ThreatDisciplineApplies(BotSnapshotView const& s)
     return !s.group_tank().IsEmpty();
 }
 
-// Karrz: bosses need ~900 threat (three tank GCDs at 60) before anyone opens,
+// the owner: bosses need ~900 threat (three tank GCDs at 60) before anyone opens,
 // trash ~250 so the group rolls from one pack member to the next. Threat
 // scales with damage, i.e. with level - scaled down for levelling dungeons
 // (floor 15% so a level-15 tank still gets a lead).
@@ -166,7 +167,8 @@ inline AoeHazard FindAoeHazard(BotSnapshotView const& s, float cx, float cy, flo
         if (hit.unit || !tanked || !u.has_threat_list) return false;   // keep the first soft hazard
         if (!u.unit_in_combat)
         { hit = { &u, AoeHazardKind::Unpulled }; return false; }
-        if (!me_tank && ThreatVictim(u.victim_kind) == ThreatVictim::Tank && TankNotSecured(s, u))
+        // Raid only: a party's AoE is not held for the tank's lead (the Unpulled and CC guards above still apply).
+        if (s.is_in_raid() && !me_tank && ThreatVictim(u.victim_kind) == ThreatVictim::Tank && TankNotSecured(s, u))
         { hit = { &u, AoeHazardKind::NotTanked }; return false; }
         return false;
     };
@@ -271,13 +273,13 @@ inline NearbyUnit const* NearestUnpulled(BotSnapshotView const& s, float radius,
 
 // Raid gate for the emergency AoE fears (Psychic Scream, Howl of Terror). A
 // feared mob runs up to ~40y in a random direction and drags any pack it runs
-// into, so in a raid group the fear holds while an unpulled mob is within 40y
-// of the caster, and it is only for a bot an elite (or boss) is actually
-// hitting - not for a bot standing next to mobs the tanks hold. Outside raid
-// groups the callers' own conditions apply unchanged.
+// into, so in a raid group or an instance the fear holds while an unpulled mob
+// is within 40y of the caster. In a raid it is also only for a bot an elite (or
+// boss) is actually hitting - not for a bot standing next to mobs the tanks
+// hold. Elsewhere the callers' own conditions apply unchanged.
 inline bool RaidFearAllowed(BotSnapshotView const& s, bool raid_group, char const* what)
 {
-    if (!raid_group || s.in_battleground()) return true;
+    if ((!raid_group && !s.is_in_instance()) || s.in_battleground()) return true;
     constexpr float kFearPullRange = 40.0f;
     float d = 0.f;
     if (NearbyUnit const* u = NearestUnpulled(s, kFearPullRange, &d))
@@ -288,6 +290,8 @@ inline bool RaidFearAllowed(BotSnapshotView const& s, bool raid_group, char cons
                 s.name(), what, d, u->entry, u->guid.GetCounter());
         return false;
     }
+    if (!raid_group)
+        return true;
     for (NearbyUnit const& u : s.nearby_enemies())
         if (u.hp > 0 && !u.is_player && u.victim == s.guid() && (u.is_elite_or_rare || (u.is_dungeon_boss || u.is_boss_rank)))
             return true;

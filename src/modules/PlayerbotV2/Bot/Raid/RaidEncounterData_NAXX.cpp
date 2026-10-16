@@ -38,7 +38,7 @@ namespace Playerbot::Raid {
         r.avoidGroundEffect.push_back({ 15953, 28794, 3.0f, Who::Anyone });
         r.priority.push_back({ 16505, 3 });     // Naxxramas Follower (classic_boss_faerlina.cpp:53): silence, charge
         // Worshippers are the enrage counter: after each Enrage 28798 a priest mind-controls one and sacrifices it with Widow's
-        // Embrace 28732 on her (RaidMechanics_Naxx.cpp). They have no AI; never a DPS target.
+        // Embrace 28732 on her (RaidMechanics_Naxx.cpp). They have no bot logic; never a DPS target.
         r.priority.push_back({ 16506, -1 });
 
         // ---------------------------------------------------------------------------------------------------------------

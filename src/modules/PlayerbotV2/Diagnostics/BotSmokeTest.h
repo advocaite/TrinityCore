@@ -1,5 +1,5 @@
 // BotSmokeTest - End-to-end regression harness driving the PlayerbotV2
-// spawn → setup-pipeline → AI-tick path. Used by `.playerbot smoketest
+// spawn → setup-pipeline → bot logic-tick path. Used by `.playerbot smoketest
 // [count]` to catch regressions in fleet bring-up against a clean realm.
 //
 // Design constraints (see /diag and HealthReport documentation):

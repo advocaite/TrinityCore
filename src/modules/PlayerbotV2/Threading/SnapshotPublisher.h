@@ -1,5 +1,5 @@
 // SnapshotPublisher - Atomic per-bot snapshot slot. World thread publishes;
-// AI workers read latest. CONTRACTS.md §5.2.
+// bot workers read latest. CONTRACTS.md §5.2.
 
 #pragma once
 
@@ -22,7 +22,7 @@ public:
     void publish(BotId id, std::shared_ptr<BotSnapshot const> snap);
     void publish_group(BotId id, std::shared_ptr<GroupSnapshot const> snap);
 
-    // Called by AI workers (or fleet thread). Returns latest, or null if
+    // Called by bot workers (or fleet thread). Returns latest, or null if
     // no snapshot has been published for this bot yet.
     std::shared_ptr<BotSnapshot const>   latest(BotId id) const;
     std::shared_ptr<GroupSnapshot const> latest_group(BotId id) const;

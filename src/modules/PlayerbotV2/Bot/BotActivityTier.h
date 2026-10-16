@@ -10,7 +10,7 @@ struct BotSnapshot;  // forward — full type in BotSnapshot.h
 
 // Tick frequency table — lower = more reactive, more CPU. On a 5950X
 // with 33% baseline CPU and ~1100 of 1237 bots sitting in Idle tier,
-// halving Idle roughly doubles aggregate AI work and lifts quality
+// halving Idle roughly doubles aggregate bot logic work and lifts quality
 // across the fleet (faster BG pivots, smoother movement, snappier
 // social timing). Active also bumped a notch since travelling/questing
 // bots want quick re-evaluation. Combat unchanged — already at 10 Hz
@@ -20,7 +20,7 @@ struct BotSnapshot;  // forward — full type in BotSnapshot.h
 // population: a solo, open-world bot that is merely travelling or
 // questing (moving OR has an objective) but is NOT human-facing
 // (unowned, ungrouped-with-real, no real player nearby), NOT path-blocked,
-// and NOT casting. Such a bot's movement spline is server-side; the AI
+// and NOT casting. Such a bot's movement spline is server-side; the bot logic
 // only needs to issue the next waypoint a touch less often, so it
 // tolerates 300 ms. This roughly halves snapshot-build cost for the
 // questing fleet that previously pinned every moving/objective bot to
@@ -37,7 +37,7 @@ struct BotSnapshot;  // forward — full type in BotSnapshot.h
 // tail of idle city/inn bots). 2000 ms is deliberately capped at the
 // AiWorkerPool staleness guard's 1000 ms ceiling × 2 — a parked bot's
 // snapshot can be up to one Parked period old, which only ever causes
-// the worker to *skip* that AI tick (stale_skip), never to act on bad
+// the worker to *skip* that bot tick (stale_skip), never to act on bad
 // data or repath; the next scheduler pass re-builds fresh. See
 // AiWorkerPool.cpp staleness guard. Any wake event (combat / owner
 // control / movement / a real player arriving) demotes the bot back to

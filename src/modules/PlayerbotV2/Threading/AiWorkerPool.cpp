@@ -161,11 +161,11 @@ void AiWorkerPool::run_one(BotId bot)
     if (!snap) return;     // No snapshot published yet — bot hasn't fully spawned.
 
     // Staleness guard. Under load the snapshot-build pipeline can fall behind
-    // the AI worker pool, leaving the most-recently-published snapshot
+    // the bot worker pool, leaving the most-recently-published snapshot
     // arbitrarily old. Acting on it makes the bot decide against a world
     // state that no longer exists (moved enemies, dead targets, changed HP).
     // Skip the tick when the snapshot's age exceeds a tier-aware threshold —
-    // ~3× the bot's AI period so a single dropped/late build is tolerated,
+    // ~3× the bot's bot logic period so a single dropped/late build is tolerated,
     // but capped at 1s so even Idle/Hibernate bots never run on grossly stale
     // data. published_at_ms is stamped from GameTime::GetGameTimeMS() in the
     // builder, so we compare against the same time base here. The bot simply
@@ -221,7 +221,7 @@ void AiWorkerPool::run_one(BotId bot)
     // Record per-bot tick latency. Bucketed histogram in PerfCounters
     // surfaces tick_p50 / tick_p99 via /perf — without this the field
     // stays at zero. Worker pool is the natural recording site since
-    // it knows when a single bot's AI tick begins/ends.
+    // it knows when a single bot's bot tick begins/ends.
     const uint32 tick_end = getMSTime();
     Services::Perf().record_tick_latency(
         std::chrono::milliseconds{int32(tick_end - tick_start)});

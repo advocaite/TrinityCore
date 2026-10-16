@@ -1,5 +1,5 @@
 // RezRule - who may resurrect, and when, in a group fight. Plain functions so they are tested without a world
-// (tests/game/ClassicRezRule.cpp). Raid rules (Karrz, MC 2026-10-10): only a druid (Rebirth) may raise someone while the fight is on;
+// (tests/game/ClassicRezRule.cpp). Raid rules (playtest, MC 2026-10-10): only a druid (Rebirth) may raise someone while the fight is on;
 // a priest, paladin or shaman waits until it is over, and one rezzer takes each corpse.
 
 #pragma once

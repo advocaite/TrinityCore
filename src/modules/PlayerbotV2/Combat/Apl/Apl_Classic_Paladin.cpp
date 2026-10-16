@@ -5,7 +5,7 @@
 // 70 and 0 = Retribution melee DPS. Spell ids are vanilla rank 1 and resolve
 // to the highest known rank in the snapshot view and API::cast_spell.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/paladin/*Strategy.cpp, MANGOSBOT_ZERO).
 // Blessings follow the group assignment in Bot/ClassicUpkeep.cpp (each
 // paladin covers one blessing per class, Greater Blessings with Symbol of
@@ -97,7 +97,7 @@ struct HealTarget
     int32      hp_pct = 100;
 };
 
-// Heal target picked by Karrz's scoring (ClassicHeal::PickPatient: tank
+// Heal target picked by the owner's scoring (ClassicHeal::PickPatient: tank
 // first, LOS, incoming-damage projection, healers spread); hp_pct is the
 // projected health. The bot itself at 100% when nobody needs a heal.
 HealTarget LowestFriendOrSelf(ApPredicateContext const& ctx)
@@ -258,7 +258,7 @@ void DoHammerOfJustice(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.c
 // ======================= Healer =======================
 
 // Lay on Hands (1 h cooldown, drains all mana) is reserved for a tank at
-// critical health (Karrz's "party member critical tank health", 20%) and
+// critical health (the owner's "party member critical tank health", 20%) and
 // for the paladin itself; anyone else gets Flash of Light. Forbearance from
 // any paladin (member debuff list) blocks it.
 ObjectGuid LayOnHandsTarget(ApPredicateContext const& ctx)

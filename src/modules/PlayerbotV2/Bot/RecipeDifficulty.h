@@ -1,5 +1,5 @@
 // RecipeDifficulty - Per-recipe skill-color resolver. One-time index built at
-// module init from sSkillLineAbilityStore so AI rules can ask "is this recipe
+// module init from sSkillLineAbilityStore so bot logic rules can ask "is this recipe
 // orange/yellow/green/gray for my current skill?" in O(1) without re-scanning
 // the dbc on every tick.
 

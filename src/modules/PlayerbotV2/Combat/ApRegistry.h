@@ -17,7 +17,7 @@ ApRotation const* GetRotation(uint8 cls, uint32 spec);
 void RegisterAllRotations();
 
 // Called by individual Apl_*.cpp files at registration. Single-threaded; runs
-// during init before AI workers start.
+// during init before bot workers start.
 void RegisterRotation(uint8 cls, uint32 spec, ApRotation rotation);
 // Replaces any rotation already registered for (cls, spec). Used by the
 // Classic 1.60 vanilla rotations, which register after the retail ones.

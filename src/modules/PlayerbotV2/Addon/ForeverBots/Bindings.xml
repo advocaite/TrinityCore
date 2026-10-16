@@ -1,0 +1,19 @@
+<Bindings>
+    <Binding name="FOREVERBOTS_TOGGLE_WINDOW" header="FOREVERBOTS" category="ADDONS">
+        ForeverBots_ToggleWindow()
+    </Binding>
+    <Binding name="FOREVERBOTS_TOGGLE_STANCE" category="ADDONS">
+        ForeverBots_ToggleStance()
+    </Binding>
+    <Binding name="CLICK ForeverBotsKeyAttack:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyPull:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyPullBack:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyFollow:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyStay:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyResume:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyStop:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyFlee:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyCome:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyFallBack:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyAttackMouseover:LeftButton" category="ADDONS"/>
+</Bindings>

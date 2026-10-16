@@ -14,7 +14,9 @@
 
 namespace Playerbot::States {
 
-void DispatchLoggingIn  (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&) {}
+// Reserved, not live: BotAI::transition_to is only ever called with Idle, InCombat and Dead, and the layer dispatchers below are
+// never called (BotAI::tick has no detection for them yet). The Idle rules and the idle:* walkers do this work today.
+void DispatchLoggingIn (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&) {}
 void DispatchLoggingOut (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&) {}
 void DispatchTravelling (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&) {}
 void DispatchQuesting   (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&) {}

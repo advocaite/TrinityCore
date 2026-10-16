@@ -1,4 +1,4 @@
-// Alterac Valley objective rules imported from ike3's bots (the ike3-based playerbot code,
+// Alterac Valley objective rules imported from ike3's bots (Karrz1/wow-1.12 raid10-revamp bcc8b9fe70c42a8fa5d50fa83a472da9e9d19546,
 // BattleGroundTacticsAV.cpp): the mine-boss objective and the captain gathering threshold. Pure functions, no game state, so they can be
 // tested offline (tests/game/BgAvPlan.cpp). The mid-field fighting tactics are ours and do not live here.
 #pragma once
@@ -10,7 +10,7 @@ namespace Playerbot::BgAvPlan
 {
     // The captain squad goes in once this many of the team stand at the waiting spot (ike3: attackers near the waiting spot >= 5).
     constexpr int kCaptainGatherCount = 5;
-    // Time cap (Karrz, AV 2026-10-11: a pile of bots waited at the Stonehearth staging spot for a quorum): after kCaptainGatherMaxMs of waiting the squad
+    // Time cap (playtest, AV 2026-10-11: a pile of bots waited at the Stonehearth staging spot for a quorum): after kCaptainGatherMaxMs of waiting the squad
     // goes with whoever is there (at least one), so bots arriving one at a time never park for good.
     constexpr uint32_t kCaptainGatherMaxMs = 75000;
     constexpr bool CaptainGather(int at_stage, bool latched, uint32_t waited_ms = 0)
@@ -164,7 +164,7 @@ namespace Playerbot::BgAvPlan
         return n < 1 ? 1 : n;
     }
 
-    // ---- Rules from ike3 / mod-playerbots AV that the planner uses (the ike3-based playerbot code raid10-revamp BattleGroundTacticsAV.cpp, mod-playerbots
+    // ---- Rules from ike3 / mod-playerbots AV that the planner uses (Karrz1/wow-1.12 raid10-revamp BattleGroundTacticsAV.cpp, mod-playerbots
     // BattleGroundTactics.cpp selectObjective) ----
     // A defender already deep in the enemy half becomes an attacker: x >= -62 for the Horde, x <= -462 for the Alliance (AV runs from the
     // Frostwolf end at x -1400 to Dun Baldar at x +700); with chance 20 + 15 per own node razed (mod-playerbots BGT 1919-1931).

@@ -15,7 +15,7 @@
 // Skipped: Feign Death, Scatter Shot, Viper Sting, aspect swapping
 // (Monkey / Cheetah / Viper) - Hawk is the only aspect maintained.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/hunter/*Strategy.cpp, MANGOSBOT_ZERO).
 
 #include "Bot/SpellFamily.h"
@@ -79,8 +79,11 @@ int32 Mana(ApPredicateContext const& ctx) { return ctx.bot.power(POWER_MANA); }
 
 bool VictimInMelee(ApPredicateContext const& ctx) { return DistToVictim(ctx) <= 5.5f; }
 // Vanilla shots have an 8 yard minimum range.
+// A shot needs a ranged weapon with ammo in the bags: without it the core refuses every one with NO_AMMO (Deadmines 2026-10-14).
 bool VictimInShotRange(ApPredicateContext const& ctx)
 {
+    if (ctx.bot.ammo_kind() == 0 || ctx.bot.ammo_count() == 0)
+        return false;
     float const d = DistToVictim(ctx);
     return d >= 8.f && d <= 35.f;
 }

@@ -1,4 +1,4 @@
-// BotIntentEmitter - Push-only handle to a bot's intent queue. Held by AI
+// BotIntentEmitter - Push-only handle to a bot's intent queue. Held by bot logic
 // workers during tick. CONTRACTS.md §2.4.
 
 #pragma once
@@ -103,6 +103,9 @@ public:
     // direct=true = straight MovePoint spline, no pathfinding (committed
     // traversal-link crossings only — see MoveToIntent).
     bool move_to(float x, float y, float z, bool run = true, bool direct = false, bool drop = false);
+    // A move_to to ~(x,y,z) was already emitted in the last 1.5 s (the one move_to dedups, returning false). That is a move under way,
+    // not a refusal: callers that count false results as path refusals ask this first.
+    bool move_already_emitted(float x, float y, float z) const;
 
     // ---- Raid damage-school rule (PveOrder::SchoolHint) ----
     // The worker pool hands the emitter the snapshot the bot's tick runs on.
@@ -433,6 +436,11 @@ public:
     { return emit(VendorIntent{VendorBuyByCategoryIntent{vendor, item_class, item_subclass, total_count}}); }
     bool equip_item(uint8 from_bag, uint8 from_slot, uint8 to_slot)
     { return emit(EquipItemIntent{from_bag, from_slot, to_slot}); }
+
+    // Mana break: a mana item is due but a cast is running. Until the item goes out (or 4 s pass) cast()/cast_rank() refuse any
+    // spell with a cast time, so the running cast is the last one and the next tick can use the item.
+    void hold_casts_for_mana_item();
+    void end_mana_break();
 
 private:
     bool push(Intent i);

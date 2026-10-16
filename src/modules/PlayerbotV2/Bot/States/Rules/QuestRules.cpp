@@ -9,10 +9,15 @@
 #include "GameTime.h"
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
+#include "Bot/ClassicUpkeep.h"
 #include "Bot/States/MaintainHelpers.h"   // States::ChunkedWalkToward (far-goal chunked walk)
 #include "Bot/QuestDoable.h"
 #include "Fleet/JunkQuestResolver.h"
 #include "Fleet/WorldLeash.h"
+#include "Fleet/QuestSiteShare.h"
+#include "Fleet/OwnerRegistry.h"
+#include "Bot/BotRegistry.h"
+#include "Config.h"
 #include "World/WorldMetadata.h"
 #include "Services.h"
 #include "Travel/QuestHubDatabase.h"
@@ -188,6 +193,23 @@ bool WqTurninFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     return false;
 }
 
+// One line per bot per 30s when an offer is in sight and idle:quest_accept did not act on it (Zephras Isle 2026-10-12: ~90 bots
+// stood beside Allee Farheart for minutes, offers=1, not one [accept_quest] line in the whole run).
+void LogAcceptStall(BotSnapshotView const& s, BotAI& ai, char const* why, float nearest_giver_dist)
+{
+    const uint32 now_ms = s.published_at_ms();
+    const uint32 last = ai.last_accept_stall_diag_ms();
+    if (last != 0 && now_ms - last < 30000u) return;
+    ai.set_last_accept_stall_diag_ms(now_ms);
+    uint32 first_quest = 0;
+    if (!s.raw().quest_discovery.quest_offers.empty())
+        first_quest = s.raw().quest_discovery.quest_offers.front().quest_id;
+    TC_LOG_INFO("playerbot.v2",
+        "[quest_accept_stall] bot={} lvl={} why={} offers={} first_quest={} bag_free={} nearest_giver_dist={:.1f} in_combat={} moving={}",
+        s.name(), uint32(s.level()), why, uint32(s.raw().quest_discovery.quest_offers.size()), first_quest,
+        uint32(s.bag_free_slots()), nearest_giver_dist, s.in_combat() ? 1 : 0, s.is_moving() ? 1 : 0);
+}
+
 // ---------- idle:quest_accept ----------
 bool QuestAcceptGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,uint32)
 {
@@ -199,7 +221,11 @@ bool QuestAcceptGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
     // so the bot frees space the player way first; accept resumes once a slot
     // opens. bag_free_slots()==0 is the clean gate (deferring a no-item quest a
     // few ticks until space frees is harmless).
-    if (s.bag_free_slots() == 0) return false;
+    if (s.bag_free_slots() == 0)
+    {
+        if (!s.raw().quest_discovery.quest_offers.empty()) LogAcceptStall(s, ai, "bags_full", -1.f);
+        return false;
+    }
     if (s.raw().quest_discovery.quest_offers.empty())
     {
         if (ai.pending_quest_accept_at_ms() != 0) ai.set_pending_quest_accept_at_ms(0);
@@ -300,6 +326,9 @@ bool QuestAcceptFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
                                                  : "idle:quest_accept_approach");
         return true;
     }
+    LogAcceptStall(s, ai, near_dsq == std::numeric_limits<float>::max() ? "giver_not_in_scan"
+                         : s.in_combat() ? "in_combat" : "giver_too_far",
+                   near_dsq == std::numeric_limits<float>::max() ? -1.f : std::sqrt(near_dsq));
     return false;
 }
 
@@ -491,11 +520,9 @@ bool WalkToKnownHubGate(BotSnapshotView const& s, BotAI& ai,
     // benign to defer for a healthy-ish bot, but a <50% bot should not walk
     // across open terrain unhealed. (Accept/turn-in are instant so they need no
     // such deferral.) 2026-06-17.
-    {
-        auto const& v = s.raw().vitals;
-        if (v.max_hp > 0 && uint64(v.hp) * 100u < uint64(v.max_hp) * 50u)
-            return false;
-    }
+    // Also yields while eating / drinking or a caster is dry (Classic::RecoverBeforeWalking).
+    if (Classic::RecoverBeforeWalking(s))
+        return false;
     // In-scan acceptable offer giver? quest_offers are builder-filtered to
     // genuinely takeable offers (CanTakeQuest + SatisfyQuestLog). The close-
     // approach in Fire below walks the bot to the giver so quest_accept (one
@@ -794,11 +821,9 @@ bool QuestPursueGoalGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView 
     // SHOULD keep questing here to gain combat XP from kills, so no bag gate.)
     // Now at 698 (above the OOC maintenance band) — yield to a genuinely hurt
     // bot so it heals before trekking to a far goal. 2026-06-17.
-    {
-        auto const& v = s.raw().vitals;
-        if (v.max_hp > 0 && uint64(v.hp) * 100u < uint64(v.max_hp) * 50u)
-            return false;
-    }
+    // Also yields while eating / drinking or a caster is dry (Classic::RecoverBeforeWalking).
+    if (Classic::RecoverBeforeWalking(s))
+        return false;
     // Yield to a nearby offer ONLY when its giver is actually in scan — i.e. the
     // close-approach (walk_to_known_hub) + quest_accept can walk to it and grab it,
     // after which this resumes. An offer whose giver is NOT in scan can't be
@@ -929,10 +954,57 @@ bool QuestPursueGoalFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView 
     return true;
 }
 
+// ---------- idle:quest_site_share ----------
+// A world bot working a quest spot with more than the cap of other players already there (the nearest ones by id, real players first)
+// gives that objective up for 15 minutes and the quest picker takes another one. Keeps a popular mob camp from drawing a dozen bots.
+// Side effect only: the rule never claims the tick. Playerbot.World.QuestSiteCap (default 5, 0 = off).
+bool QuestSiteShareGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32)
+{
+    static uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault))));
+    if (cap == 0) return false;
+    if (s.has_owner_character() || s.in_group() || s.is_in_instance() || s.is_in_dungeon() || s.in_battleground()) return false;
+    auto const& poi = s.current_objective_poi();
+    if (!poi.valid || poi.map_id != s.map_id() || ai.current_objective_blacklisted(s.published_at_ms())) return false;
+    float bx, by, bz; s.position(bx, by, bz);
+    return std::hypot(poi.x - bx, poi.y - by) <= 60.0f;
+}
+
+bool QuestSiteShareFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter&, uint32 now_ms)
+{
+    uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault))));
+    float bx, by, bz; s.position(bx, by, bz);
+    std::vector<V2::Fleet::SiteWorker> near;
+    for (auto const& u : s.raw().combat.nearby_friends)
+    {
+        if (!u.is_player || u.hp <= 0) continue;
+        uint64 const id = u.guid.GetCounter();
+        if (id == s.bot_id() || std::hypot(u.x - bx, u.y - by) > V2::Fleet::kQuestSiteRadius) continue;
+        bool const is_bot = Services::Registry().has(BotId(id));
+        bool const owned = is_bot && Services::Owners().GetOwner(BotId(id)).account_id != 0;
+        near.push_back({ id, !is_bot || owned });
+    }
+    if (!V2::Fleet::YieldQuestSite(s.bot_id(), near, cap)) return false;
+    ai.blacklist_current_objective(now_ms + V2::Fleet::kQuestSiteGiveUpMs);
+    ai.set_last_rule_fired("idle:quest_site_share");
+    TC_LOG_INFO("playerbot.v2", "[quest_site] {} lvl={} zone={} gave up the objective at ({:.0f},{:.0f}): {} others within {:.0f} y, cap {}",
+                s.name(), uint32(s.level()), s.zone_id(), s.current_objective_poi().x, s.current_objective_poi().y, near.size(),
+                V2::Fleet::kQuestSiteRadius, cap);
+    return false;   // side effect only
+}
+
 } // anonymous namespace
 
 void RegisterQuestRules(IdleRuleRegistry& r)
 {
+    {
+        IdleRule rule;
+        rule.name     = "idle:quest_site_share";
+        rule.priority = 696;
+        rule.gate     = &QuestSiteShareGate;
+        rule.fire     = &QuestSiteShareFire;
+        rule.min_interval_ms = 10000;   // per bot
+        r.register_rule(std::move(rule));
+    }
     {
         IdleRule rule;
         rule.name     = "idle:walk_to_known_hub";

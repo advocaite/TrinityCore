@@ -3,7 +3,7 @@
 // Capture 2+ of 3 (Lighthouse / Waterworks / Mines) to score.
 //
 // Authoritative coords + weights from V1
-// src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Domination/
+// src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Domination/
 // BattleForGilneasData.h:52-67 (positions), :92-101 (GetNodeStrategicValue),
 // :137, :146 (faction spawns).
 

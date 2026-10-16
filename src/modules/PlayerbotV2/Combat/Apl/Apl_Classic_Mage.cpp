@@ -7,7 +7,7 @@
 // as the last resort). Spell ids are vanilla rank 1 and resolve to the
 // highest known rank.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/mage/*Strategy.cpp, MANGOSBOT_ZERO):
 // armor + Arcane Intellect upkeep, Counterspell on casters, Ice Block /
 // Frost Nova to survive, Evocation at low mana, boss cooldowns, Arcane
@@ -78,6 +78,13 @@ bool VictimIsBossLike(ApPredicateContext const& ctx)
 {
     NearbyUnit const* v = ctx.bot.victim_info();
     return v && (Classic::IsBossUnit(*v) || v->max_hp >= 100'000);
+}
+
+// The mana the nukes stop at: a mage with a wand shoots below 35% on ordinary fights (a short rest before the next pull instead of a
+// drink to 60%), and casts down to 8% against a boss or when it holds no wand.
+int32 NukeManaFloor(ApPredicateContext const& ctx)
+{
+    return ctx.bot.raw().consumables.wand_school_mask != 0 && !VictimIsBossLike(ctx) ? 35 : 8;
 }
 
 uint32 IceBlockSpell(ApPredicateContext const&)
@@ -243,7 +250,7 @@ void DoFireBlast(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(FI
 
 bool ShouldNuke(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && ManaPct(ctx) >= 8 && Ready(ctx, NukeSpell(ctx));
+    return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && Ready(ctx, NukeSpell(ctx));
 }
 void DoNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(NukeSpell(ctx), ctx.bot.victim()); }
 
@@ -252,7 +259,7 @@ void DoNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(NukeSpe
 // Fireball on fire, Arcane Missiles on arcane), same mana gates as the nuke.
 bool NukeUsable(ApPredicateContext const& ctx, uint32 spell)
 {
-    return HasLiveTarget(ctx) && ManaPct(ctx) >= 8 && Ready(ctx, spell);
+    return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && Ready(ctx, spell);
 }
 bool ShouldFrostboltNuke(ApPredicateContext const& ctx)      { return NukeUsable(ctx, FROSTBOLT); }
 bool ShouldFireballNuke(ApPredicateContext const& ctx)       { return NukeUsable(ctx, FIREBALL); }
@@ -282,7 +289,7 @@ void DoSchoolNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { SchoolHi
 bool ShouldWand(ApPredicateContext const& ctx)
 {
     return HasLiveTarget(ctx) && (Ready(ctx, SHOOT_WAND) && ctx.bot.victim_in_spell_range(SHOOT_WAND)) && ctx.bot.current_cast_spell_id() == 0
-        && ManaPct(ctx) < 8;
+        && ManaPct(ctx) < NukeManaFloor(ctx);
 }
 void DoWand(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SHOOT_WAND, ctx.bot.victim()); }
 

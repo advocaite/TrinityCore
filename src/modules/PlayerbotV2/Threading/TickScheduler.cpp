@@ -18,7 +18,7 @@ namespace {
 // bot's first build after register — got identical deadlines and stayed phase-
 // locked forever, because they all re-armed from the same `now` with the same
 // period. The world thread then paid ALL of their snapshot builds (+ LoS
-// raycasts, 30s spellbook rescans, AI ticks and the following intent drain) in
+// raycasts, 30s spellbook rescans, bot ticks and the following intent drain) in
 // ONE tick per period and nothing in the ticks between: a 40-bot raid on one
 // map (serial build path — a single Map* never fans out) turned a ~3 ms average
 // snapshot phase into a ~30-150 ms spike every 100-150 ms.
@@ -50,8 +50,8 @@ Ms EffectivePeriod(ActivityTier tier, Ms pvp_floor)
 
 TickScheduler::TickScheduler(AiWorkerPool& pool) : pool_(pool)
 {
-    lazy_ms_budget_ = sConfigMgr->GetIntDefault("Playerbot.Perf.TickBudgetMs", 0) > 0
-        ? uint32(sConfigMgr->GetIntDefault("Playerbot.Perf.TickBudgetMs", 0)) : 0u;
+    lazy_ms_budget_ = sConfigMgr->GetIntDefault("Playerbot.Perf.TickBudgetMs", 0, true) > 0
+        ? uint32(sConfigMgr->GetIntDefault("Playerbot.Perf.TickBudgetMs", 0, true)) : 0u;
 }
 
 void TickScheduler::on_world_tick(Ms now)
@@ -69,7 +69,7 @@ void TickScheduler::on_world_tick(Ms now)
         {
             due_buf.push_back(id);
             // Phase-aligned (see NextPhaseDeadline) with the SAME phase as the
-            // snapshot deadline below, so a bot's AI tick still lands on the
+            // snapshot deadline below, so a bot's bot tick still lands on the
             // world tick that just rebuilt its snapshot.
             sched.next_tick = NextPhaseDeadline(id, now, EffectivePeriod(sched.tier, sched.pvp_floor));
         }
@@ -126,7 +126,7 @@ void TickScheduler::set_tier(BotId id, ActivityTier classified, Ms now)
     // Tier change. set_tier is only called from the post-build publish pass,
     // i.e. right after THIS bot's snapshot was rebuilt in this world tick, so
     // the snapshot the new tier was classified from is already fresh:
-    //   * AI tick -> now: the bot acts on that fresh snapshot this very world
+    //   * bot tick -> now: the bot acts on that fresh snapshot this very world
     //     tick (TickScheduler::on_world_tick runs after the publish pass). This
     //     is the reactivity guarantee: a bot entering combat / being owner-
     //     controlled / starting to move reacts on this frame, never on the
@@ -172,8 +172,8 @@ bool TickScheduler::should_build_snapshot(BotId id, Ms now)
         }
         --lazy_budget_;
     }
-    // Advance using the tier's AI-tick period — snapshot cadence
-    // matches AI tick cadence so an AI worker always sees fresh data
+    // Advance using the tier's bot logic-tick period — snapshot cadence
+    // matches bot tick cadence so an bot worker always sees fresh data
     // when its tick fires. Phase-aligned per bot (see NextPhaseDeadline) so
     // bots reset in the same tick do not stay phase-locked.
     it->second.next_snapshot = NextPhaseDeadline(id, now, EffectivePeriod(it->second.tier, it->second.pvp_floor));

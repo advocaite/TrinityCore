@@ -227,7 +227,7 @@ float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool*
 {
     if (ok)
         *ok = false;
-    static bool const enabled = sConfigMgr->GetBoolDefault("Playerbot.Behavior.GroundSnap", true);
+    static bool const enabled = sConfigMgr->GetBoolDefault("Playerbot.Behavior.GroundSnap", true, true);
     if (!enabled || !p)
         return zHint;
     Map* m = p->GetMap();

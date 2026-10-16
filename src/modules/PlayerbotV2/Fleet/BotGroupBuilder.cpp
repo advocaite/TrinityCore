@@ -50,7 +50,7 @@ enum RoleSlot : uint8 { kRoleTank = 0, kRoleHealer = 1, kRoleDps = 2 };
 // Pull a bot's role affinity from its BotAI archetype (world-thread read of
 // the authoritative BotArchetype — PickCandidates runs on the world thread
 // via the bus DrainAsync). Returns {0,0,1} (pure DPS) when the bot has no
-// registered AI, so an unmanaged candidate counts as DPS-only and never
+// registered bot logic, so an unmanaged candidate counts as DPS-only and never
 // pre-empts a tank/healer slot.
 std::array<float, 3> RoleAffinityOf(uint64 bot_low)
 {

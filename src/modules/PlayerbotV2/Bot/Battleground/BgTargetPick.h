@@ -1,6 +1,6 @@
 // BG victim validity: a battleground bot never keeps a target it cannot hurt, and re-picks when an enemy player is close.
 //
-// Karrz, WSG 2026-10-09: a Horde priest stood next to him swinging at nothing and ignored him. The idle engage rule only ran with an empty
+// the owner, WSG 2026-10-09: a Horde priest stood next to him swinging at nothing and ignored him. The idle engage rule only ran with an empty
 // victim, and the in-combat BG switches only react to a carrier, a peel or a healer, so a victim that was gone, dead, untargetable or
 // not fighting back held the bot for good. Pure function over the snapshot's unit lists (templated, so tests/game/BgTargetPick.cpp can
 // run it on plain structs). Used by State_Idle and State_InCombat; both log the result as [bg_target].
@@ -30,7 +30,7 @@ namespace Playerbot::BgTargetPick
         }
     }
 
-    // How far a battleground bot looks for an enemy to fight (Karrz, WSG 2026-10-09: "make the radius where they attack people bigger").
+    // How far a battleground bot looks for an enemy to fight (playtest, WSG 2026-10-09: "make the radius where they attack people bigger").
     // The snapshot scans this far in a battleground (BotSnapshotBuilder), the engage and re-pick rules read it.
     constexpr float kBgEngageRange = 55.0f;
     constexpr float kIdleMobPlayerRange = 15.0f;   // an enemy player this close beats a creature that is not attacking us

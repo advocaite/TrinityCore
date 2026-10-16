@@ -484,7 +484,7 @@ bool BotSetupPipeline::DoApplyTalents(Player* bot)
 {
     // Retail: no-op at the pipeline layer. The existing
     // `idle:apply_context_talents` State_Idle rule applies the right talent
-    // context (Raid / Leveling) automatically on the bot's first AI tick.
+    // context (Raid / Leveling) automatically on the bot's first bot tick.
     if (!bot || !::Playerbot::IsVanillaRealm())
         return true;
 
@@ -751,6 +751,9 @@ bool BotSetupPipeline::DoAcquireMount(Player* bot)
     if (bot->GetClass() == CLASS_HUNTER && bot->GetPetGUID().IsEmpty())
     {
         uint32 pet_entry = World::HunterPetEntryForRace(bot->GetRace());
+        // A hunter nobody owns (world / pool bot) gets its own beast, stable per bot, instead of its race's one.
+        if (::Playerbot::Services::Owners().GetOwner(bot->GetGUID().GetCounter()).account_id == 0)
+            pet_entry = World::VariedHunterPetEntry(bot->GetTeam() == ALLIANCE, bot->GetGUID().GetCounter(), pet_entry);
         if (!pet_entry)
         {
             // Unmapped race (allied) — fall back to faction-generic.

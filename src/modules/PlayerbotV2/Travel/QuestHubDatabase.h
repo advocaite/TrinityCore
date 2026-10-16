@@ -9,7 +9,7 @@
 //
 // Adapted from src/modules/Playerbot/Quest/QuestHubDatabase.{h,cpp} for V2:
 //  - Namespace Playerbot::V2::Travel.
-//  - Snapshot-based runtime API (no Player* on the AI worker hot path).
+//  - Snapshot-based runtime API (no Player* on the bot worker hot path).
 //  - Lifecycle owned by Services::Hubs() rather than a Meyer's singleton.
 
 #pragma once

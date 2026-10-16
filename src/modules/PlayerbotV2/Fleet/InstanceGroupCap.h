@@ -41,7 +41,7 @@ inline uint32 InstanceGroupCapFor(Player const* owner, std::string* map_name = n
     InstanceMap const* im = map->ToInstanceMap();
     uint32 cap = im ? im->GetMaxPlayers() : 0;
     // A raid is as big as the map says: the difficulty row can name a smaller flex size than the 40-player classic raid
-    // the map is (Molten Core refused a 10-bot add, Karrz 2026-10-08), so the larger of the two counts.
+    // the map is (Molten Core refused a 10-bot add, playtest 2026-10-08), so the larger of the two counts.
     if (map->IsRaid() && map->GetEntry() && map->GetEntry()->MaxPlayers > 0)
         cap = std::max<uint32>(cap, uint32(map->GetEntry()->MaxPlayers));
     if (!cap)

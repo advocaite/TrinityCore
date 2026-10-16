@@ -437,7 +437,7 @@ void HandleRosterReq(uint32 client_seq, WorldSession* sess, uint32 flags)
         if (!online && !include_offline) continue;
 
         // Headless = driven by one of OUR BotSessions. False for the
-        // owner's own self-AI character (real client session) — the
+        // owner's own self-bot logic character (real client session) — the
         // addon must NOT offer "Logout" for those rows.
         const bool headless = Services::SessionMgr().IsHeadless(guid);
 
@@ -480,7 +480,7 @@ void HandleRosterReq(uint32 client_seq, WorldSession* sess, uint32 flags)
             }
         }
 
-        // Look up the current intent + last rule directly from the AI.
+        // Look up the current intent + last rule directly from the bot logic.
         // BotAI's last_rule_fired() is char const* to a string literal —
         // safe to read from any thread for diagnostics.
         BotAI* ai = Services::Registry().ai(id);
@@ -610,7 +610,7 @@ void HandleBotDetailReq(uint32 client_seq, WorldSession* sess, uint32 guidLow)
         if (ai->last_rule_fired())
             kv("last_rule", ai->last_rule_fired());
     }
-    // Per-bot intent queue depth (proxy for "how busy is the AI"). The
+    // Per-bot intent queue depth (proxy for "how busy is the bot logic"). The
     // queue is lock-free MPMC; approximate_size is a relaxed-load read
     // that may drift by one but is the right call here — exact size
     // would require briefly stalling producers, which isn't worth it
@@ -817,7 +817,7 @@ void HandleAltsReq(uint32 client_seq, WorldSession* sess)
 
 // ----------------------------------------------------------------------------
 // SELF — addon counterpart to `.playerbot self on|off|status`. Attaches
-// or detaches the V2 AI to the issuing player's OWN character. Mirrors
+// or detaches the V2 bot logic to the issuing player's OWN character. Mirrors
 // HandleSelf in cs_playerbot_v2.cpp 1:1; keep these two paths in lock-step
 // so a future RBAC tightening (or perf cap on self-attach) lands in both.
 //
@@ -853,7 +853,7 @@ void HandleSelfToggle(uint32 client_seq, WorldSession* sess,
         if (!was_attached)
         {
             // CRITICAL: use TRANSIENT mark. .playerbot self toggles a
-            // real human character into AI mode for the duration of
+            // real human character into bot logic mode for the duration of
             // their session — it must NEVER persist to
             // playerbot_v2_character, otherwise BotPopulationManager
             // ::LoginExisting will grab the character on the next
@@ -873,7 +873,7 @@ void HandleSelfToggle(uint32 client_seq, WorldSession* sess,
                 Services::Registry().register_bot(
                     id, personality, BotRng{SeedForBot(id)});
                 Services::Scheduler().register_bot(id, ActivityTier::Idle);
-                // Give the transient self-AI bot a coherent archetype too
+                // Give the transient self-bot logic bot a coherent archetype too
                 // (deterministic roll, NO DB write — this is a human's own
                 // character marked transient; it must never touch
                 // playerbot_v2_character per the comment above).
@@ -884,9 +884,9 @@ void HandleSelfToggle(uint32 client_seq, WorldSession* sess,
             // Hand server-side movement control off the WoW client. Without
             // this the client keeps sending CMSG_MOVE_* every frame, which
             // overwrites every server-driven MotionMaster command, so the
-            // AI's MoveChase / MovePoint visibly fight client input and
+            // Bot logic's MoveChase / MovePoint visibly fight client input and
             // the character barely moves. Full-takeover mode: WASD is
-            // locked while self-AI is on; re-enabled below on "off".
+            // locked while self-bot logic is on; re-enabled below on "off".
             // SAFE post-transient-mark fix: ControlUpdate is purely
             // runtime/network state, no DB persistence, so a crash mid
             // session can't lock the character — the next login defaults

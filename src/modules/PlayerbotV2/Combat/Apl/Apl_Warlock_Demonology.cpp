@@ -38,7 +38,7 @@
 //     makes Call Dreadstalkers summon the Vilefiend - nothing to cast.
 //   - Doom (603): 12.1 Doom 460551 is a passive applied by Demonbolt.
 //   - Fel Firebolt / Felstorm (89751): Wild Imp / Felguard PET abilities,
-//     handled by the pet AI server-side, never cast by the warlock.
+//     handled by the pet bot logic server-side, never cast by the warlock.
 //   - Summon Felguard (30146) / Imp (688): pet maintenance lives in
 //     State_Idle (ooc pet-summon rule), not in the combat APL.
 //   - Banish (710), Fear (5782), Curse of Tongues (1714 [R]) / Exhaustion

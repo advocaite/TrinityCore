@@ -8,7 +8,7 @@
 // DeepwindGorgeData.h:159-374).
 //
 // Map id: 1105 (NOT 998 — 998 is Temple of Kotmogu, common confusion).
-// V1 coords: src/modules/Playerbot/AI/Coordination/Battleground/Scripts/
+// V1 coords: src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/
 // Domination/DeepwindGorgeData.h:50-63 (nodes), :475-483 (faction spawns).
 
 #include "../BattlegroundScript.h"

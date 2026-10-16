@@ -121,7 +121,7 @@ public:
     // Read the cached ledge for a stop. Returns true and fills (lx,ly,lz) with
     // the walkable ledge when one was derived; false when no ledge has been
     // derived yet OR the derivation found none (caller should fall back to the
-    // platform centre). Thread-safe (taken under the index mutex), so the AI
+    // platform centre). Thread-safe (taken under the index mutex), so the bot logic
     // worker may call it while reading a published snapshot's stop.
     bool LedgeFor(uint64_t spawn_id, uint8_t stop_idx,
                   float& lx, float& ly, float& lz) const;

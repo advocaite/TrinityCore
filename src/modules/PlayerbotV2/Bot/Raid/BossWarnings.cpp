@@ -17,6 +17,7 @@
 
 #include <map>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 
@@ -47,6 +48,7 @@ struct Fight
     explicit Fight(uint32_t entry) : tracker(&BossWarningsFor(entry)) {}
     BossWarnTracker tracker;
     uint32_t lastSeen = 0;
+    std::set<std::pair<size_t, ObjectGuid>> carriers;   // (rule, member) already named while the aura is on them
 };
 
 std::unordered_map<ObjectGuid, Fight> g_fights;
@@ -145,9 +147,8 @@ void UpdateBossWarnings(uint32_t nowMs)
                     }
             }
 
-            for (BossWarnEvent const& e : f.tracker.Tick(nowMs, castingSpell, castLeft, auraPresent))
+            auto announce = [&](std::string const& text)
             {
-                std::string const text = FormatBossWarning(boss->GetName(), rules[e.rule], e);
                 for (GroupReference const& ref : group->GetMembers())
                 {
                     Player* m = ref.GetSource();
@@ -157,7 +158,30 @@ void UpdateBossWarnings(uint32_t nowMs)
                     packet.Initialize(CHAT_MSG_RAID_BOSS_EMOTE, LANG_UNIVERSAL, boss, m, text);
                     m->SendDirectMessage(packet.Write());
                 }
+            };
+
+            // A member who has just gained a carrier aura (Living Bomb) is named to the humans the moment it lands, so they know who to
+            // keep away from; the timed warning above only says one is coming.
+            std::set<std::pair<size_t, ObjectGuid>> carrying;
+            for (size_t i = 0; i < rules.size(); ++i)
+            {
+                if (!rules[i].carrierLabel || !rules[i].resyncAura)
+                    continue;
+                for (GroupReference const& ref : group->GetMembers())
+                {
+                    Player* m = ref.GetSource();
+                    if (!m || !m->IsInWorld() || !m->IsAlive() || m->GetMap() != boss->GetMap() || !m->HasAura(rules[i].resyncAura))
+                        continue;
+                    auto const key = std::make_pair(i, m->GetGUID());
+                    carrying.insert(key);
+                    if (!f.carriers.count(key))
+                        announce(m->GetName() + " " + rules[i].carrierLabel);
+                }
             }
+            f.carriers = std::move(carrying);
+
+            for (BossWarnEvent const& e : f.tracker.Tick(nowMs, castingSpell, castLeft, auraPresent))
+                announce(FormatBossWarning(boss->GetName(), rules[e.rule], e));
         }
     }
 

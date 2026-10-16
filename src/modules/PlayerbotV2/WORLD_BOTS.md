@@ -12,7 +12,7 @@ Branch `playerbot-v2-world`, cut from `playerbot-v2-raid` 91236c23. Owner: the "
 | Despawn | session rhythm, LRU overflow | no real player within `DespawnRadius` |
 | Use it for | "1000 bots live in the world" load test | "bots are around me wherever I go" |
 
-Both reuse the same pool characters, `BotCharacterFactory`, `BotSetupPipeline` (level, trainer spells, weapon skills, talents, gear, riding, then a first teleport to a leveling town), and the same bot AI (questing, travel, grinding, death and release rules).
+Both reuse the same pool characters, `BotCharacterFactory`, `BotSetupPipeline` (level, trainer spells, weapon skills, talents, gear, riding, then a first teleport to a leveling town), and the same bot bot logic (questing, travel, grinding, death and release rules).
 
 ## What the world spawner does
 
@@ -47,16 +47,16 @@ Raise `SpawnPerTick` for a faster ramp; the setup pipeline drains at most 10 bot
 
 ## Cost estimate (NOT measured: from code comments and structure only)
 
-- Per bot the world pays: a `Player` plus its headless `WorldSession`, `BotAI` state, one snapshot and one intent queue, and its share of Map update (visibility, AI, movement). RAM is probably a few MB per bot (guess: 2-4 MB), so 1000 bots roughly 2-4 GB on top of the server (31 GB machine). Loaded map and mmap tiles add to that and grow with how widely the bots spread, not with the bot count.
-- CPU: bot AI runs on a worker pool with activity tiers (Combat 100 ms, Active 150 ms, Cruise 300 ms, Idle 500 ms, Hibernate 2 s). A solo questing bot is Cruise. The Map update for the bots stays on the world thread(s), which is the likely limit, together with the SMSG traffic when bots are near the player.
-- A previous retail deployment of this module ran 2000 bots on a 16-core desktop CPU (a 5950X; Karrz's PC has 16 threads, an RTX 5090 is irrelevant here), with a baseline of about a third of the CPU. Classic maps are lighter than retail, but the Forever core, the Classic rotations and the raid brain add cost of their own, so treat 200 and 500 as probable, 1000 as the stretch target, and let stage 5 settle it.
+- Per bot the world pays: a `Player` plus its headless `WorldSession`, `BotAI` state, one snapshot and one intent queue, and its share of Map update (visibility, bot logic, movement). RAM is probably a few MB per bot (guess: 2-4 MB), so 1000 bots roughly 2-4 GB on top of the server (31 GB machine). Loaded map and mmap tiles add to that and grow with how widely the bots spread, not with the bot count.
+- CPU: bot bot logic runs on a worker pool with activity tiers (Combat 100 ms, Active 150 ms, Cruise 300 ms, Idle 500 ms, Hibernate 2 s). A solo questing bot is Cruise. The Map update for the bots stays on the world thread(s), which is the likely limit, together with the SMSG traffic when bots are near the player.
+- A previous retail deployment of this module ran 2000 bots on a 16-core desktop CPU (a 5950X; the owner's PC has 16 threads, an RTX 5090 is irrelevant here), with a baseline of about a third of the CPU. Classic maps are lighter than retail, but the Forever core, the Classic rotations and the raid brain add cost of their own, so treat 200 and 500 as probable, 1000 as the stretch target, and let stage 5 settle it.
 - Known multiplier: bots near the player cost network traffic (see the SMSG_PARTY_UPDATE flood earlier today). Only grouped bots send party updates, so ambient bots should not, but nearby ambient bots produce visibility/update packets for the client: watch FPS in stage 3 and 4.
 
 ## Known gaps and risks
 
 - Quest and travel on the vanilla quest data are unverified (the conf says so): bots may stand around or walk far away, and then get logged out as orphans while the player stays put. If bots leave the radius too quickly, raise `ActivityRadius`/`DespawnRadius`, or add a leash rule.
 - A new bot is first teleported to a leveling town by the setup pipeline, then to the ring: two teleports on a first spawn (cheap for pool bots).
-- World PvP mix: the faction share is per zone (`Fleet/WorldFactionMix.h`, keys `ZoneMix`, `CapitalFriendlyPct` 90, `HomeFriendlyPct` 90, `BorderFriendlyPct` 75, `ContestedFriendlyPct` 60; unlisted zones use `FriendlyPct`). Contested zones (Plaguelands, Stranglethorn, Hillsbrad, Arathi, ...) hold ~40% opposing faction drawn from the same level window as friendly bots.
+- World PvP mix: the faction share is per zone (`Fleet/WorldFactionMix.h`, keys `ZoneMix`, `CapitalFriendlyPct`, `HomeFriendlyPct`, `BorderFriendlyPct`, `ContestedFriendlyPct`, all 100 by default (no enemy-faction bots); unlisted zones use `FriendlyPct`). Contested zones (Plaguelands, Stranglethorn, Hillsbrad, Arathi, ...) hold ~40% opposing faction drawn from the same level window as friendly bots.
 - Roster balance: with `SeedRoster = 1` the seeder creates whichever (faction, level bracket 10s/50-60) is furthest below `PoolHordePct` (default 50) Horde (`Fleet/PoolBalance.h`); the census is logged as `[world] roster census` every two minutes. `PoolMax` must leave room for the characters a lopsided pool lacks.
 - Hostile-faction bots (`FriendlyPct` < 100) are placed near the player; on a PvP realm they will fight. Set `FriendlyPct = 100` to avoid that.
 - Bots below level 10 are not spawned (no navmesh in the starter zones), so a player in a starter zone sees none.
@@ -97,3 +97,7 @@ Not run on the PC yet. Rules in `Fleet/SkyborneIsle.h` (tested: `ctest -L skybor
 - Zephras Isle is an island with no exit in the server data (its portals lead to Valanaar and Rohashi Spires on the same map; the Skyborne portals of Stormwind and Dalaran connect those two cities). So the isle is handled apart: around a real player on the isle the spawner keeps Skyborne bots of level 1-9 (MinLevel does not apply there), the pipeline leaves a level 1-9 Skyborne at its start, they quest with the same-map starter logic of low-level bots, and `WorldBotSpawner::DriveGraduation` moves a bot that reaches level 10 on the isle to a leveling town with `BotSetupPipeline::Graduate` (the placement a new level-10 bot gets). The graduation is the only carried move; it is logged as `[world] skyborne graduate`.
 - Seeding (`SeedRoster = 1`) makes `SkyborneSeedPct` (5) of the residents sleeping Skyborne level 1-9 at the isle start, so they wake when a player comes near.
 - Unverified: whether the quest givers of the isle deal with both Skyborne races in `giver_team_mask`, whether map 2991 is a normal open-world map for the anchor test (not an instance map), mmap coverage of the whole isle (33 mmtiles for 72 map tiles), and customization options for races 95/96 in `BotCharacterFactory`.
+
+- Area cap: no more than `AreaCapOutdoors` (14) world bots within `AreaRadius` (45 y) of one another outdoors, `AreaCapTown` (40) in a capital. Placement refuses a full spot, and every 10 s a pass moves up to three extras of an over-full crowd next to the nearest player (`[world] crowd:` line). `Fleet/AreaCap.h`.
+
+- World life: `DayRhythm` scales the targets by the server's hour (60% at night, 125% in the evening, never over MaxBots); `NaturalMoves` makes bots arrive on foot out of sight and leave toward an inn before logging out; `TownLife` adds the inn rest, duels, campfires and dungeon LFG calls (`Bot/TownLife.h`, rules in `Bot/States/Rules/AmbientRules.cpp`). Each show takes only a few percent of the bots at a time, so none adds RAM; nothing here forms a bot-only dungeon group.

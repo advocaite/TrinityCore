@@ -6,7 +6,7 @@
 // spell's TargetCreatureType mask with SPELL_FAILED_BAD_TARGETS — Polymorph
 // (118) alone burned 495,677 BAD_TARGETS in the 4-day run (~95% of all cast
 // rejections), the same creature re-attempted ~181x because the reject happens
-// before the cooldown is consumed. We can't read SpellInfo on the AI worker, so
+// before the cooldown is consumed. We can't read SpellInfo on the bot worker, so
 // this encodes the canonical creature-type masks for the CC spells the rotations
 // actually use. Header-only so the per-spec TUs pay no link cost.
 
@@ -19,6 +19,7 @@
 #include "Bot/BotSnapshotView.h"    // BotSnapshotView, NearbyUnit, Role
 #include "Group/GroupSnapshot.h"    // GroupSnapshotView (group CC)
 #include "SpellMgr.h"
+#include "Bot/Dungeon/MarkCc.h"     // MarkCc::CasterHoldsAnother
 
 namespace Playerbot::Combat {
 
@@ -154,6 +155,10 @@ namespace Playerbot::Combat {
     auto const* members = ctx.group.members();
     if (!members || members->size() < 2 || ApInPvp(ctx))
         return PickOffTargetCC(ctx, spellId, ApInPvp(ctx));
+    // In an instance the group plan (PveGroupCoordinator::PlanMarkOrders: the owner's icons, then auto crowd control) is the one CC
+    // decider; a second pick here sheeped the owner's cross and left the planned mob unheld.
+    if (bot.raw().pve_order.active)
+        return ObjectGuid::Empty;
     ObjectGuid const v = bot.victim();
     if (v.IsEmpty())
         return ObjectGuid::Empty;
@@ -166,12 +171,10 @@ namespace Playerbot::Combat {
     };
     auto const& enemies = bot.raw().combat.nearby_enemies;
     size_t engaged = 0;
+    if (MarkCc::CasterHoldsAnother(bot, ObjectGuid::Empty))
+        return ObjectGuid::Empty;   // our CC is still holding one (the same check the marked CC makes)
     for (auto const& u : enemies)
-    {
-        if (u.is_cc_locked && u.cc_caster == bot.guid())
-            return ObjectGuid::Empty;   // our CC is still holding one
         if (engaged_with_group(u)) ++engaged;
-    }
     if (engaged < 3)
         return ObjectGuid::Empty;
 
@@ -195,6 +198,10 @@ namespace Playerbot::Combat {
     {
         if (!engaged_with_group(u) || u.is_cc_locked || (u.is_dungeon_boss || u.is_boss_rank) || !u.in_los) continue;
         if (u.guid == v || u.guid == skull || u.guid == tank_target) continue;
+        bool marked = false;   // any raid icon is the owner's call (cross = kill next, moon = his CC)
+        for (uint8 i = 0; i < 8 && !marked; ++i)
+            marked = ctx.group.raid_mark(i) == u.guid;
+        if (marked) continue;
         if (!CanBeCCd(spellId, u.creature_type)) continue;
         // A mob under 40% health dies faster than the CC is worth (VMaNGOS CcTargetValue: skip below medium health).
         if (u.max_hp > 0 && u.hp * 100 < int64_t(u.max_hp) * 40) continue;

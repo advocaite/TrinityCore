@@ -171,7 +171,7 @@ WedgeInfo ClassifyWedge(BotAI& ai, BotId id, uint32 stationary_for_ms,
         }
     }
     // path_blocked_count() is the authoritative live counter; fall back to the
-    // snapshot copy if the AI hasn't been re-read this tick.
+    // snapshot copy if the bot logic hasn't been re-read this tick.
     const uint32 path_blocks = ai.path_blocked_count() > 0
                                  ? ai.path_blocked_count()
                                  : snap_path_blocks;

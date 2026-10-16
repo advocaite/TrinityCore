@@ -1,7 +1,7 @@
 // InstanceSchools - which schools of spell damage a raid instance's bosses deal.
 //
 // Resistance buffs (Shadow Protection, the paladin resistance auras, the shaman totems) are kept up only for a school the instance
-// deals. MC 2026-10-11 (Karrz: priests standing with hands glowing): five priests spent a refresh round of 40 Shadow Protection casts
+// deals. MC 2026-10-11 (the owner: priests standing with hands glowing): five priests spent a refresh round of 40 Shadow Protection casts
 // in Molten Core, where the raid takes fire. Data, not per-spell rules: a new instance or school is one row. Pure: tested in
 // tests/game/ClassicInstanceSchools.cpp.
 

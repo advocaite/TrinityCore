@@ -20,6 +20,7 @@ class Player;
 class Unit;
 class Aura;
 class Group;
+struct Position;
 
 namespace Playerbot { class SnapshotBuildPool; struct GroupSnapshot; }
 
@@ -49,6 +50,8 @@ public:
     void OnSpecChanged(Player* p, uint8 new_spec);
     void OnDamageDealt(Unit* attacker, Unit* victim, int32 amount, uint32 spell_id);
     void OnDamageTaken(Unit* attacker, Unit* victim, int32 amount, uint32 spell_id);
+    // The spell behind the damage event OnDamageTaken is about to receive (UnitScript::OnDamageSpell runs just before OnDamage; 0 = melee).
+    void NoteDamageSpell(uint32 spell_id);
     void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spell_id, uint8 outcome, uint32 damage);
     void OnEnergize(Unit* target, uint32 spell_id, int32 gained, uint8 power);
     void OnHealReceived(Unit* healer, Unit* target, int32 amount, uint32 spell_id);
@@ -61,6 +64,14 @@ public:
     // A bot order sent by the ForeverBots panel as an addon message (fixed prefix, party/raid): same parser as party chat.
     void OnAddonOrder(Player* sender, Group* group, std::string const& prefix, std::string const& text);
     void OnAddonWhisper(Player* sender, Player* receiver, std::string const& prefix, std::string const& text);
+    // A group ping (PingSubjectType: 0 Attack, 3 OnMyWay): Attack on a hostile unit is the "attack" order on it, On my way on the
+    // ground is a fall back to that point.
+    void OnGroupPingUnit(Player* sender, Group* group, Unit* target, uint8 type);
+    void OnGroupPingPoint(Player* sender, Group* group, Position const& point, uint8 type);
+    // One line with the add-on's download link for a player whose client has not said hello (Playerbot.AddonHint.*).
+    void SendDueAddonHints();
+    // The ForeverBots add-on greeted the server (self-whisper or the silent `.bot addon` command): no download hint for this player.
+    void NoteAddonHello(Player* p);
     void RouteGroupOrder(Player* sender, Group* group, std::string order);
     // Phase C.3: route guild chat messages to BotChatReactor::ReactGuild.
     void OnGuildChat(Player* sender, uint64 guild_id, std::string const& msg);

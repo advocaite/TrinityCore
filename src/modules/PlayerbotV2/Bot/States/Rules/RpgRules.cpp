@@ -41,6 +41,7 @@
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/BotIntent.h"
+#include "Bot/ClassicUpkeep.h"
 #include "Services.h"
 #include "Util/ConfigReader.h"
 #include "Bot/States/MaintainHelpers.h"   // ChunkedWalkToward, DriveTravelPlanTo
@@ -120,8 +121,7 @@ bool WorldBotFree(BotSnapshotView const& s, BotAI& ai, uint32 now_ms)
     if (s.on_transport()) return false;
     if (ai.in_profession_mode(now_ms)) return false;
     if (s.has_actionable_quest()) return false;           // quest work in reach always wins
-    auto const& v = s.raw().vitals;
-    if (v.max_hp > 0 && uint64(v.hp) * 100u < uint64(v.max_hp) * 50u) return false;
+    if (Classic::RecoverBeforeWalking(s)) return false;   // hurt, mid-meal or dry: recover first
     return true;
 }
 
@@ -593,7 +593,7 @@ bool AhTripFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, B
 
 void RegisterRpgRules(IdleRuleRegistry& r)
 {
-    // Built here, on the world thread at module init, before any AI worker ticks.
+    // Built here, on the world thread at module init, before any bot worker ticks.
     TownNpcIndex::Instance().Initialize();
 
     // All three sit below every need-driven rule (vendor 500, mail 470-480,

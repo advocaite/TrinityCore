@@ -535,6 +535,8 @@ bool CriticalRepairGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView c
         ai.crit_repair_reset_episode();   // gear healthy again — fresh episode next time
         return false;
     }
+    // A battleground match owns the bot (BgDispatch, priority 718): a repair walk would pull it off the march every tick.
+    if (s.in_battleground()) return false;
     // Futility backoff: the bot was at a vendor making no durability progress
     // (too poor to repair the rest even after selling trash) and yielded so the
     // quest funnel could run and earn money. Stay suppressed until the cooldown

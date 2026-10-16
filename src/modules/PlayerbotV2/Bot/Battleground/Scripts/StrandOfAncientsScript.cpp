@@ -16,7 +16,7 @@
 //     :166    — BG_SA_ATTACKER_TEAM worldstate
 //     :250-251 — Demolisher + Antipersonnel Turret entries
 // V1 author-attested coords (not TC-validated; DB-driven):
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Siege/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Siege/
 //     StrandOfTheAncientsData.h:186-188 (relic), :238-245 (gates),
 //     :251-257 (graveyards), :263-268 (demolisher mount points).
 

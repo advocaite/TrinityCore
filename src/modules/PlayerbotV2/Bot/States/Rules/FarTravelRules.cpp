@@ -31,6 +31,7 @@
 #include "Bot/BotAI.h"
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
+#include "Bot/ClassicUpkeep.h"
 #include "Bot/States/MaintainHelpers.h"
 #include "Services.h"
 #include "Travel/PortalIndex.h"
@@ -87,11 +88,8 @@ bool FarSameMapTravelGate(BotSnapshotView const& s, BotAI& ai,
     if (ai.in_profession_mode(s.published_at_ms())) return false;
     // HP<50%: heal first (same gate as pursue_quest_goal — a hurt bot should not
     // set off across open terrain to a far goal unhealed).
-    {
-        auto const& v = s.raw().vitals;
-        if (v.max_hp > 0 && uint64(v.hp) * 100u < uint64(v.max_hp) * 50u)
-            return false;
-    }
+    if (Classic::RecoverBeforeWalking(s))
+        return false;
     // Yield to a nearby acceptable offer (giver in scan) or any pending turn-in —
     // accept/turn-in own those; trekking to a far goal must not preempt a quest
     // hand-in the bot could complete right here (mirrors pursue_quest_goal).

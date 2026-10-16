@@ -32,6 +32,24 @@ uint32 HunterPetEntryForRace(uint32 race);
 constexpr uint32 GenericAllianceHunterPet = 299;   // Stormpike Wolf (Dun Morogh wolf, lvl 1-2)
 constexpr uint32 GenericHordeHunterPet    = 5826;  // Mottled Boar (Valley of Trials, lvl 1-2)
 
+// A world (ambient) hunter's own first pet, stable per bot: one of the faction's classic starter beasts picked by guid, so a street of
+// hunters is not all one race's beast. Creature entries of HunterPetEntryForRace's classic races; the caller's tameable check still
+// decides whether the pick exists as a beast in this data. `fallback` (the race's pet) is returned for an owned bot (guid 0).
+inline uint32 VariedHunterPetEntry(bool alliance, uint64 guid, uint32 fallback)
+{
+    static constexpr uint32 kAlliance[] = { 299, 1132, 2031, 299, 1132 };      // wolf, boar, spider
+    static constexpr uint32 kHorde[]    = { 5826, 1908, 2956, 2952, 5826, 1908 }; // boar, wolf, plainstrider, raptor
+    if (!guid)
+        return fallback;
+    uint64 h = guid * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 32;
+    if (alliance)
+        return kAlliance[h % (sizeof(kAlliance) / sizeof(kAlliance[0]))];
+    return kHorde[h % (sizeof(kHorde) / sizeof(kHorde[0]))];
+}
+
 // The race's starter pet, else the faction-generic one.
 inline uint32 StarterHunterPetEntry(uint32 race, bool alliance)
 {

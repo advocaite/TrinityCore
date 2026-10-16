@@ -31,7 +31,7 @@ Playerbot.SharedDatabase = "playerbot"
 
 # Bot diagnostics ([wedge], [move_lock], [path_fail] ...) go to Playerbot.log; add Console to watch them live.
 # CrashRing is the worldserver.conf appender that keeps the last lines for the crash report.
-Appender.Playerbot=2,3,0,Playerbot.log,w,67108864,5
+Appender.Playerbot=2,3,1,Playerbot.log,w,67108864,5
 Logger.playerbot.v2=3,Playerbot CrashRing
 Logger.playerbot.api=3,Playerbot CrashRing
 
@@ -53,7 +53,7 @@ RoadGraph.Enable = 1
 # Core / threading
 #-----------------------------------------------------------------------------
 
-# Number of AI worker threads. 0 = auto (min(8, hardware_concurrency)).
+# Number of bot worker threads. 0 = auto (min(8, hardware_concurrency)).
 # HR-no
 Playerbot.AiWorkerThreads = 0
 
@@ -133,6 +133,10 @@ Playerbot.Population.MaxHeavyFactor = 0.40
 # 0 = off.
 Playerbot.World.Enable = 0
 # Ambient bots online at once, over all players.
+# Starting points by machine until the measured numbers replace them (read ram_mb_per_awake_bot_incl_base and cpu_pct_per_awake_bot on the
+# [world] log line with 50, 150 and 300 bots): 8 GB: MaxBots 60. 16 GB: MaxBots 100 (this default). RssBudgetMb below stops the bubble
+# whatever MaxBots says. Sleeping residents (PoolMax) cost a database row, not memory. NaturalMoves, TownLife and DayRhythm each have an
+# off key.
 Playerbot.World.MaxBots = 100
 # Target number of bots within ActivityRadius of each real player.
 Playerbot.World.BotsPerPlayer = 25
@@ -150,7 +154,7 @@ Playerbot.World.CitySpawnPerTick = 0
 # trip does not log out and rebuild the whole crowd. 0 = off.
 Playerbot.World.ZoneGraceSec = 300
 # Persistent residents. 0 = off (a bot is created and placed when a player arrives). > 0: the pool is a fixed roster; a bot
-# that no player is near is logged out and sleeps at its saved spot (offline, no memory, no AI). When a player comes
+# that no player is near is logged out and sleeps at its saved spot (offline, no memory, no bot logic). When a player comes
 # within this many yards, sleeping bots standing there (60 y or farther from him) log in where they are. Where nobody
 # sleeps yet, new residents are placed as before and stay when logged out. Keep it near or below DespawnRadius.
 # The [world] log line reports roster/sleeping/awake, process CPU and RAM per awake bot.
@@ -170,7 +174,7 @@ Playerbot.World.DespawnPerTick = 5
 # A freshly placed bot is not logged out for this long (s).
 Playerbot.World.PlacedGraceSec = 30
 # Share (%) of bots placed in a town (capital) that stay there for 20-40 min, using trainers, AH, bank and vendors.
-Playerbot.World.TownPct = 70
+Playerbot.World.TownPct = 100
 # World-wide filler: 1 = the MaxBots budget not needed for the bubble around players is filled with bots all over
 # the world (pool bots log in where they last were; new ones are set up and sent to a leveling town of their
 # level). Far bots run on the cheap activity tiers. They are only logged out (farthest first) to make room for the
@@ -182,21 +186,22 @@ Playerbot.World.GlobalPerTick = 3
 # instead of loading a corner of the world each. New filler bots are sent to leveling towns by the setup pipeline anyway.
 Playerbot.World.FillerHubOnly = 1
 # Process memory budget (MB). Over it the world-wide filler stops adding bots (logged once); 15% over it the bubble
-# around players waits too. Bots already online stay. 0 = no limit. Stage B/C: 12000 on a 31 GB PC that also runs a client.
-Playerbot.World.RssBudgetMb = 0
+# around players waits too. Bots already online stay. -1 = 45% of the machine's RAM (the default), 0 = no limit.
+# Stage B/C: 12000 on a 31 GB PC that also runs a client.
+Playerbot.World.RssBudgetMb = -1
 # Bot level limits.
 Playerbot.World.MinLevel = 10
 Playerbot.World.MaxLevel = 60
 # Percentage of bots of the player's own faction (the rest is the opposing faction).
-Playerbot.World.FriendlyPct = 80
+Playerbot.World.FriendlyPct = 100
 # World PvP mix by zone (Fleet/WorldFactionMix.h): contested zones (Plaguelands, Stranglethorn, Hillsbrad, Arathi, ...) hold a real share
 # of the opposing faction at the player's level; capitals and home zones stay mostly the player's own. Unlisted zones use FriendlyPct.
 # ZoneMix = 0 gives FriendlyPct everywhere.
 Playerbot.World.ZoneMix = 1
-Playerbot.World.CapitalFriendlyPct = 90
-Playerbot.World.HomeFriendlyPct = 90
-Playerbot.World.BorderFriendlyPct = 75
-Playerbot.World.ContestedFriendlyPct = 60
+Playerbot.World.CapitalFriendlyPct = 100
+Playerbot.World.HomeFriendlyPct = 100
+Playerbot.World.BorderFriendlyPct = 100
+Playerbot.World.ContestedFriendlyPct = 100
 # Ambient characters allowed to exist (online or offline). Offline ones are reused before new ones are created.
 # Default: the larger of 4 x MaxBots and 200.
 # Playerbot.World.PoolMax = 200
@@ -212,6 +217,38 @@ Playerbot.World.SeedInFlight = 8
 # the opposing faction for world PvP and battleground queues. 5..95. PoolMax must leave room for the Horde characters a lopsided
 # pool still lacks.
 Playerbot.World.PoolHordePct = 50
+
+# Bots arrive on foot from out of the player's sight instead of appearing in view, and a bot the spawner retires in view walks to the
+# nearest inn (or away) and logs out once unseen (at most a minute). 0 = appear and vanish where they stand.
+Playerbot.World.NaturalMoves = 1
+
+# Town life: a share of the bots rest at the inn (most at night), pairs duel in towns, a few light a campfire outdoors at night, and some
+# call LFG for a dungeon of their level. No bot is created for it and a bot joins a dungeon only when a real player invites it. 0 = off.
+Playerbot.World.TownLife = 1
+
+# How many other players may stand within 40 yards of a world bot working a quest objective before it gives that objective up for 15
+# minutes and takes another quest (real players and their companions keep their place first, then world bots by id). Keeps a popular mob
+# camp from drawing a dozen bots. 0 = off.
+Playerbot.World.QuestSiteCap = 5
+
+# For unattended test runs only, leave unset in a release: characters, comma-separated, that count as anchors although a bot plays them,
+# so the world fills up around them with nobody logged in. Log one in with `.playerbot login <name>` and move it with `.tele name <name>
+# <place>`. Use a saved companion bot (not a pool resident), which the spawner never moves or logs out.
+# Playerbot.World.SoakAnchors = ""
+
+# Scale ZoneBots / CityBots / BotsPerPlayer by the server machine's hour: about 60% at night (0-6), 100% by day, 125% in the evening
+# (18-22), never above MaxBots. 0 = a constant target. Quieter nights cost less RAM and CPU.
+Playerbot.World.DayRhythm = 1
+
+# Seconds the bots around the place a player jumped away from (teleport, hearthstone, flight end, still in the open world) are kept. An
+# instance trip keeps them ZoneGraceSec. After a jump the swap runs at triple rate for a minute.
+Playerbot.World.JumpGraceSec = 20
+
+# Most world bots within AreaRadius yards of one another: placement refuses a spot that is full and a pass moves the extras of a crowd
+# next to the nearest player (0 = no cap). Outdoors and in a capital.
+Playerbot.World.AreaCapOutdoors = 14
+Playerbot.World.AreaCapTown = 40
+Playerbot.World.AreaRadius = 45
 # Classic 1.60 (Skyborne): share of the seeded residents (SeedRoster = 1) that are level 1-9 Skyborne who sleep on Zephras Isle, the
 # Skyborne start, so a player who arrives there finds quests being done. Around a player on Zephras the spawner always keeps
 # Skyborne bots of level 1-9 (MinLevel does not apply there); a Skyborne bot that reaches level 10 on the island is moved to a
@@ -238,7 +275,7 @@ Playerbot.Interact.CommandPrefix = !
 # BG / Arena auto-seed and coordination
 #-----------------------------------------------------------------------------
 
-# Battleground policy (Karrz, 2026-10-07): bots never queue or fight bot-vs-bot on their own. Bots join a
+# Battleground policy (playtest, 2026-10-07): bots never queue or fight bot-vs-bot on their own. Bots join a
 # battleground only when a real player queues for it: the queue fill supplies both sides so the match starts,
 # tops it up while the player is in it, and the bots go back to the pool when it ends. The two switches below
 # (AutoSeed.Matches, AutoJoin) are therefore off; they remain for bot-only test matches.
@@ -266,9 +303,10 @@ Playerbot.Bg.AutoSeed.ForceType = 0
 #    Playerbot.Bg.Av.MinPlayersPerTeam
 #        Alterac Valley starts once this many players per side are queued (the client table's minimum is higher and the
 #        queue never popped); bots keep topping the match up to 40 a side while it runs. 0 = the table's value.
-#        Default: 20
+#        This also applies to real players, so set it only on a server where bots fill the match.
+#        Default: 0
 #
-Playerbot.Bg.Av.MinPlayersPerTeam = 20
+# Playerbot.Bg.Av.MinPlayersPerTeam = 20
 
 Playerbot.Bg.AutoJoin = 0
 Playerbot.Bg.AutoJoin.Chance = 3
@@ -331,7 +369,7 @@ Playerbot.TankThreatMultiplier = 3.0
 # value is clamped to [MinPct, MaxPct]. Changes are logged as [cast_speed].
 #   Enable  0 (default) = all bots cast at normal speed (any multiplier already set is reset to 1.0)
 Playerbot.Cast.Enable = 0
-Playerbot.Cast.RaidSpeedPct = 80
+Playerbot.Cast.RaidSpeedPct = 75
 Playerbot.Cast.DungeonSpeedPct = 90
 Playerbot.Cast.WorldSpeedPct = 100
 Playerbot.Cast.BgSpeedPct = 115
@@ -344,10 +382,10 @@ Playerbot.Cast.MaxPct = 140
 # Decision pacing (Karrz's VMaNGOS model: GlobalCooldown 600 + PvpReactionDelay 1500, no
 # cast-time or haste change).
 #   DecisionDelayMs      Ceiling on how long a bot waits to decide again after a cast
-#                        (100..5000). The shipped AI tick periods are already faster
+#                        (100..5000). The shipped bot tick periods are already faster
 #                        (Combat 100 ms, casting bots Active 150 ms; the server GCD is the
 #                        real limiter), so nothing is slowed and this key has no effect today.
-#   PvpReactionDelayMs   Floor on a bot's AI tick / snapshot period while it is in PvP: a
+#   PvpReactionDelayMs   Floor on a bot's bot tick / snapshot period while it is in PvP: a
 #                        battleground or arena, an active duel, or in combat with players.
 #                        0..3000, 0 = off. Never applied to raid/dungeon/world PvE. Dead or
 #                        ghost bots and bots under 35% HP bypass it (healing, defensives, ress).
@@ -435,10 +473,10 @@ Playerbot.Behavior.AcceptOwnerTrade = 1
 #   Playerbot.Gear.MaxTier       the best raid tier RaidGear may pick, as an effective item level ceiling (approximate
 #                                Classic boundaries): 0 = pre-raid / dungeon gear only (item level 63: Dire Maul, BRS,
 #                                Scholomance, Stratholme, UBRS), 1 = Molten Core / Onyxia (76), 2 = Blackwing Lair (83),
-#                                2.5 = Ahn'Qiraj 40 (88), 3 = Naxxramas (92). Default 1. Approximate, not read from item data.
+#                                2.5 = Ahn'Qiraj 40 (88), 3 = Naxxramas (92). Default 2. Approximate, not read from item data.
 #                                Required level 50+ and rare / epic quality still apply; never PvP items.
 #   Playerbot.Gear.RaidIlvlCap   explicit item level ceiling; when set above 0 it overrides MaxTier. Default 0 (use MaxTier).
-Playerbot.Gear.MaxTier = 1
+Playerbot.Gear.MaxTier = 2
 Playerbot.Gear.RaidIlvlCap = 0
 #   Playerbot.World.Gear.MaxTier world / ambient / BG-fill bots (the ones nobody owns): the same tier scale as Gear.MaxTier,
 #                                default 1 (item level 76). Owned and raid bots keep Playerbot.Gear.MaxTier. A world bot wearing
@@ -505,7 +543,7 @@ Playerbot.Behavior.DungeonTactics = 1
 Playerbot.Behavior.BotWhisperable = 1
 Playerbot.Behavior.WorldBotSayReply = 1
 #   InstanceGroupCap  OFF by default (an owner may have as many companions out as they like, up to the 40-man raid
-#                     group limit; Karrz 2026-10-08). Set 1 to cap: inside an instance `.bot add`, `.bot call` and the addon buttons stop once the owner has
+#                     group limit; playtest 2026-10-08). Set 1 to cap: inside an instance `.bot add`, `.bot call` and the addon buttons stop once the owner has
 #                     as many companions out as the map holds, or the group (human included) is full (5 dungeon,
 #                     10/20/40 raid, from the map data; fallback 5 / 40). The owner is warned once when a larger
 #                     group enters a smaller instance. Outside an instance the OpenWorldGroupCap below applies.
@@ -566,7 +604,7 @@ Playerbot.Behavior.ReadyCheckInfo = 1
 #                     Snap resets a spent Ice Block when low. Off: neither.
 Playerbot.Behavior.PurgeDuty = 1
 Playerbot.Behavior.RangedSlow = 1
-#   Ike3Commands      the owner's ike3-style chat commands: "@skull|@star|... <order>" (only the bots holding that icon or
+#   Ike3Commands      Karrz's ike3-style chat commands: "@skull|@star|... <order>" (only the bots holding that icon or
 #                     targeting the marked mob), "@tank|@healer|@dps|@ranged|@melee|@<class> <order>", "pull rti",
 #                     "max dps" (cooldowns on every fight, no mana saving), "save mana" (healers keep to efficient heals),
 #                     "normal" (clears both), "rti raid" (roster / mark report). Off: none of these are parsed.
@@ -580,6 +618,16 @@ Playerbot.Behavior.OwnerCommands = 1
 #                     fidgets like a person: a jump, a short emote, a dance or a sit, every 20-90 s (random per bot).
 #                     Off: bots stand perfectly still.
 Playerbot.Behavior.Fidget = 1
+
+#
+#  Playerbot.AddonHint.Enable   (default 0, off) A player who logs in and whose client does not say hello (the ForeverBots add-on sends one
+#                               a few seconds after login) gets one chat line with the add-on's download link. Once per login, never to bots.
+#  Playerbot.AddonHint.DelaySec seconds to wait for the hello before the line is sent (5-600, default 30).
+#  Playerbot.AddonHint.Url      the link in that line.
+#
+Playerbot.AddonHint.Enable = 0
+Playerbot.AddonHint.DelaySec = 30
+Playerbot.AddonHint.Url = "https://github.com/Karrz1/Karrz-playerbots-wow-forever/raw/main/addon/ForeverBots-addon.zip"
 #   SoloFlee          a solo open-world bot (no group, not in an instance or battleground) losing a fight (HP under 30%,
 #                     35% for casters / hunters / rogues, 25% for melee; the mob not nearly dead) uses its escape tools
 #                     (Disengage, Frost Nova + Blink, Fade / Psychic Scream, Death Coil, Vanish / Sprint, Intimidating
@@ -628,7 +676,7 @@ Playerbot.Behavior.QuestLoot = 1
 
 # Master switch for bot housing participation.
 # HR-yes
-Playerbot.Housing.Enabled = 1
+Playerbot.Housing.Enabled = 0
 
 # Per-neighborhood bot residency target percent of capacity.
 # HR-yes
@@ -788,7 +836,7 @@ PlayerbotV2.Economy.MaxReagentVendorMultiple = 15
 #
 # PlayerbotV2.SessionRhythm.Enabled
 #   Master switch. 1 = on (default), 0 = bots never auto-logout on session length.
-PlayerbotV2.SessionRhythm.Enabled = 1
+PlayerbotV2.SessionRhythm.Enabled = 0
 
 # PlayerbotV2.SessionRhythm.Multiplier
 #   Global scale on every archetype's target_session_minutes. 1.0 = use the
@@ -827,7 +875,7 @@ PlayerbotV2.SessionRhythm.MaxLogoutsPerCycle = 25
 #-----------------------------------------------------------------------------
 
 # `.playerbot summon <alt_name>` lets a normal player turn one of their OWN
-# characters (same account) into an AI-controlled bot that follows / fights
+# characters (same account) into an bot-controlled bot that follows / fights
 # / quests alongside their main. Account-wide synergy: alts gain XP from
 # group-completed content while the player drives their main.
 #
@@ -910,7 +958,7 @@ PlayerbotV2.GroupWedge.FarYards = 45.0
 #   WedgedBots       max acceptable concurrently-wedged bot count.
 #   TickP99Us        max acceptable world-tick p99 latency (microseconds).
 #   IntentDropPerMin max acceptable IntentQueue drops per 60s window
-#                    (sustained drops = an AI worker outrunning the drain).
+#                    (sustained drops = an bot worker outrunning the drain).
 #   PathFailPerMin   max acceptable path-validation failures per minute.
 #   ThrottleMs       per-metric re-emit suppression window (a sustained
 #                    breach logs once per window, not once per 60s sample).
@@ -927,7 +975,7 @@ PlayerbotV2.Alert.ThrottleMs = 300000
 #-----------------------------------------------------------------------------
 
 # Master switch for the bot guild system (founding, recruiting, membership).
-PlayerbotV2.Guilds.Enabled = 1
+PlayerbotV2.Guilds.Enabled = 0
 
 # Enable scheduled bot guild events (group activities, social cadence).
 PlayerbotV2.Guilds.EventsEnabled = 1
@@ -987,13 +1035,13 @@ PlayerbotV2.Move.RouteAwareCombatAdvance = 1
 # combat frame; WC corridor freeze 2026-07-03 (z-disconnected ledge pack).
 PlayerbotV2.Combat.SkipUnfightable       = 1
 
-# Group threat discipline (port of Karrz's ike3-based bots GroupPveRestraint /
+# Group threat discipline (port of Karrz's wow-1.12 GroupPveRestraint /
 # MCRaidHoldDamage). Applies only to non-tank bots in a group that has a tank
 # (main-tank flag, LFG tank role or tank spec) - never to solo bots, BGs or
 # a mob already hitting a non-tank member (self-defence). Holding = the bot
 # stops attacking that mob (pet called back) but keeps healing / buffing.
 #   HoldEnabled        master switch
-#   HoldInOpenWorld    0 = dungeons/raids only (Karrz: open-world groups just
+#   HoldInOpenWorld    0 = dungeons/raids only (the owner: open-world groups just
 #                      fight); 1 = also hold in the open world
 #   MaxRatio           stay below this fraction of the tank's threat on the
 #                      target; over it, damage stops (and Fade / Feign Death /
@@ -1013,7 +1061,7 @@ Playerbot.Raid.DpsWaitForAttack       = 1
 #   hunters: Mongoose, Giants and a food; casters: Supreme Power, Greater Arcane; healers: Distilled Wisdom, Mageblood,
 #   Nightfin Soup). Bots always use ones they carry; with this on, the bags are stocked for them first (free, like
 #   the potion and reagent stock). Default 0; the server's make-configs set 1.
-Playerbot.Raid.ProvideConsumables     = 0
+Playerbot.Raid.ProvideConsumables     = 1
 # Playerbot.Consumables.PvE / Playerbot.Consumables.PvP  server choice, separately for PvE (open world, dungeons,
 #   raids) and PvP (battlegrounds and arenas): whether bots use flasks, elixirs, buff food, combat healing and mana
 #   potions, healthstones and resistance potions on that kind of map. Off also stops ProvideConsumables stocking.
@@ -1022,9 +1070,9 @@ Playerbot.Raid.ProvideConsumables     = 0
 Playerbot.Consumables.PvE             = 1
 Playerbot.Consumables.PvP             = 0
 # Playerbot.Raid.DpsWaitTimeoutMs  with DpsWaitForAttack: after the tanks have fought this long without the owner's
-#   Attack, the DPS go anyway (a forgotten Attack no longer wipes the raid). 0 = never (the owner's Attack is always
-#   needed). Default 10000 (Karrz chose a 10 s fallback, 2026-10-08).
-Playerbot.Raid.DpsWaitTimeoutMs       = 10000
+#   Attack, the DPS go anyway (a forgotten Attack no longer wipes the raid). Same six seconds as a party's Pull; the
+#   value is limited to 1000-6000 (there is no "never"). Default 6000.
+Playerbot.Raid.DpsWaitTimeoutMs       = 6000
 PlayerbotV2.Threat.HoldInOpenWorld    = 0
 PlayerbotV2.Threat.MaxRatio           = 0.9
 PlayerbotV2.Threat.OpeningLeadBoss    = 900

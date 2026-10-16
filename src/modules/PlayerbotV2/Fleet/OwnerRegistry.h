@@ -10,7 +10,7 @@
 // changes are infrequent and command authority depends on durability.
 //
 // World-thread mutations (mark / adopt / disown). Reads from any thread
-// (whisper handler, AI workers, snapshot builder).
+// (whisper handler, bot workers, snapshot builder).
 
 #pragma once
 
@@ -74,6 +74,10 @@ public:
     // The companion's equipment has had its one full re-roll with the per-bot varied generator. Companions geared
     // before gear variety existed all wear the same top pick per slot; they are re-rolled once (in or out of combat
     // permitting) and then marked. Migration 0023.
+    // 2 in the same column: a level-cap companion has also had the raid-gear variety pass (RaidRegearPass `vary`), which swaps worn
+    // pieces for the bot's own near-equal pick. The 1 of the first re-roll leaves it at 1, so bots varied before are found again.
+    bool GearVariedRaid(BotId bot) const;
+    void MarkGearVariedRaid(BotId bot);
     bool GearVaried(BotId bot) const;
     void MarkGearVaried(BotId bot);
 
@@ -206,6 +210,7 @@ private:
     std::unordered_map<uint32, uint64>       online_owner_character_;
     std::unordered_set<BotId>                starter_pet_granted_;
     std::unordered_set<BotId>                gear_varied_;
+    std::unordered_set<BotId>                gear_varied_raid_;
     std::unordered_map<BotId, Role>          declared_role_;
     std::unordered_map<BotId, uint32>        spec_;
     std::unordered_map<BotId, uint16>        order_;

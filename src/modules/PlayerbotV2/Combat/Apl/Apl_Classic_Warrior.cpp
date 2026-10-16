@@ -10,7 +10,7 @@
 // (Overpower, Revenge, Execute) are gated by the snapshot's aura-state
 // check, so their predicates only test rage and stance.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/warrior/*Strategy.cpp, MANGOSBOT_ZERO).
 
 #include "../ApRegistry.h"
@@ -655,7 +655,7 @@ void DoShieldWall(ApPredicateContext const& ctx, BotIntentEmitter& e)
     Classic::NoteCooldownUse(ctx.bot, SHIELD_WALL, "Shield Wall");
 }
 
-// ---- Threat: loose attackers (Karrz's LooseAttackersTrigger) ----
+// ---- Threat: loose attackers (the owner's LooseAttackersTrigger) ----
 // A "loose attacker" is a mob hitting a NON-TANK group member (snapshot
 // victim_kind == Member). Taunt's reach is read from the spell data
 // (TankThreat::TauntReach, 10 yd when the data has none); the pick-up rule
@@ -676,7 +676,7 @@ bool VictimSecured(ApPredicateContext const& ctx)
     return v->hp <= 0 || k == ThreatVictim::Me || k == ThreatVictim::Tank;
 }
 
-// Challenging Shout when 3+ loose attackers are within 10 yd (Karrz) - only
+// Challenging Shout when 3+ loose attackers are within 10 yd (the owner) - only
 // those no other tank was given (its owner is coming; two tanks would burn
 // both shouts on one pack), and never with a crowd-controlled mob in reach.
 bool ShouldChallengingShout(ApPredicateContext const& ctx)
@@ -838,7 +838,10 @@ bool ShouldTankCleave(ApPredicateContext const& ctx)
 
 bool ShouldShieldSlam(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && Rage(ctx) >= 20 && (Ready(ctx, SHIELD_SLAM) && ctx.bot.victim_in_spell_range(SHIELD_SLAM));
+    // Needs a shield: without one the core refuses every cast (EQUIPPED_ITEM_CLASS) and this rule, ahead of Sunder, ate the tank's rage
+    // all fight (n43 onyxia_full: 69 refusals, two of three warrior tanks without a shield, rage idle at 25+ for 40 % of the fight).
+    return HasLiveTarget(ctx) && Rage(ctx) >= 20 && Interrupt::HasShield(ctx.bot)
+        && (Ready(ctx, SHIELD_SLAM) && ctx.bot.victim_in_spell_range(SHIELD_SLAM));
 }
 void DoShieldSlam(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SHIELD_SLAM, ctx.bot.victim()); }
 

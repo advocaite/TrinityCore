@@ -21,7 +21,7 @@ public:
     {
         DungeonAdvice a;
         // Boss progression — Dragon Soul has 8 encounters.
-        // TC has no boss AI; entries from WoWHead community data.
+        // TC has no boss bot logic; entries from WoWHead community data.
         a.bosses = {
             55265,  // Morchok
             55308,  // Warlord Zon'ozz

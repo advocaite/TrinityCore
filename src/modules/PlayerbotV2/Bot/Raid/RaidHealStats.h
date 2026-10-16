@@ -1,5 +1,5 @@
 // Per-healer heal casts of the current raid pull, for the [raid_encounter] pull end line ("healer throughput").
-// Written by the heal emitter (AI worker threads), read and reset by the raid brain.
+// Written by the heal emitter (bot worker threads), read and reset by the raid brain.
 #pragma once
 
 #include "Define.h"

@@ -38,7 +38,7 @@ namespace Playerbot::Probes
         if (now >= nextRead.load(std::memory_order_relaxed))
         {
             nextRead.store(now + 5, std::memory_order_relaxed);
-            enabled.store(sConfigMgr->GetBoolDefault("Playerbot.Diag.Probes", false), std::memory_order_relaxed);
+            enabled.store(sConfigMgr->GetBoolDefault("Playerbot.Diag.Probes", false, true), std::memory_order_relaxed);
         }
         return enabled.load(std::memory_order_relaxed);
     }

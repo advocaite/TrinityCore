@@ -29,7 +29,7 @@ struct RoutePath { char const* name; std::vector<RoutePoint> pts; };
 #include "BgWaypointData.inc"
 
 // A path that may only be walked first point to last: a jump / roof drop, and the start-room, cave and graveyard exits that the
-// original bots never walk backwards (vPaths_NoReverseAllowed, the ike3-based playerbot code BattleBotWaypoints.cpp).
+// original bots never walk backwards (vPaths_NoReverseAllowed, Karrz1/wow-1.12 raid10-revamp bcc8b9f BattleBotWaypoints.cpp).
 // Horde_Cave_to_Tower_Point_Crossroad is in their list but is NOT one-way here: our router also uses it backwards, it is the only
 // link by which a bot from the Alliance half reaches the Horde base (the test below fails when it is made one-way).
 inline bool IsOneWayPath(std::string_view nm)
@@ -275,7 +275,7 @@ inline bool NextWaypoint(uint16_t bg_type, float bx, float by, float bz, float t
 // A lane is one of the ways across the field a bot may take: either one of the recorded graph paths above (a graveyard-ridge jump
 // into the enemy flag room, the second recording of the mid line), or a chain of hand-recorded waypoints (BgWsgLanes.inc: the
 // tunnel, the graveyard ridge and the north ramp out of the own base, the mid field, then the enemy tunnel or ramp). The route to a
-// goal is forced through the lane, so a team spreads over the whole map instead of every bot walking the one shortest line (Karrz,
+// goal is forced through the lane, so a team spreads over the whole map instead of every bot walking the one shortest line (the owner,
 // WSG 2026-10-09: "just straight out the tunnel and straight back up the tunnel"). Nothing here is invented: every coordinate comes
 // from recorded data.
 // drop: the leg from the previous point to this one is a drop off a ledge (the previous point is the ledge, this one the landing).
@@ -307,7 +307,7 @@ inline std::vector<Lane> const& LanesFor(uint16_t bg_type, bool east, bool flank
 
 // A fight below the graveyard ridge: the ridge lane whose drop the bot stands above, when the bot is on the ridge within `reach` y of the ledge
 // and has not dropped yet (it stands more than 8 y above the landing). Out: the ridge lane (of the two, `selector` picks) and the landing.
-// The caller sends the bot over the ledge, instead of the random lane, when enemies are at the landing (Karrz, WSG 2026-10-09: the whole
+// The caller sends the bot over the ledge, instead of the random lane, when enemies are at the landing (playtest, WSG 2026-10-09: the whole
 // rez wave ran the long way round the back while the enemy was fighting below the cliff).
 inline Lane const* RidgeDropAbove(std::vector<Lane> const& lanes, uint32_t selector, float bx, float by, float bz, float reach, LanePoint* landing = nullptr)
 {

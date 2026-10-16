@@ -1,5 +1,5 @@
 // TickScheduler - Decides which bots tick this world frame and routes them to
-// the AI worker pool. Driven by per-bot ActivityTier and the world tick budget.
+// the bot worker pool. Driven by per-bot ActivityTier and the world tick budget.
 
 #pragma once
 
@@ -19,14 +19,14 @@ public:
     explicit TickScheduler(AiWorkerPool& pool);
 
     // Called on world thread once per world tick. Selects bots whose next-tick
-    // deadline has passed and submits them to the AI worker pool.
+    // deadline has passed and submits them to the bot worker pool.
     void on_world_tick(Ms now);
 
     // Bot lifecycle
     void register_bot(BotId id, ActivityTier initial = ActivityTier::Idle);
     void unregister_bot(BotId id);
 
-    // Tier transition (called by AI tick logic via the snapshot publish path).
+    // Tier transition (called by bot tick logic via the snapshot publish path).
     //
     // `classified` is the tier the per-tick classifier decided the bot
     // SHOULD be in this frame (see PlayerbotV2.cpp). The scheduler applies
@@ -36,7 +36,7 @@ public:
     // long tail of AFK city/inn bots. Any non-Idle classification (combat /
     // active / dead) resets the streak immediately, so a parked bot snaps
     // back to its fast cadence the moment it wakes. On any actual tier
-    // change the AI tick resets to `now` (the bot acts this frame on the
+    // change the bot tick resets to `now` (the bot acts this frame on the
     // snapshot that was just built and classified) and the snapshot deadline
     // re-arms to the bot's next phase point at the new tier's period, so
     // there is no reactivity regression. All deadlines are phase-aligned per
@@ -45,7 +45,7 @@ public:
     void set_tier(BotId id, ActivityTier classified, Ms now);
 
     // Snapshot-build cadence gate. Per-bot tier-driven throttle on
-    // `BotSnapshotBuilder::Build` so Build is paid at the AI tick rate
+    // `BotSnapshotBuilder::Build` so Build is paid at the bot tick rate
     // (Combat 10Hz / Active 5Hz / Idle 1Hz) instead of every world frame
     // (50Hz). Returns true if it's time to rebuild for `id`; false if
     // the throttle is still holding. On true, advances the per-bot
@@ -53,7 +53,7 @@ public:
     bool should_build_snapshot(BotId id, Ms now);
 
     // PvP reaction floor (Playerbot.Pacing.PvpReactionDelayMs): a per-bot minimum
-    // for the AI-tick and snapshot-build period, whatever the tier. 0 clears it.
+    // for the bot logic-tick and snapshot-build period, whatever the tier. 0 clears it.
     // Set by the publish pass each time the bot's snapshot is rebuilt: the caller
     // passes 0 for PvE and for survival (low HP, dead/ghost) so those never wait.
     // Clearing pulls the next deadlines back inside one tier period.

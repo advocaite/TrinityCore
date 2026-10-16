@@ -8,9 +8,12 @@
 #pragma once
 
 #include "BotTypes.h"
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Playerbot {
@@ -63,11 +66,9 @@ struct IdleRule
     // low-urgency rules opt in; everything else keeps its responsiveness.
     uint32 min_interval_ms = 0;
 
-    // Throttle bookkeeping (used iff min_interval_ms != 0). Updated by
-    // tick() when we decide to evaluate; read on subsequent ticks to
-    // compute "has the throttle window elapsed?". Mutable because tick()
-    // takes the rule by const-ref via the rules_ vector.
-    mutable uint32 last_gate_attempt_ms = 0;
+    // Which entry of the bot's own throttle table this rule uses (-1 = no throttle). Set by finalize(). The clock is per bot: BotAI keeps
+    // the next time each throttled rule may be looked at for that bot.
+    int throttle_slot = -1;
 
     // World-bot errand (questing, vendors, mail, auction, gathering, guild, travel, queueing): skipped while the bot
     // is a companion in its owner's group, which would otherwise wander off on it whenever the owner stands still.
@@ -112,10 +113,16 @@ public:
                                          uint32 now_ms) const;
 
     size_t size() const { return rules_.size(); }
+    // How many rules carry a throttle: the size of each bot's throttle table.
+    size_t throttled_count() const { return throttled_; }
+
+    // How often each rule has fired since the server started, busiest first (at most `top` rows), plus every rule named in `always` even
+    // when it has never fired. Read by the world spawner for its [rules] log line.
+    std::vector<std::pair<std::string_view, uint32>> FireCensus(size_t top, std::vector<std::string_view> const& always) const;
 
     // Sort rules by priority desc + mark the registry immutable. MUST be
     // called from RegisterAllIdleRules at module init, AFTER every
-    // register_rule call, BEFORE any AI worker starts ticking. Once
+    // register_rule call, BEFORE any bot worker starts ticking. Once
     // finalized, tick() runs lock-free across all worker threads.
     //
     // Why this is needed: a previous lazy-sort design did
@@ -129,10 +136,13 @@ public:
 
 private:
     std::vector<IdleRule> rules_;
+    // One relaxed counter per rule (same order as rules_), allocated by finalize(); a fire is rare next to a gate check, so counting it is cheap.
+    std::unique_ptr<std::atomic<uint32>[]> fired_;
     // True once finalize() has run. tick() asserts this in debug builds;
     // in release we log a warning once and call finalize() defensively
     // (still a hazard, but better than heap corruption).
     bool finalized_ = false;
+    size_t throttled_ = 0;
 };
 
 // Per-subsystem registrars. Each lives in Bot/States/Rules/<Name>Rules.cpp

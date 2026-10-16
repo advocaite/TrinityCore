@@ -1252,7 +1252,7 @@ bool BotQueueFiller::ClaimRunningBgForHuman(Player* human, uint32 bg_type_id, ui
     for (auto& w : g_human_waits)
         if (w.guid == human->GetGUID() && w.bg_type == bg_type_id)
             w.hold_until_ms = getMSTime() + 60u * 1000u;
-    // Places left in that instance once the human's party is in, both teams: a side that is mostly empty (Karrz, WSG
+    // Places left in that instance once the human's party is in, both teams: a side that is mostly empty (playtest, WSG
     // 2026-10-09: three Horde in the instance he was sent to) still needs the bot fill; the caller queues it capped to this.
     if (open_slots)
     {

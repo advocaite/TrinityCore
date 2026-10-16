@@ -98,7 +98,7 @@ public:
         // 734/48418 = foundry-gauntlet adds/Envoker. The trailing five are the
         // HARBOR-FLOOR Defias casters (FoeReaper->Ripsnarl): once the DPS
         // assist-engage there (harbor_focus_kill suppresses pre-emptive CC, see
-        // State_Idle), the combat AI focus-fires these ranged sources FIRST so
+        // State_Idle), the combat bot logic focus-fires these ranged sources FIRST so
         // the burst that kills the tank is removed fastest — the tank can no
         // longer be left to solo them (live 2026-06-28: tank death-ground while
         // the DPS only sheeped these). 48417 Blood Wizard (bolt + pack-heal) and

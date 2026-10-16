@@ -11,7 +11,7 @@
 // THREADING: both helpers call LIVE Player APIs (CanTakeQuest, GetSkillValue,
 // GetQuestRewardStatus). They MUST only be invoked where the live Player is
 // owned by the calling thread — i.e. the snapshot BUILD path (world thread) and
-// the idle dispatch (world thread). They MUST NOT be called from the AI worker
+// the idle dispatch (world thread). They MUST NOT be called from the bot worker
 // hot path, and in particular MUST NOT run while QuestHubDatabase's _mutex is
 // held (SelectLevelingHub takes this predicate as a callback and runs it only
 // after dropping the lock — see QuestHubDatabase::SelectLevelingHub).

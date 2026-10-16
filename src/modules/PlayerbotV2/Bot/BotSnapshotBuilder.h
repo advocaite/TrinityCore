@@ -29,7 +29,7 @@ public:
     // pointer. Resolving once on the world thread (where the registry is
     // quiescent w.r.t. this tick) eliminates that race while keeping behavior
     // byte-identical (same pointer, resolved once instead of ~32 times). May be
-    // null if the bot has no registered AI (Build tolerates a null bot_ai
+    // null if the bot has no registered bot logic (Build tolerates a null bot_ai
     // everywhere it is used).
     static std::shared_ptr<BotSnapshot const> Build(Player* p, BotAI* bot_ai, SnapshotVer next_version, TickId tick);
 };

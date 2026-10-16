@@ -37,6 +37,10 @@ namespace {
 constexpr float kLootRange = 11.0f;
 // A human leads an instance group: bots walk only to corpses this close to him (the rest wait in the queue).
 constexpr float kHumanLootLeashYd = 20.0f;
+// A bot tank leads: bots walk only to corpses this close to the anchor tank (rejoin_tank pulls a follower back at 40 y).
+constexpr float kTankLootLeashYd = 28.0f;
+// A corpse with an idle hostile mob this close is not walked to (the walk would pull it).
+constexpr float kLootIdleMobClearYd = 16.0f;
 constexpr uint16 SKILL_SKINNING_LOCAL = 393;
 
 // PROF-P2b: resolve the rank-appropriate skinning cast spell from the bot's
@@ -67,7 +71,15 @@ bool LootDrainGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
     // Told to stay: the corpse can wait until it is released.
     if (ai.is_manual_mode(s.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Stay)
         return false;
-    // Loot etiquette with a human in the group (Karrz's AddLootAction): no
+    // A dungeon mana user under the pull-ready mana drinks instead of walking to corpses (the tank's pull waits for that mana, and a
+    // walking caster never sits): the healer mark for a healer, the DPS mark for the rest, as the tank's gate reads them. This one check
+    // serves the registered rule and DungeonLootDrain. deadmines_full c82a7e21, Scnpriest under 10% mana at t=383-404 s walked to
+    // corpses and back to the tank without drinking.
+    if (s.is_in_instance() && s.max_power(POWER_MANA) > 0 && Classic::DrinksForPull(s, &g)
+        && s.power_pct(POWER_MANA) < Classic::OocDrinkStartManaPct(s, &g, 0)
+        && Classic::BestConsumable(s, Classic::ConsumableKind::Drink))   // no drink in the bags: it loots rather than waits for nothing
+        return false;
+    // Loot etiquette with a human in the group (the owner's AddLootAction): no
     // looting while the bot or a human of the group on its map is still
     // fighting. The queue keeps the corpses for after the fight.
     if (auto const* members = g.members())
@@ -355,7 +367,7 @@ bool LootDrainFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
                         continue;
                     }
                     // A human leads the instance group: the bots follow him (Follow / Stay obeyed), so a corpse far from him waits
-                    // in the queue until he walks near it. Karrz, Deadmines 2026-10-10: he hit Follow and two bots stayed down
+                    // in the queue until he walks near it. The owner, Deadmines 2026-10-10: he hit Follow and two bots stayed down
                     // the tunnel - the loot walk leased the follow-recall away (grant_detour below).
                     if (s.is_in_instance() && !g.leader_is_bot())
                         if (auto const* mems = g.members())
@@ -367,6 +379,35 @@ bool LootDrainFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
                                         return;
                                     break;
                                 }
+                    // A bot-led dungeon group: a corpse further from the anchor tank than kTankLootLeashYd waits (the queue rotates to
+                    // the next corpse). ingroup:dungeon_rejoin_tank walks a follower back once it is 40 y from the tank, so a loot
+                    // walk to a corpse near that line ping-ponged with it and the follower stood still for 45 s (deadmines_full
+                    // c82a7e21: Scnpriest alternated idle:move_to_corpse / ingroup:dungeon_rejoin_tank from t=947 s to t=1020 s).
+                    if (s.is_in_instance() && g.leader_is_bot())
+                        if (GroupMemberSummary const* tk = States::GroupAnchorTank(s, ai, g);
+                            tk && tk->online && tk->is_alive && tk->guid != s.guid() && tk->map_id == s.map_id())
+                        {
+                            const float tx = c->GetPositionX() - tk->x, ty = c->GetPositionY() - tk->y;
+                            if (tx * tx + ty * ty > kTankLootLeashYd * kTankLootLeashYd)
+                            {
+                                if (rotate_sentinel == c->GetGUID())
+                                    return;             // came full circle this tick: every queued corpse is too far
+                                if (rotate_sentinel.IsEmpty())
+                                    rotate_sentinel = c->GetGUID();
+                                q.push_back(q.front());
+                                q.pop_front();
+                                continue;
+                            }
+                        }
+                    // An idle hostile mob beside the corpse (the rest of the pack, a patrol standing by it) is aggroed by the walk: the
+                    // corpse waits in the queue until the mob is dealt with (playtest, Deadmines 2026-10-15: bots ran to loot and pulled more).
+                    for (NearbyUnit const& u : s.raw().combat.nearby_enemies)
+                    {
+                        if (u.hp <= 0 || u.unit_in_combat || !u.victim.IsEmpty() || u.is_pacified || u.untargetable || u.no_xp_kill) continue;
+                        const float ux = u.x - c->GetPositionX(), uy = u.y - c->GetPositionY();
+                        if (ux * ux + uy * uy <= kLootIdleMobClearYd * kLootIdleMobClearYd)
+                            return;
+                    }
                     emit.move_to(c->GetPositionX(), c->GetPositionY(),
                                  c->GetPositionZ(), /*run*/ true);
                     // Lease a few seconds of follow-recall slack so a grouped
@@ -410,10 +451,7 @@ bool DungeonLootDrain(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
         for (GroupMemberSummary const& m : *members)
             if (m.guid != s.guid() && m.online && m.is_alive && m.in_combat && m.map_id == s.map_id())
                 return false;
-    // A healer under the pull-ready mana drinks instead of walking to corpses: the tank's pull waits for that mana, and a
-    // looting healer is always "moving" (idle:dungeon_healer_drink needs her still; deadmines_rhahkzor run 7: 15-64% mana, never sat).
-    if (Classic::IsGroupHealer(s, &g) && s.max_power(POWER_MANA) > 0 && s.power_pct(POWER_MANA) < Classic::PullReadyHealerManaPct(s))
-        return false;
+    // The drink-before-loot check (deadmines_rhahkzor run 7: a looting healer is always "moving" and never sat) lives in LootDrainGate.
     const uint32 now_ms = s.published_at_ms();
     if (!LootDrainGate(s, ai, g, now_ms))
         return false;

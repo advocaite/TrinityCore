@@ -122,7 +122,7 @@ std::string PlanEquipOrder(::Playerbot::BotSnapshot const& snap, std::string con
 // RaidRegearPass makes: the bagged item must be wearable PvE gear (no PvP item, effective item level <= kRaidIlvlCap) and
 // score kRaidUpgradeRatio above the worn piece in `slot` (ScoreItemRaid), a two-hander against main hand + off hand
 // together, and an off hand never next to a worn two-hander. cur_* are the worn entries (0 = empty). Touches no Player:
-// item templates and DB2 only, so it can run on the snapshot build / AI worker threads.
+// item templates and DB2 only, so it can run on the snapshot build / bot worker threads.
 bool RaidEquipUpgrade(uint8 cls, uint16 spec, uint8 level, uint8 slot, uint32 bag_entry,
                       uint32 cur_entry, uint32 cur_mainhand_entry, uint32 cur_offhand_entry,
                       bool world_bot = false, uint64 bot_id = 0);

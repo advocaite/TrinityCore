@@ -11,7 +11,7 @@
 //     :92     — BG_OBJECT_FLAG2_EY_ENTRY = 208977 (NEW_FLAG type, ie 36)
 //     :101    — AREATRIGGER_CAPTURE_FLAG = 33 (capture mechanic)
 // V1 coords for towers + center flag:
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Domination/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Domination/
 //     EyeOfTheStormData.h:64-91
 
 #include "../BattlegroundScript.h"

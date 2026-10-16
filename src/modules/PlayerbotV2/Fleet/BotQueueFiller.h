@@ -86,7 +86,7 @@ public:
     // OnBgMatchEnd / OnLfgGroupComplete (when those land).
     void OnMatchEnd(Player* bot);
 
-    // ---- Ambient BG participation (Playerbot.Bg.AutoJoin*, Karrz's RandomBotAutoJoinBG) ----
+    // ---- Ambient BG participation (Playerbot.Bg.AutoJoin*, the owner's RandomBotAutoJoinBG) ----
     //
     // Both are world-thread passes driven from BotPopulationManager::OnWorldTick; each keeps
     // its own cadence and does nothing while disabled or with no bots online.

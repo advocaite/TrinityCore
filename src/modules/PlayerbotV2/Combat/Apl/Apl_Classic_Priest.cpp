@@ -6,7 +6,7 @@
 // DPS list. Spell ids are vanilla rank 1 and resolve to the highest known
 // rank in the snapshot view and API::cast_spell.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/priest/*Strategy.cpp, MANGOSBOT_ZERO):
 // shield + Flash Heal on critical, Greater Heal on low, Renew on topping,
 // Prayer of Healing on group damage, dispels (the raid dispel plan), Power
@@ -79,7 +79,7 @@ struct HealTarget
     int32      hp_pct = 100;
 };
 
-// Heal target picked by Karrz's scoring (ClassicHeal::PickPatient: tank
+// Heal target picked by the owner's scoring (ClassicHeal::PickPatient: tank
 // first, LOS, incoming-damage projection, healers spread); hp_pct is the
 // projected health. The bot itself at 100% when nobody needs a heal.
 HealTarget LowestFriendOrSelf(ApPredicateContext const& ctx)
@@ -132,6 +132,9 @@ bool ShouldFade(ApPredicateContext const& ctx)
             || ThreatDump::ThreatPct(ctx.bot) >= ThreatDump::kMediumThreatPct);
 }
 void DoFade(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(FADE); }
+// A healer does not spend the GCD on Fade while someone is in the emergency band (the critical heals come first in the table, this keeps the
+// threat triggers from stealing the tick when the heal is not castable yet).
+bool ShouldFadeHealer(ApPredicateContext const& ctx) { return LowestFriendOrSelf(ctx).hp_pct > 40 && ShouldFade(ctx); }
 
 bool ShouldPsychicScream(ApPredicateContext const& ctx)
 {
@@ -141,11 +144,12 @@ bool ShouldPsychicScream(ApPredicateContext const& ctx)
     // Raid school rule: not into a mob that avoids shadow (only that veto -
     // this is the emergency fear, the threat-discipline gates do not apply).
     float x, y, z; ctx.bot.position(x, y, z);
-    if (FindAoeHazard(ctx.bot, x, y, z, 8.0f, /*damaging*/ false, /*tank*/ false, PSYCHIC_SCREAM).kind
-        == AoeHazardKind::SchoolAvoided)
+    // A crowd-controlled mob in the ring vetoes it too (as Frost Nova's does).
+    AoeHazardKind const k = FindAoeHazard(ctx.bot, x, y, z, 8.0f, /*damaging*/ true, /*tank*/ false, PSYCHIC_SCREAM).kind;
+    if (k == AoeHazardKind::SchoolAvoided || k == AoeHazardKind::CrowdControlled)
         return false;
-    // Raid groups: no fear with an unpulled pack within 40y, and only for a
-    // priest an elite is hitting (ThreatDiscipline.h RaidFearAllowed).
+    // Raid groups and instances: no fear with an unpulled pack within 40y; raids
+    // also only for a priest an elite is hitting (ThreatDiscipline.h RaidFearAllowed).
     return RaidFearAllowed(ctx.bot, ctx.group.is_raid() || ctx.bot.is_in_raid(), "Psychic Scream");
 }
 void DoPsychicScream(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(PSYCHIC_SCREAM); }
@@ -337,7 +341,7 @@ bool ShouldEmergencyBigHeal(ApPredicateContext const& ctx)
 }
 
 // Prayer of Healing heals the party within 30 yd of the priest: 3 injured
-// members there (Karrz's "medium aoe heal").
+// members there (the owner's "medium aoe heal").
 bool ShouldPrayerOfHealing(ApPredicateContext const& ctx)
 {
     return ManaPct(ctx) >= 20 && Ready(ctx, PRAYER_OF_HEALING)
@@ -461,7 +465,7 @@ ApRule const kHealerRules[] = {
     { ShouldInnerFocus,        DoInnerFocus,       "classic_heal:inner_focus" },
     { ShouldFlashHealCritical, DoFlashHeal,        "classic_heal:flash_heal" },
     { ShouldEmergencyBigHeal,  DoBigHeal,          "classic_heal:emergency_heal" },
-    { ShouldFade,              DoFade,             "classic_heal:fade" },
+    { ShouldFadeHealer,        DoFade,             "classic_heal:fade" },
     { ShouldPsychicScream,     DoPsychicScream,    "classic_heal:psychic_scream" },
     { ShouldPrayerOfHealing,   DoPrayerOfHealing,  "classic_heal:prayer_of_healing" },
     { ShouldBigHeal,           DoBigHeal,          "classic_heal:big_heal" },

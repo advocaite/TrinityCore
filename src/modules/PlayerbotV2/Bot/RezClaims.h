@@ -30,7 +30,7 @@ inline bool IsRezSpell(uint32 spell)
     return false;
 }
 
-// [raid_rez] effects (Karrz, MC 2026-10-10: the rez casts spend their mana and never offer anything, and neither the SPELL_EFFECT_RESURRECT /
+// [raid_rez] effects (playtest, MC 2026-10-10: the rez casts spend their mana and never offer anything, and neither the SPELL_EFFECT_RESURRECT /
 // RESURRECT_WITH_AURA cast-state log nor the core's rez logs ever printed, so the Classic rez spells carry another effect): once per
 // process, the effect ids and targets of every vanilla rez rank as the core loaded them. Called by the first rez cast and by the first raid
 // rez evaluation, so a scenario shows it without a death.

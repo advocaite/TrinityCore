@@ -26,14 +26,14 @@ inline uint64_t MakeKey(uint32_t map_id, uint32_t difficulty)
 // Playerbot.Behavior.DungeonTactics (default on): the generated mob tactics (Tactics/DungeonTactics.h) feed the advice on a Classic realm.
 bool DungeonTacticsEnabled()
 {
-    static bool const on = IsVanillaRealm() && sConfigMgr->GetBoolDefault("Playerbot.Behavior.DungeonTactics", true);
+    static bool const on = IsVanillaRealm() && sConfigMgr->GetBoolDefault("Playerbot.Behavior.DungeonTactics", true, true);
     return on;
 }
 
 std::string const& SharedDb()
 {
     static std::string const db =
-        sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot");
+        sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot", true);
     return db;
 }
 }

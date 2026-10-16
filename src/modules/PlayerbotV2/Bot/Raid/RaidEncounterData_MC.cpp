@@ -1,6 +1,6 @@
 #include "RaidEncounters.h"
 
-// Ported from Karrz's raid10-revamp ike3 bots (the ike3-based playerbot code). Script references (mc/..., bwl/..., ony/...) point at the
+// Ported from Karrz's raid10-revamp ike3 bots (Karrz1/wow-1.12). Script references (mc/..., bwl/..., ony/...) point at the
 // VMaNGOS scripts that Forever's scripts/Custom/Classic instances were ported from; the ids are the same.
 
 namespace Playerbot::Raid {
@@ -13,7 +13,10 @@ namespace Playerbot::Raid {
         r.bosses = { 12118, 11982, 12259, 12057, 12264, 12056, 12098, 11988, 12018, 11502 };
 
         // LUCIFRON - boss 12118
-        r.dispel.push_back({ 19703, DispelKind::Curse });      // Lucifron's Curse (mc/boss_lucifron.cpp:19)
+        // Lucifron's Curse doubles the mana cost of every spell and ability of everyone within 40 yards for 5 min (classic_boss_lucifron.cpp:31):
+        // on the healers it is the difference between a sustained kill and an out-of-mana wipe, so it is urgent (healers and tanks first,
+        // even while the raid is in an emergency), like Gehennas' Curse.
+        r.dispel.push_back({ 19703, DispelKind::Curse, true });      // Lucifron's Curse (mc/boss_lucifron.cpp:19)
         r.dispel.push_back({ 19702, DispelKind::Magic, true });      // Impending Doom, 2000 shadow after 10s within 40 yd (mc/boss_lucifron.cpp:18); kind UNVERIFIED
         r.priority.push_back({ 12119, 4 });                    // Flamewaker Protector (MCRaidPolicy.h:100)
         r.controlledMember.push_back({ 20604 });               // Protector's Dominate Mind (vanilla_smartai, VMaNGOS spell list 121190)
@@ -69,13 +72,26 @@ namespace Playerbot::Raid {
         // He surrenders when the adds are dead and cannot be killed (mc/boss_majordomo_executus.cpp:335,379): never a target.
         // Every 30s one of Magic Reflection / Damage Shield is cast on ALL living adds (:485-501): dispel them off before attacking.
         r.priority.push_back({ 12018, -1 });                   // Majordomo Executus (mc/boss_majordomo_executus.cpp:335)
+        // One plan (n71 wipe): one tank holds Majordomo, away from the raid, and the other tanks take the four Elites. Mages sheep up to
+        // three Healers; the raid kills Healers first, then Elites (the owner's marks first). Casters stop on Magic Reflection, melee on
+        // Damage Shield. He surrenders when all eight adds are dead.
+        // The adds' casts go first for the kickers: Shadow Bolt (Healer) and Fireball (Elite) were interrupted four times in 95 s (n38).
+        r.interruptFirst.push_back(21077);
+        r.interruptFirst.push_back(20420);
+        // Flamewaker Elite: Blast Wave 20229 hits everyone within about 10 yards for 1100-1300 (n38: seven raiders dead in 3 s, hunters,
+        // rogues, a healer and a warrior beside the tanks holding the Elites). Casters, hunters and healers keep 13 yards from them.
+        r.avoidEnemy.push_back({ 11664, 13.0f, Who::Ranged });
+        r.avoidEnemy.push_back({ 11664, 13.0f, Who::Healer });
+        r.tankOrder.push_back(12018);
+        r.tankOrder.push_back(11664);
+        r.tankOrder.push_back(11663);
         // The brain already refuses to hit an add under either shield (Raid::kMagicReflection / kDamageShield) but nothing took
         // them off, so the raid stood idle for up to 30 s per cast. Priests and shamans purge them (Election::Assign purge).
         r.purge.push_back({ 20619 });                          // Magic Reflection (classic_boss_majordomo_executus.cpp:50)
         r.purge.push_back({ 21075 });                          // Damage Shield (classic_boss_majordomo_executus.cpp:51)
         r.priority.push_back({ 11664, 4 });                    // Flamewaker Elite (MCRaidPolicy.h:100)
         r.priority.push_back({ 11663, 5 });                    // Flamewaker Healer (MCRaidPolicy.h:99)
-        r.crowdControl.push_back({ 11663, CcKind::Polymorph, 21087 }); // humanoid; skip once Immunity 21087 is on it (mc/boss_majordomo_executus.cpp:47,179)
+        // No raid-chosen sheep here: the owner marks the Healers and gives each to a mage; skull moves onto them in turn (n71).
 
         // RAGNAROS - boss 11502
         // Submerged phase: it ends early when every Son of Flame is banished (mc/boss_ragnaros.cpp:347-363).

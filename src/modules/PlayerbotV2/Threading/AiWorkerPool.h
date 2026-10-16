@@ -1,5 +1,5 @@
 // AiWorkerPool - N worker threads consuming a tick-task queue. Each task is
-// "run AI tick for bot X using snapshot Y, push intents to queue Z." The pool
+// "run bot tick for bot X using snapshot Y, push intents to queue Z." The pool
 // is otherwise dumb — TickScheduler decides who runs and when.
 //
 // CONTRACTS.md §5.3.
@@ -23,8 +23,8 @@ struct PerfStats
     uint64_t ticks_total           = 0;
     uint64_t exceptions_total      = 0;
     uint64_t queue_high_watermark  = 0;
-    // AI ticks skipped because the published snapshot was grossly stale
-    // (age > ~3× the bot's tier AI period, capped at 1s). Acting on an
+    // bot ticks skipped because the published snapshot was grossly stale
+    // (age > ~3× the bot's tier bot logic period, capped at 1s). Acting on an
     // arbitrarily-old snapshot under load produces decisions against a
     // world state that no longer exists; skipping lets the bot re-tick
     // against a fresh snapshot on the next pass.

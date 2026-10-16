@@ -390,7 +390,7 @@ std::uint32_t FindDummyEntry()
     // The operator's choice first, then known test dummies: 1000 Unkillable Test Dummy, 2673 Target Dummy, 1921 (the old training dummy).
     // Each is taken only if the server can actually put it in the world.
     std::vector<std::uint32_t> candidates;
-    if (int const cfg = sConfigMgr->GetIntDefault("Playerbot.Scenario.DummyEntry", 0); cfg > 0)
+    if (int const cfg = sConfigMgr->GetIntDefault("Playerbot.Scenario.DummyEntry", 0, true); cfg > 0)
         candidates.push_back(std::uint32_t(cfg));
     for (std::uint32_t const e : { 1000u, 2673u, 1921u })
         candidates.push_back(e);
@@ -539,7 +539,7 @@ void Engage(Player* p, Creature* d)
     }
 }
 
-// The bot's own AI stops (a sweep casts by hand): the same three calls the scenario stand-in uses.
+// The bot's own bot logic stops (a sweep casts by hand): the same three calls the scenario stand-in uses.
 void DetachAi(Player* p)
 {
     ::Playerbot::BotId const id = p->GetGUID().GetCounter();
@@ -1373,7 +1373,7 @@ bool EconStep(Player* p, Creature* d, std::string& failure)
                     TC_LOG_INFO("playerbot.v2", "[econ] regen class={} state=casting spell=\"{}\" casts={} cost_each={:.0f} window_s={:.0f} mana_gained_window={:.0f} (net change {:.0f} plus the {:.0f} spent) mana_gained_10s={:.0f} ate_or_drank_in_window: {}",
                                 g.cls_name, MainSpellFor(g.cls), e.casts, e.cost, window_s, gained_window, cur - e.m0, e.spent, e.r_cast, RecoveryText(e.recov, e.sat));
                     g_energy_on = false;
-                    // What else put mana in or fired in the window. The AI is detached, so anything listed here is a finding.
+                    // What else put mana in or fired in the window. The bot logic is detached, so anything listed here is a finding.
                     std::string energy;
                     double energy_total = 0.0;
                     {

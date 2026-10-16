@@ -59,7 +59,7 @@ public:
     size_t active_count() const;
 
     // True when this character is driven by one of OUR headless BotSessions.
-    // False for a real-client character running self-AI (`.playerbot self`):
+    // False for a real-client character running self-bot logic (`.playerbot self`):
     // those must NEVER receive manufactured client packets (teleport acks
     // etc.) — the real client performs the genuine handshake, and forging it
     // desyncs the client (stuck loading screen on LFG teleport, live

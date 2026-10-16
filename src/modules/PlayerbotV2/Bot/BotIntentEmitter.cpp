@@ -1,4 +1,6 @@
 #include "BotIntentEmitter.h"
+#include <atomic>
+#include <mutex>
 #include "BotAI.h"
 #include "BotSnapshot.h"
 #include "BotSnapshotView.h"
@@ -55,7 +57,7 @@ char const* SchoolSpellName(SpellInfo const* si)
 uint8 BotIntentEmitter::SpellSchoolMaskOf(uint32 spell_id, uint8 wand_school_mask)
 {
     // sSpellMgr is a read-only store after load; the Classic APL helpers read
-    // it from the AI workers the same way (ApClassicHeal.h).
+    // it from the bot workers the same way (ApClassicHeal.h).
     SpellInfo const* si = spell_id ? sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE) : nullptr;
     if (!si) return 0;
     // Spell::Spell: a wand user's ranged-attack spell deals the wand's school.
@@ -262,15 +264,64 @@ bool BotIntentEmitter::start_attack(ObjectGuid target)
         if (ai_ && school_snap_)
         {
             BotAI::RaidSchoolState& rs = ai_->raid_school();
+            // Once a minute per bot and mob: the bot flips between the immune mob and its fallback target every tick (Rag's submerge,
+            // MC 2026-10-12: 3807 lines in one fight), and the first line already says why (the [raid_school_why] line names the aura).
+            // start_attack runs on the bot workers, so the pacing map is locked and bounded.
+            static std::mutex sLoggedMutex;
+            static std::unordered_map<uint64_t, uint32_t> sLogged;
+            uint64_t const lkey = (school_snap_->guid.GetCounter() << 24) ^ target.GetCounter();
+            uint32_t const lnow = school_snap_->published_at_ms;
+            bool log_now = false;
             if (rs.hold_target != target)
+            {
+                std::lock_guard<std::mutex> lock(sLoggedMutex);
+                if (sLogged.size() > 4096)
+                    sLogged.clear();
+                uint32_t& lat = sLogged[lkey];
+                if (!lat || lnow - lat > 60000)
+                {
+                    lat = lnow;
+                    log_now = true;
+                }
+            }
+            if (log_now)
+            {
                 TC_LOG_INFO("playerbot.v2", "[raid_school] {} on {}: immune to every school -> not attacking it",
                     school_snap_->identity.name, target.ToString());
+            }
             rs.hold_target = target;
             rs.hold_mask   = 0;
         }
         return false;
     }
     const bool pushed = emit(StartAttackIntent{target, avoid});
+    if (pushed && ai_ && school_snap_)
+    {
+        static std::mutex sOpenLogMutex;
+        static std::unordered_map<uint64_t, uint32_t> sOpenLog;
+        uint32_t const onow = school_snap_->published_at_ms;
+        uint64_t const okey = (school_snap_->guid.GetCounter() << 24) ^ target.GetCounter();
+        bool open_log = false;
+        {
+            std::lock_guard<std::mutex> lock(sOpenLogMutex);
+            if (sOpenLog.size() > 4096)
+                sOpenLog.clear();
+            uint32_t& last = sOpenLog[okey];
+            if (!last || onow - last > 10000u)
+            {
+                last = onow;
+                open_log = true;
+            }
+        }
+        if (open_log)
+        {
+            int in_combat = -1, victim_kind = -1;
+            for (NearbyUnit const& u : school_snap_->combat.nearby_enemies)
+                if (u.guid == target) { in_combat = u.unit_in_combat ? 1 : 0; victim_kind = int(u.victim_kind); break; }
+            TC_LOG_INFO("playerbot.v2", "[attack_start] {} attacks {} stance {} last_rule {} mob in_combat {} victim_kind {}",
+                        school_snap_->identity.name, target.ToString(), int(ai_->owner_stance()), ai_->last_rule_fired() ? ai_->last_rule_fired() : "none", in_combat, victim_kind);
+        }
+    }
     if (pushed && ai_ && school_snap_)
     {
         BotAI::RaidSchoolState& rs = ai_->raid_school();
@@ -285,6 +336,11 @@ bool BotIntentEmitter::start_attack(ObjectGuid target)
     return pushed;
 }
 
+bool BotIntentEmitter::move_already_emitted(float x, float y, float z) const
+{
+    return ai_ && ai_->move_to_recently_emitted(x, y, z, GameTime::GetGameTimeMS());
+}
+
 bool BotIntentEmitter::move_to(float x, float y, float z, bool run, bool direct, bool drop)
 {
     // Per-bot dedup: skip if the previous move_to went to ~the same XYZ
@@ -297,7 +353,15 @@ bool BotIntentEmitter::move_to(float x, float y, float z, bool run, bool direct,
     {
         const uint32 now_ms = GameTime::GetGameTimeMS();
         if (ai_->move_to_recently_emitted(x, y, z, now_ms))
+        {
+            // Why a move_to returned false (pull back "refused" on flat ground, Deadmines 2026-10-15): the dedup, not the navmesh.
+            // Per bot: one global throttle was used up by the 300+ dedups of background bots, and the squad's lines never showed.
+            if (ai_->dedup_log_due(now_ms, 1000u))
+                TC_LOG_INFO("playerbot.v2",
+                    "[move_to_refused] bot={} dst=({:.1f},{:.1f},{:.1f}) direct={} reason=dedup: a move to within 3 y was emitted in the last 1.5 s",
+                    ai_->bot_id(), x, y, z, direct ? 1 : 0);
             return false;
+        }
         // REFUSAL GUARD (emitter-level on purpose). PlayerbotAPI::move_to
         // keeps a per-destination path-fail backoff: one failed pathfind
         // poisons that dst, every later move_to to ~it returns Locked
@@ -332,6 +396,13 @@ bool BotIntentEmitter::move_to(float x, float y, float z, bool run, bool direct,
         const bool pushed = emit(MoveToIntent{x, y, z, run, direct, drop});
         if (pushed)
             ai_->note_move_to_emitted(x, y, z, now_ms);
+        else
+        {
+            if (ai_->dedup_log_due(now_ms, 1000u))
+                TC_LOG_INFO("playerbot.v2",
+                    "[move_to_refused] bot={} dst=({:.1f},{:.1f},{:.1f}) direct={} reason=intent queue refused the push",
+                    ai_->bot_id(), x, y, z, direct ? 1 : 0);
+        }
         return pushed;
     }
     return emit(MoveToIntent{x, y, z, run, direct, drop});
@@ -347,11 +418,32 @@ static uint32 GcdLengthMs(uint32 spell_id)
     return uint32(si->StartRecoveryTime);
 }
 
+void BotIntentEmitter::hold_casts_for_mana_item()
+{
+    if (ai_)
+        ai_->note_mana_break(GameTime::GetGameTimeMS());
+}
+
+void BotIntentEmitter::end_mana_break()
+{
+    if (ai_)
+        ai_->clear_mana_break();
+}
+
+// A spell with a cast time: the kind a running cast of the same bot would have to finish first.
+static bool HasCastTime(uint32 spell_id)
+{
+    SpellInfo const* si = sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE);
+    return si && si->CalcCastTime() > 0;
+}
+
 bool BotIntentEmitter::cast(uint32 spell_id, ObjectGuid target)
 {
+    if (ai_ && ai_->mana_break_active(GameTime::GetGameTimeMS()) && HasCastTime(spell_id))
+        return false;
     // Optimistic per-spell emit dedup. The snapshot's spell_cooldowns
     // table reflects server-side cooldowns one world-tick after the cast
-    // lands; in the ~200-1000ms gap, the AI worker may re-tick on the
+    // lands; in the ~200-1000ms gap, the bot worker may re-tick on the
     // same stale snapshot, see "is_ready=true" for a spell whose cast
     // just landed, and re-emit. Server rejects with SPELL_FAILED_NOT_READY
     // (91) — every rejection logs to Server.log and burns one intent slot.
@@ -359,7 +451,7 @@ bool BotIntentEmitter::cast(uint32 spell_id, ObjectGuid target)
     // Solution: track per-spell emit timestamps in BotAI; drop duplicate
     // emits within kCastEmitLockoutMs (~1.5s, > snapshot cadence). The
     // next snapshot's real cooldown table picks up before the lockout
-    // expires, so the AI never sees a "ready" window the server disagrees
+    // expires, so the bot logic never sees a "ready" window the server disagrees
     // with.
     //
     // Skipped when ai_ is null (test harness etc.) — the dedup is
@@ -389,6 +481,8 @@ bool BotIntentEmitter::cast(uint32 spell_id, ObjectGuid target)
 
 bool BotIntentEmitter::cast_rank(uint32 spell_id, ObjectGuid target)
 {
+    if (ai_ && ai_->mana_break_active(GameTime::GetGameTimeMS()) && HasCastTime(spell_id))
+        return false;
     // Same raid school gate and per-spell emit dedup as cast(); ranks have their own ids.
     if (school_blocked(spell_id, target))
         return false;

@@ -716,7 +716,7 @@ size_t V2::Module::DrainIntents()
                 // Per-target StartAttack lockout. Player::Attack returns
                 // false (→ Result::ServerRefused) when the target is
                 // immune / phased / faction-locked / vehicle-locked /
-                // already attacking with same melee mode etc. The AI rule
+                // already attacking with same melee mode etc. The bot logic rule
                 // re-emits next snapshot if we don't gate it; without this
                 // mark, ~5 emits/sec from a single wedged bot saturate
                 // the executor and stall the world thread (observed 60 s
@@ -906,7 +906,7 @@ size_t V2::Module::DrainIntents()
                 }
                 // Per-bot diagnostic ring. Recorded AFTER the API call so the
                 // captured Result reflects what actually happened, not what
-                // the AI worker hoped would happen. Used by /diag <bot>.
+                // the bot worker hoped would happen. Used by /diag <bot>.
                 // MoveTo destinations are captured so alternating-target
                 // loops show verbatim in /diag — an Ok-per-tick stream is
                 // ambiguous without them (the API's goal-key dedup also

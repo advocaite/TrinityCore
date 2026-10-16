@@ -3,6 +3,8 @@
 #include "ItemTemplate.h"
 #include "ObjectMgr.h"
 #include "SharedDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include <algorithm>
 #include <array>
 
@@ -83,7 +85,7 @@ constexpr SupplyFamily kFamilies[] = {
     { "Rebirth Reagent", CLASS_DRUID,   5,  kRebirthReagent },
     { "Soul Shard",      CLASS_WARLOCK, 5,  kSoulShard },
     // Open-world bots keep a small stock; raid-level (55+) bots carry what a
-    // raid night needs (Karrz: full potion stacks, 20 food, 40 drinks).
+    // raid night needs (the owner: full potion stacks, 20 food, 40 drinks).
     { "Food",            0, 5,  kFood,          kConsumable,                     20 },
     { "Water",           0, 10, kWater,         kConsumable | SUPPLY_MANA_USERS, 40 },
     { "Healing Potion",  0, 2,  kHealingPotion, kConsumable,                     5 },
@@ -99,18 +101,23 @@ constexpr SupplyFamily kFamilies[] = {
 // Nightfin Soup 13931, Tender Wolf Steak 18045.
 constexpr RaidConsumable kTankKit[] = {
     { 13510, false, 2, true }, { 13445, false, 2 }, { 3825, false, 2 }, { 18045, true, 5 },
+    { 13457, false, 2, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros)
 };
 constexpr RaidConsumable kMeleeKit[] = {
     { 13452, false, 2 }, { 9206, false, 2 }, { 20452, true, 5 },
+    { 13457, false, 1, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros' Might hits 20 y round a random mana user)
 };
 constexpr RaidConsumable kCasterKit[] = {
     { 13512, false, 2, true }, { 13454, false, 2 }, { 18254, true, 5 },
+    { 13457, false, 1, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros' Might hits 20 y round a random mana user)
 };
 constexpr RaidConsumable kHealerKit[] = {
     { 13511, false, 2, true }, { 20007, false, 2 }, { 13931, true, 5 },
+    { 13457, false, 1, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros' Might hits 20 y round a random mana user)
 };
 constexpr RaidConsumable kHunterKit[] = {
     { 13452, false, 2 }, { 9206, false, 2 }, { 13928, true, 5 },
+    { 13457, false, 1, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros' Might hits 20 y round a random mana user)
 };
 
 } // namespace
@@ -142,6 +149,32 @@ uint8 RaidConsumableStock(uint32 item)
 bool IsRaidConsumable(uint32 item)
 {
     return RaidConsumableStock(item) != 0;
+}
+
+std::span<uint32 const> GroupBuffSpells(uint8 cls)
+{
+    // 21562 / 21564 Prayer of Fortitude r1 / r2, 27683 Prayer of Shadow Protection, 23028 Arcane Brilliance, 21849 / 21850 Gift of the Wild r1 / r2.
+    static constexpr uint32 kPriest[] = { 21562, 21564, 27683 };
+    static constexpr uint32 kMage[]   = { 23028 };
+    static constexpr uint32 kDruid[]  = { 21849, 21850 };
+    switch (cls)
+    {
+        case CLASS_PRIEST: return kPriest;
+        case CLASS_MAGE:   return kMage;
+        case CLASS_DRUID:  return kDruid;
+        default:           return {};
+    }
+}
+
+bool LearnableGroupBuff(uint32 spell, uint8 level)
+{
+    SpellInfo const* si = sSpellMgr->GetSpellInfo(spell, DIFFICULTY_NONE);
+    if (!si || si->SpellLevel > level)
+        return false;
+    for (SpellEffectInfo const& e : si->GetEffects())
+        if (e.IsEffect() && e.IsAura())
+            return true;
+    return false;
 }
 
 std::span<SupplyFamily const> GetSupplyFamilies()

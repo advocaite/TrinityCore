@@ -29,7 +29,7 @@ public:
 
     // Transient mark: adds to the in-memory set only, NO DB write.
     // Used by .playerbot self on so a real human character is treated as
-    // an AI bot for the duration of the session, but NOT persisted across
+    // an bot logic bot for the duration of the session, but NOT persisted across
     // restart — otherwise BotPopulationManager::LoginExisting would grab
     // the character on next boot and the human couldn't log in.
     // The corresponding unmark just removes from memory; if the same id

@@ -567,7 +567,7 @@ void Init()
     h->accounts->LoadFromDb();
     // Build the quest-hub spatial map. Synchronous DB-bound work — runs on
     // the world thread once at boot (~200ms on retail data per V1 numbers),
-    // afterwards reads are lock-free-ish via shared_mutex on the AI workers.
+    // afterwards reads are lock-free-ish via shared_mutex on the bot workers.
     h->hubs = std::make_unique<V2::Travel::QuestHubDatabase>();
     h->hubs->Initialize();
     // Build the repair-vendor spawn index — same lifecycle as Hubs: one

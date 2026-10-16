@@ -17,6 +17,7 @@ namespace Playerbot::Classic {
 constexpr uint32_t kGreaterBlessingTrustMs = 6u * 60u * 1000u;   // lasts 15 min
 constexpr uint32_t kSingleBlessingTrustMs  = 3u * 60u * 1000u;   // lasts 5 min
 constexpr uint32_t kClassBuffTrustMs       = 6u * 60u * 1000u;   // 30 min and up
+constexpr uint32_t kAreaBuffTrustMs        = 15u * 1000u;        // a caster-centred party / raid cast: only the snapshot's lag is covered, the aura list decides after
 
 inline uint32_t BuffTrustMs(uint64_t key)
 {
@@ -27,6 +28,7 @@ inline uint32_t BuffTrustMs(uint64_t key)
         case 3:
         case 4: return kClassBuffTrustMs;
         case 5: return kSingleBlessingTrustMs;
+        case 6: return kAreaBuffTrustMs;
         default: return 0;
     }
 }

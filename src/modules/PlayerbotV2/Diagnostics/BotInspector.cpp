@@ -579,7 +579,7 @@ std::string SystemStatus()
         "Tick lat (p99)  : {} ms\n"
         "World lat (p50) : {} ms\n"
         "World lat (p99) : {} ms\n"
-        "AI workers      : {} (queue high-watermark: {})\n",
+        "bot workers      : {} (queue high-watermark: {})\n",
         // ==== Fleet args ====
         fleet_in_world,
         fleet_alive,
@@ -672,7 +672,7 @@ char const* ActivityBucket(char const* last_rule)
     if (starts_with("idle:bank"))                              return "Banking";
     if (starts_with("idle:taxi") || starts_with("idle:homebind")) return "Traveling";
     if (starts_with("idle:mail"))                              return "Mail";
-    if (starts_with("idle:ooc_food") || starts_with("idle:ooc_potion") ||
+    if (starts_with("idle:ooc_eat_food") || starts_with("idle:ooc_potion") ||
         starts_with("idle:ooc_bandage") || starts_with("idle:cannibalize") ||
         starts_with("idle:ooc_heal")  || starts_with("idle:ooc_dispel") ||
         starts_with("idle:ooc_rez")   || starts_with("idle:self_buff") ||
@@ -713,7 +713,7 @@ std::string FleetActivity()
     if (!Services::Initialized()) return "PlayerbotV2 not initialized.";
 
     // Walk the registry once, bucket each bot's last_rule_fired. Bots whose
-    // AI has never ticked yet (last_rule_fired == nullptr) bucket as
+    // Bot logic has never ticked yet (last_rule_fired == nullptr) bucket as
     // "Idle/none" — usually means just-spawned or just-respawned bots that
     // haven't had a snapshot yet.
     std::map<std::string, uint32> counts;

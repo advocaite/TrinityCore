@@ -1,12 +1,13 @@
 // BotAI - The top-level state machine. CONTRACTS.md §2.6.
 //
-// Constructed once per bot. Lives on the AI worker thread that runs the bot.
+// Constructed once per bot. Lives on the bot worker thread that runs the bot.
 // Pure: tick(snapshot, group, events, emit) — no global mutation, no I/O.
 
 #pragma once
 #include "ClassicBuffLedger.h"
 
 #include "IdleWatch.h"
+#include "WalkOrder.h"
 #include "BotTypes.h"
 #include "BotSnapshot.h"  // CurrencyEntry — cached_currencies_ member needs full type
 #include "Battleground/BgTactics.h"          // BgTactics::StallWatch (bg_stall_ member)
@@ -40,7 +41,7 @@ class BotAI
 public:
     BotAI(BotId id, BotPersonality personality, BotRng rng);
 
-    // Called by AI worker. Pure: snapshot in → intents out.
+    // Called by bot worker. Pure: snapshot in → intents out.
     // BotEventInbox parameter was removed 2026-05-21 — see PlayerbotV2.cpp
     // OnDamageTaken comment for rationale.
     void tick(BotSnapshotView snapshot,
@@ -204,7 +205,7 @@ public:
 
     // Owner's "release" order (BotCommandParser::OrderRelease, world thread):
     // GameTime ms it reached this dead bot, 0 = none. State_Dead releases at
-    // once and runs back. NOT cleared on the AI's death edge (an order can
+    // once and runs back. NOT cleared on the bot logic's death edge (an order can
     // arrive between the real death and the snapshot showing it); cleared on
     // revival (clear_release_order_before) and dropped as stale on the death
     // edge when it predates this death (died_at_ms).
@@ -265,6 +266,10 @@ public:
         // Last summon to the entrance (companion of an owner inside; see
         // idle:rejoin_group_instance), paced so a refused port is not spammed.
         uint32 summon_ms  = 0;
+        // Direct ports into the owner's instance tried since the rejoin began; after kDirectTries refusals the bot goes by the
+        // entrance trigger again.
+        uint32 direct_tries = 0;
+        static constexpr uint32 kDirectTries = 3;
     };
     RejoinRun&       rejoin_run()       { return rejoin_run_; }
     RejoinRun const& rejoin_run() const { return rejoin_run_; }
@@ -628,6 +633,10 @@ public:
     // marks and DPS wait for it. A Pull never sets it. 0 = never.
     void       note_owner_attack(uint32 now_ms) { owner_attack_ms_ = now_ms ? now_ms : 1u; }
     uint32     owner_attack_ms() const { return owner_attack_ms_; }
+    // The owner's Pull / Pull back reached this (non-pulling) bot: in a party the DPS then wait for his Attack, at most 6 s from the
+    // tank's first hit (EvaluateThreatHold). 0 = never.
+    void       note_owner_pull(uint32 now_ms) { owner_pull_ms_ = now_ms ? now_ms : 1u; }
+    uint32     owner_pull_ms() const { return owner_pull_ms_; }
     void       set_last_owner_name(std::string name) { last_owner_name_ = std::move(name); }
     std::string const& last_owner_name() const { return last_owner_name_; }
 
@@ -640,7 +649,7 @@ public:
     // Owner spacing preset (BotCommandParser "spacing tight|close|spread", "tight", "close", "spread out"):
     // yards between neighbours in the follow formation (State_InGroup) and, as formation_spacing_scale()
     // (yards / 4, Close = 1), the raid ranged / pre-pull arc spacing in State_Idle. Written by the chat
-    // handlers (world thread), read by the AI worker.
+    // handlers (world thread), read by the bot worker.
     FormationSpacing formation_spacing() const
     { return FormationSpacing(formation_spacing_.load(std::memory_order_relaxed)); }
     // Choosing a preset drops any numeric spacing; a "distance <n>" order sets exact yards (memory only, like the
@@ -735,7 +744,7 @@ public:
     // Owner "follow" order: the owner leads, so the bot follows its owner and defends, and the
     // dungeon autopilot stands down until the owner says attack / assist / tank / pull / resume /
     // run (or follow stop), or engages a mob himself. Unlike the 30s manual-mode window it lasts
-    // until released. Written by the chat handlers (world thread), read and released by the AI
+    // until released. Written by the chat handlers (world thread), read and released by the bot logic
     // worker. Returns true when the value changed (callers log [owner_order] on change).
     bool owner_follow_order() const { return owner_follow_order_.load(std::memory_order_relaxed); }
     bool set_owner_follow_order(bool on)
@@ -744,7 +753,7 @@ public:
     // follow the owner and defend. Recomputed each tick (update_dungeon_autopilot_hold).
     bool raid_map_party_hold() const { return raid_map_party_hold_; }
     bool dungeon_autopilot_suspended() const
-    { return owner_follow_order() || owner_passive() || fallback_active() || pull_back_active() || raid_map_party_hold_ || human_lead_hold_; }
+    { return owner_follow_order() || owner_passive() || fallback_active() || pull_back_active() || raid_map_party_hold_ || human_lead_hold_ || owner_hold_; }
     // Owner stance (panel Aggressive / Passive toggle, whisper and group words "passive" / "aggressive"), kept per bot until
     // changed (the group order reaches every bot of the group):
     //   Auto       - passive when a human leads the group inside an instance, otherwise the bot's own autonomy;
@@ -752,7 +761,7 @@ public:
     //                target); it defends itself and the group (a mob already on a member) and fights on the owner's
     //                attack / pull order (release_owner_lead opens a window);
     //   Aggressive - besides the group's own fights it attacks any hostile within kAggressiveRadiusYd of the owner.
-    // Written by the chat handlers (world thread), read by the AI worker.
+    // Written by the chat handlers (world thread), read by the bot worker.
     enum class OwnerStance : uint8_t { Auto = 0, Passive = 1, Aggressive = 2 };
     static constexpr float kAggressiveRadiusYd = 10.0f;   // Aggressive: hostiles this close to the owner are attacked
     OwnerStance owner_stance() const { return OwnerStance(owner_stance_.load(std::memory_order_relaxed)); }
@@ -764,6 +773,8 @@ public:
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() <
                owner_order_until_.load(std::memory_order_relaxed);
     }
+    // "passive" ends the window an Attack / Pull opened, so the stance holds at once and not after 15 s.
+    void close_owner_order_window() { owner_order_until_.store(0, std::memory_order_relaxed); }
     // Starts no fight on its own right now (stance Passive, or Auto in an instance led by a human), outside an order window.
     bool passive_now(bool human_led_instance) const
     {
@@ -781,7 +792,7 @@ public:
     // (tanks in front, ranged and healers on an arc behind) and fight only what follows. Suspends
     // the autopilot like the follow order, anchored at the rally instead of the owner; released
     // by the same orders. The plan is written by the chat handler (world thread) and read by the
-    // AI worker (States::FallbackTick), hence the mutex.
+    // bot worker (States::FallbackTick), hence the mutex.
     struct FallbackPlan
     {
         bool   active   = false;
@@ -818,12 +829,13 @@ public:
     // Every order opens the 15 s order window (owner_order_window_open: a passive bot assists the owner's / the group's targets).
     // autopilot_window = true (resume / run / "go") also opens the human-lead release window, so the dungeon autopilot runs on its
     // own for 15 s (BotAI::update_dungeon_autopilot_hold). Attack / pull / aggressive pass false: they fight what the owner points
-    // at and never pull the next pack (Karrz, Deadmines 2026-10-10: Aggressive resumed the autopilot, the tank ran about).
+    // at and never pull the next pack (playtest, Deadmines 2026-10-10: Aggressive resumed the autopilot, the tank ran about).
     bool release_owner_lead(bool autopilot_window = true)
     {
         const bool a = set_owner_follow_order(false);
         const bool b = end_fallback();
         const bool c = end_pull_back();
+        end_owner_use();
         int64_t const now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         owner_order_until_.store(now_ms + 15000, std::memory_order_relaxed);
@@ -835,7 +847,7 @@ public:
     // Owner "pull back" order (BotCommandParser OrderPullBack, main tank only): open on the target
     // from range, run back to the return point (the rally point, else where the tank stood) with
     // the mob following, and tank it there (States::PullBackTick). Suspends the autopilot like a
-    // fallback. Written by the chat handler (world thread), advanced by the AI worker; same mutex.
+    // fallback. Written by the chat handler (world thread), advanced by the bot worker; same mutex.
     enum class PullBackPhase : uint8 { Pull = 0, Retreat = 1, Hold = 2 };
     struct PullBackPlan
     {
@@ -902,9 +914,35 @@ public:
     RallyPoint rally_point() const
     { std::lock_guard<std::mutex> lk(fallback_mtx_); return rally_point_; }
     void set_rally_point(uint32 map, float x, float y, float z);   // BotAI.cpp (stamps GameTime)
+    // Owner "use <object>" (BotCommandParser): walk to this game object and use it once (an altar, brazier, lever, orb); the
+    // bot then stays put, so a ritual's channel is not broken by a follow. Written by the chat handler (world thread), run by
+    // the bot worker (idle:owner_use); same mutex as the fallback. Ends on use, death, map change or after 30 s.
+    struct OwnerUseOrder { bool set = false; uint32 map = 0; ObjectGuid go; float x = 0.f, y = 0.f, z = 0.f; uint32 set_ms = 0; };
+    bool owner_use_active() const { return owner_use_active_.load(std::memory_order_relaxed); }
+    OwnerUseOrder owner_use_order() const
+    { std::lock_guard<std::mutex> lk(fallback_mtx_); return owner_use_; }
+    void start_owner_use(OwnerUseOrder o)
+    {
+        std::lock_guard<std::mutex> lk(fallback_mtx_);
+        o.set = true;
+        owner_use_ = o;
+        owner_use_active_.store(true, std::memory_order_relaxed);
+    }
+    bool end_owner_use()
+    {
+        std::lock_guard<std::mutex> lk(fallback_mtx_);
+        owner_use_ = {};
+        return owner_use_active_.exchange(false, std::memory_order_relaxed);
+    }
     // The ranged opener (Throw / Shoot) failed NO_AMMO: remembered so a pull back does not pick it again (world thread
-    // writes via note_cast_outcome, AI worker reads).
+    // writes via note_cast_outcome, bot worker reads).
     uint32 last_no_ammo_ms() const { return last_no_ammo_ms_.load(std::memory_order_relaxed); }
+    // The [move_to_refused] diagnostics are limited to one a `gap_ms` per bot.
+    bool dedup_log_due(uint32 now_ms, uint32 gap_ms)
+    {
+        uint32 last = move_refused_log_ms_.load(std::memory_order_relaxed);
+        return now_ms - last > gap_ms && move_refused_log_ms_.compare_exchange_strong(last, now_ms);
+    }
 
     // Battleground-run mode (mirrors DungeonRunMode for BG context).
     // Active when bot is in a battleground; drives objective-aware
@@ -1144,11 +1182,19 @@ public:
     // Last server-time (ms) the bot idle-rotated to "look at" a nearby NPC
     // (idle:look_at_npc). Drives a jittered 30-60s cadence so bots aren't
     // eerily still in a hub. 0 = primed (fire on first eligible tick).
+    // Next time (module ms; 0 = not seeded yet) the rule in throttle slot `slot` may be looked at for this bot. IdleRuleRegistry::tick.
+    uint32& gate_next_ms(size_t slot, size_t total)
+    {
+        if (gate_next_ms_.size() < total) gate_next_ms_.resize(total, 0u);
+        return gate_next_ms_[slot];
+    }
     uint32 last_look_around_ms() const { return last_look_around_ms_; }
     void   set_last_look_around_ms(uint32 v) { last_look_around_ms_ = v; }
     // Last server-time (ms) the bot struck a sustained "state" emote
     // (idle:ambient_state_emote — dance/sit/sleep while idle in a hub).
     // Low-frequency; 0 = primed.
+    uint32 last_town_show_ms() const { return last_town_show_ms_; }        // last duel / campfire (Bot/TownLife.h)
+    void   set_last_town_show_ms(uint32 v) { last_town_show_ms_ = v; }
     uint32 last_ambient_state_emote_ms() const { return last_ambient_state_emote_ms_; }
     void   set_last_ambient_state_emote_ms(uint32 v) { last_ambient_state_emote_ms_ = v; }
     uint32 last_guild_babble_ms() const { return last_guild_babble_ms_; }
@@ -1515,7 +1561,7 @@ public:
     // and the backoff is continuously re-armed => a PERMANENT FREEZE over a
     // perfectly valid navmesh (live: bot 164465, dst=(1848.1,1530.5,123.4),
     // "[move_lock] reason=path_fail_backoff" repeating forever, headless
-    // probes proved the mesh itself was fine). This ring lets the AI side
+    // probes proved the mesh itself was fine). This ring lets the bot logic side
     // remember "that spot was just refused by the API" so the NEXT tick's
     // candidate selection (dungeon step-emit sites, route-follower crumb
     // scan) can skip it and try a DIFFERENT candidate instead of
@@ -2114,11 +2160,17 @@ public:
     uint32 last_quest_diag_ms() const { return last_quest_diag_ms_; }
     void   set_last_quest_diag_ms(uint32 ms) { last_quest_diag_ms_ = ms; }
 
+    // Throttle stamp for the `[quest_accept_stall]` diagnostic in QuestRules: an offer in sight that idle:quest_accept
+    // did not act on. One line per bot per 30s.
+    uint32 last_accept_stall_diag_ms() const { return last_accept_stall_diag_ms_; }
+    void   set_last_accept_stall_diag_ms(uint32 ms) { last_accept_stall_diag_ms_ = ms; }
+
     // Throttle stamp for the `[wander_reason]` diagnostic in
     // State_Idle. One log line per bot per 60s — wander fires 1000+/min
     // fleet-wide so anything tighter would drown the log.
     uint32 last_wander_diag_ms() const { return last_wander_diag_ms_; }
     ::Playerbot::V2::IdleWatch& idle_watch() { return idle_watch_; }
+    ::Playerbot::V2::WalkOrder& walk_order() { return walk_order_; }   // the spawner's arrive / leave request (WalkOrder.h)
     ::Playerbot::BgTactics::StallWatch& bg_stall() { return bg_stall_; }
     void   set_last_wander_diag_ms(uint32 ms) { last_wander_diag_ms_ = ms; }
 
@@ -2665,7 +2717,7 @@ public:
                 // Coordinator-order movement: re-assert the move every 3s
                 // while marching on the ordered target (combat knockbacks,
                 // CC and local melee shuffles interrupt the path), without
-                // spamming a move_to every AI tick.
+                // spamming a move_to every bot tick.
                 return 3u * 1000u;
             case ActionKind::RaidIcon:
                 // One icon-set attempt per target per 10s — a refused set
@@ -2869,7 +2921,7 @@ public:
     // --- RPG / idle life (Bot/States/Rules/RpgRules.cpp, port of ike3 "rpg") ---
     // A world bot in a town strolls from NPC to NPC (visit = approach, then
     // linger), and now and then travels to a city or auction house (trip).
-    // Owned and read only by the rpg rules on this bot's AI tick.
+    // Owned and read only by the rpg rules on this bot's bot tick.
     struct RpgState
     {
         // Current NPC visit. The target is a TownNpcIndex spawn; its live guid
@@ -3107,7 +3159,7 @@ private:
 public:
     uint32         rule_fire_seq() const { return rule_fire_seq_; }
 
-    // [dps_idle] tracker (AI worker; State_InCombat's end-of-tick probe).
+    // [dps_idle] tracker (bot worker; State_InCombat's end-of-tick probe).
     // idle_since = first tick of the current no-action streak (0 = acting),
     // logged = when the streak was last reported (throttle, 10 s per bot).
     struct CombatIdleState
@@ -3182,9 +3234,12 @@ private:
     FallbackPlan       fallback_plan_;
     RallyPoint         rally_point_;
     std::atomic<uint32> last_no_ammo_ms_{0};
+    std::atomic<uint32> move_refused_log_ms_{0};
     std::atomic<bool>  fallback_active_{false};
     PullBackPlan       pull_back_plan_;
     std::atomic<bool>  pull_back_active_{false};
+    OwnerUseOrder      owner_use_;
+    std::atomic<bool>  owner_use_active_{false};
     mutable std::mutex manual_travel_mtx_;   // guards manual_travel_ (parser writes / builder reads+clears, cross-thread)
     bool   travel_force_graph_ = false;
     uint64 poi_prog_key_  = 0;
@@ -3303,6 +3358,7 @@ private:
     uint32         manual_mode_until_ms_  = 0;
     uint32         last_owner_command_ms_ = 0;
     uint32         owner_attack_ms_       = 0;
+    uint32         owner_pull_ms_         = 0;
     std::string    last_owner_name_;
     uint8          formation_slot_        = 0;
     FormationType  formation_type_        = FormationType::Free;
@@ -3316,6 +3372,7 @@ private:
     std::atomic<bool> owner_follow_order_{false};
     std::atomic<uint8_t> owner_stance_{0};   // OwnerStance
     bool           raid_map_party_hold_   = false;
+    bool           owner_hold_            = false;   // an owner Stay / Hold is on: the autopilot walks nobody (update_dungeon_autopilot_hold)
     bool           human_lead_hold_       = false;   // see human_lead_hold()
     uint32         human_seen_ms_         = 0;       // last tick a leading human was in range (0 = never)
     std::atomic<int64_t> human_release_until_{0};    // steady-clock ms: autopilot allowed until then
@@ -3359,14 +3416,14 @@ private:
         uint32_t last_built_ms  = 0u;
         BattlegroundAdvice cached;
     };
-    // OWNED BY THE AI WORKER THREAD. BgDispatch reassigns `cached`'s heap
+    // OWNED BY THE bot logic WORKER THREAD. BgDispatch reassigns `cached`'s heap
     // vectors on every cache miss (≤2s apart), so no other thread may read
     // this struct — world-thread consumers use published_bg_advice_ below.
     BgAdviceCache  bg_advice_cache_;
 public:
     // World-thread-readable advice mirror (adversarial review 2026-06-10:
     // the snapshot builder's bg_role block read bg_advice_cache_.cached
-    // directly from the world thread while the AI worker reassigned its
+    // directly from the world thread while the bot worker reassigned its
     // vectors — use-after-free window every cache rebuild). On each
     // rebuild the worker publishes an IMMUTABLE copy through a C++20
     // atomic<shared_ptr> (same pattern as SnapshotPublisher slots);
@@ -3468,7 +3525,9 @@ private:
     bool           verbose_logging_ = false;
     uint32         last_ambient_emote_ms_ = 0;
     uint32         last_look_around_ms_   = 0;
+    std::vector<uint32> gate_next_ms_;   // per-bot throttle table of the idle rules
     uint32         last_ambient_state_emote_ms_ = 0;
+    uint32         last_town_show_ms_ = 0;
     uint32         last_guild_babble_ms_  = 0;
     uint32         last_yell_lfg_ms_      = 0;
     // Per-bot throttle on the snapshot builder's 500y hub-radius scan.
@@ -3477,7 +3536,7 @@ private:
     // Cell::VisitAllObjects every world frame (50Hz) — 10-25K wide-scans/sec.
     // 1s cadence is plenty: hub quest-givers don't move, and the smaller
     // 40y scan still captures the immediate neighborhood every tick.
-    // Builder reads/writes; AI worker doesn't touch this field.
+    // Builder reads/writes; bot worker doesn't touch this field.
     uint32         last_hub_scan_ms_      = 0;
     // Same throttle pattern for the 200y extended gather-node scan
     // (perf audit #3 — capital-clustered gatherers also fire this
@@ -3982,11 +4041,13 @@ private:
     // BotSnapshotBuilder. Single uint32 since the diagnostic logs once
     // per bot per 5s regardless of quest_id.
     uint32 last_quest_diag_ms_ = 0;
+    uint32 last_accept_stall_diag_ms_ = 0;
     uint32 last_moving_ms_     = 0;     // for idle:ambient_sit sustained-idle gate
     // Throttle for the `[wander_reason]` diagnostic — 1 line per bot
     // per 60s. Wander fires ~1000+/min fleet-wide.
     uint32 last_wander_diag_ms_ = 0;
     ::Playerbot::BgTactics::StallWatch bg_stall_;   // battleground stand-still watchdog (State_Idle bg_stall)
+    ::Playerbot::V2::WalkOrder walk_order_;
     ::Playerbot::V2::IdleWatch idle_watch_;   // world-wide standing-still detector (DispatchIdle)
     // Cached corpse → graveyard distance. Recomputing every snapshot tick
     // walks `WorldSafeLocsEntry` against `sConditionMgr` for every nearby
@@ -4018,15 +4079,15 @@ public:
     // Optimistic per-spell emit cooldown. Modern WoW puts most abilities on
     // a server-side cooldown the moment they cast — but the snapshot that
     // reflects that cooldown is published on the next world tick (~200 ms
-    // later). Between emit and snapshot reflection, the AI worker may tick
+    // later). Between emit and snapshot reflection, the bot worker may tick
     // again on the SAME stale snapshot and re-emit the same cast intent;
     // the API rejects with SPELL_FAILED_NOT_READY (91) and the rule fires
     // again next tick. Result: 4-5 redundant emits per real cooldown cycle,
     // each producing a Server.log rejection line.
     //
-    // Lock the spell out on the AI side for ~1.5 s after emit (covers the
+    // Lock the spell out on the bot logic side for ~1.5 s after emit (covers the
     // GCD plus snapshot publish lag). The next snapshot's real cooldown
-    // table catches up before the lockout expires, so the AI never sees
+    // table catches up before the lockout expires, so the bot logic never sees
     // a "ready" window the server disagrees with.
     static constexpr uint32 kCastEmitLockoutMs       = 1500u;
     // Longer back-off used when the API REJECTED a cast (vs the short
@@ -4061,6 +4122,21 @@ public:
         gcd_emit_until_ms_.store(now_ms + len, std::memory_order_relaxed);
     }
     void clear_gcd_started() { gcd_emit_until_ms_.store(0, std::memory_order_relaxed); }
+    // A caster at its mana-item threshold whose potion is held back by the cast in flight: no new hard cast starts until the item
+    // is used or the window ends (a healer chaining Greater Heals never has an idle tick, so it never drank).
+    // A break that ended without an item going out is not started again for 12 s, so an item the core keeps refusing cannot starve the
+    // caster of casts.
+    void note_mana_break(uint32 now_ms)
+    {
+        uint32 const until = mana_break_until_ms_.load(std::memory_order_relaxed);
+        if (now_ms < until)
+            return;                                     // already running; the window is not extended
+        if (until && now_ms - until < 12000u)
+            return;
+        mana_break_until_ms_.store(now_ms + 4000u, std::memory_order_relaxed);
+    }
+    void clear_mana_break() { mana_break_until_ms_.store(0, std::memory_order_relaxed); }
+    bool mana_break_active(uint32 now_ms) const { return now_ms < mana_break_until_ms_.load(std::memory_order_relaxed); }
     bool gcd_recently_started(uint32 now_ms) const { return now_ms < gcd_emit_until_ms_.load(std::memory_order_relaxed); }
     // The core said NOT_READY: lock the spell out for what its cooldown / the GCD still has
     // to run (min 250 ms), instead of re-emitting it every tick against a stale snapshot.
@@ -4256,7 +4332,7 @@ public:
     //   Tier 4 (> 60 s):           hearth home (or release-corpse fallback)
     // Reset whenever distance drops by >= 5 y (real progress) or the goal
     // changes (different target). Stays within BotAI for thread-safety:
-    // builder reads/writes from the world thread; AI worker reads to drive
+    // builder reads/writes from the world thread; bot worker reads to drive
     // the rule. Eventually-consistent — a stale read just delays escalation
     // by one tick.
     struct StuckTracker
@@ -4375,8 +4451,8 @@ public:
     // non-walk bridge (areatrigger teleport / ship / portal)?" decision, keyed
     // by the hub goal so the builder runs the FindRoute probe only once per goal
     // change (not per tick). POD (uint64+bool) written + read ONLY on the world
-    // thread (the snapshot builder) — never touched by the AI worker, so unlike
-    // the travel_plan_ vector it needs no cross-thread synchronization. The AI
+    // thread (the snapshot builder) — never touched by the bot worker, so unlike
+    // the travel_plan_ vector it needs no cross-thread synchronization. The bot logic
     // worker sees the result purely through the snapshot's objective_is_relocation
     // flag the builder sets from it.
     uint64 reloc_bridge_goal_key() const { return reloc_bridge_goal_; }
@@ -4436,7 +4512,7 @@ public:
     // bad route. The anchor-wedge cooldown returns "wedged" every tick for 30s,
     // so this timestamp gates the skip to once per few seconds — letting the bot
     // start moving toward the skipped-to leg before another skip is considered.
-    // AI-worker-only (like travel_plan_): no cross-thread synchronization.
+    // bot-worker-only (like travel_plan_): no cross-thread synchronization.
     uint32 last_leg_skip_ms() const { return last_leg_skip_ms_; }
     void   set_last_leg_skip_ms(uint32 ms) { last_leg_skip_ms_ = ms; }
     // One-shot escalation: the next driveTravelPlanTo for ANY goal routes
@@ -4448,7 +4524,7 @@ public:
     // The reloc-bridge probe's VALIDATED route legs (source attaches checked
     // against the live navmesh). World-thread only, like the reloc_bridge
     // decision POD: written by the probe, read by the builder when copying
-    // into the snapshot's bridge_route. The AI worker consumes them via the
+    // into the snapshot's bridge_route. The bot worker consumes them via the
     // snapshot — it must NOT recompute the route itself (its FindRoute can't
     // validate attaches off the world thread, so it would get the
     // unexecutable euclidean route a wedged bot can't follow).
@@ -4561,7 +4637,7 @@ public:
     // The adjustment is a percentage applied ABOVE the hard quality floor in
     // AuctionRules, so the floor still clamps the discount — the loop can never
     // dump an item below its band floor regardless of how many times it
-    // expires. Single-writer (AI worker thread), same model as the other
+    // expires. Single-writer (bot worker thread), same model as the other
     // per-bot retry caches below.
     struct SellPriceMemo
     {
@@ -4621,7 +4697,7 @@ public:
     // detects "distance to the leader isn't dropping" so the rule can fall
     // back from follow to an explicit, navmesh-validated move_to toward the
     // leader (which then engages the walk-first unstick ladder). No teleport.
-    // Single-writer (AI worker) — same threading model as the wedge maps.
+    // Single-writer (bot worker) — same threading model as the wedge maps.
     struct FollowProgress { uint64 anchor = 0; float last_dist = 0.f; uint32 stale_ticks = 0; uint32 last_repath_ms = 0; };
     // Throttle for the validated follow-repath move_to. The follow rule fires
     // every tick; without this a follower whose leader is unreachable would
@@ -4711,6 +4787,8 @@ private:
     std::unordered_map<uint32, uint32> cast_emit_until_ms_;
     // End of the global cooldown the last emitted GCD-bound cast starts (note_gcd_started).
     std::atomic<uint32> gcd_emit_until_ms_{0};
+    // End of the mana break (note_mana_break).
+    std::atomic<uint32> mana_break_until_ms_{0};
     // Per-item-entry equip retry cooldown — see kEquipTryLockoutMs above.
     std::unordered_map<uint32, uint32> equip_try_until_ms_;
     // Per-hub blacklist for unproductive arrivals — see kHubTriedLockoutMs.
@@ -5177,7 +5255,7 @@ public:
     // anchor blacklisting in the snapshot requires the Builder to know
     // which anchor failed, but path_blocked_count() is global per-bot
     // (path failures from any rule increment it). By tracking baselines
-    // per rule name on the AI side, each rule independently sees "from
+    // per rule name on the bot logic side, each rule independently sees "from
     // the moment I started firing, has the global block count grown by
     // K?" — a clean wedge detector that doesn't need anchor identity.
     //

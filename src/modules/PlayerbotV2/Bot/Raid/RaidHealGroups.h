@@ -1,6 +1,6 @@
 // RaidHealGroups - which raid subgroup each triage healer looks after first. Pure; tested in tests/game/ClassicRaidHealGroups.cpp.
 //
-// Karrz, live MC 2026-10-10: when a warlock Life Taps, druids, priests and paladins all put HoTs and heals on him. Every triage healer
+// the owner, live MC 2026-10-10: when a warlock Life Taps, druids, priests and paladins all put HoTs and heals on him. Every triage healer
 // picked the lowest member of the whole raid, so the whole raid's healers piled onto the same few members. Now each raid subgroup has
 // one healer who heals it first (RaidHealGroups.h -> PveOrder::heal_groups -> ClassicHeal::PickPatient); the tank healers keep their
 // tanks (RaidHealSlots.h) and are not in this plan.
@@ -20,6 +20,7 @@ namespace Playerbot::Raid {
 
 // Under this mana a healer is out of the plan (its groups are covered by the others) until it recovers.
 constexpr int kHealGroupOutManaPct = 10;
+constexpr int kHealGroupBackManaPct = 20;   // a healer that dropped out returns above this
 
 struct GroupHealer
 {
@@ -39,9 +40,15 @@ inline std::map<uint64_t, uint16_t> AssignHealGroups(std::vector<GroupHealer> co
 {
     std::map<uint64_t, uint16_t> result;
     std::vector<uint64_t> avail;
+    // A healer already in the plan stays in down to kHealGroupOutManaPct; one that left needs kHealGroupBackManaPct to return, so a healer
+    // whose mana hovers at the mark does not drop out and rejoin on every plan (groups moving between healers each time).
     for (GroupHealer const& h : healers)
-        if (h.mana_pct >= kHealGroupOutManaPct)
+    {
+        auto const had = previous.find(h.id);
+        bool const in_plan = had != previous.end() && had->second != 0;
+        if (h.mana_pct >= (in_plan ? kHealGroupOutManaPct : kHealGroupBackManaPct))
             avail.push_back(h.id);
+    }
     if (avail.empty() || groups.empty())
         return result;
     std::sort(avail.begin(), avail.end());

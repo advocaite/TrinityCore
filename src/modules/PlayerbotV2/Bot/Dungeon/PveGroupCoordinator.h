@@ -29,7 +29,7 @@
 // is ever moved to run concurrently with the build, orders_ needs a shared_mutex.
 // Inputs are the published immutable GroupSnapshot / BotSnapshot shared_ptrs and
 // DungeonScriptMgr::GetAdvice computed HERE from a member snapshot — never a
-// BotAI-owned cache (those are AI-worker property; reading them cross-thread is a
+// BotAI-owned cache (those are bot-worker property; reading them cross-thread is a
 // use-after-free, see the 2026-06-10 BG coordinator review).
 //
 // Human members are never ordered, but they OCCUPY duties: a human tank
@@ -62,7 +62,7 @@ public:
 
     // Order lookup for the snapshot builder. Returns nullptr when no
     // current plan covers the bot (consumer publishes a default-inactive
-    // order and the AI runs legacy logic).
+    // order and the bot logic runs legacy logic).
     PveOrder const* OrderFor(uint64 bot_guid_low) const
     {
         auto it = orders_.find(bot_guid_low);
@@ -157,10 +157,15 @@ private:
     // than a read-back from member orders, which broke when the sampled
     // member left the group or the data ticked cold.
     std::unordered_map<uint64, ObjectGuid> last_kill_focus_;
-    std::unordered_map<uint64, ObjectGuid> last_skull_;   // the skull mob the auto-skull follows (per group bucket)
     // Per-(group, map) raid tank -> mob assignment, sticky while the mob
     // lives so tanks don't trade mobs (and threat) every plan.
     std::unordered_map<uint64, std::unordered_map<uint64, ObjectGuid>> last_tank_target_;
+    std::unordered_map<uint64, uint64> last_main_tank_;   // bucket -> guid low of the main tank, kept while that tank lives
+    // Per-(group, map): the tank that held a mob when a group member's crowd control (Banish, Polymorph, Shackle) took it out of the
+    // assignment -> that tank, until when. When the CC ends the same tank takes the mob back first (MC Garr 2026-10-12: banished
+    // Firesworn came off and hit mages while the nearest tank was 27-57 y away).
+    struct CcHold { uint64 tank_low = 0; uint32 until_ms = 0; };
+    std::unordered_map<uint64, std::unordered_map<uint64, CcHold>> cc_held_;   // bucket -> mob guid counter -> hold
     // Per-(group, map) raid tank roster (guid lows, duty order): the tank-spec
     // members that act as tanks. Grows while the raid fights, shrinks back
     // out of combat; the other tank-spec bots play DPS (raid_dps_tank).

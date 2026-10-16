@@ -58,7 +58,17 @@ inline bool MayEngage(BotSnapshotView const& s, BotAI const& ai, GroupSnapshotVi
                 if (u.guid == mob) { unit = &u; break; }
     }
     if (unit && (unit->unit_in_combat || !unit->victim.IsEmpty())) return true;
-    if (Released(s, ai, mob)) return true;
+    // A bot already fighting opens an idle marked mob (the next pack's skull or moon the owner marks mid-fight) only on its own order
+    // for that mob, never on the group latch: the latch (any Attack, a mob on a non-tank, the DPS wait timeout) runs for the whole fight,
+    // so a mark put on the next pack pulled it into this one.
+    if (s.in_combat())
+    {
+        if (!mob.IsEmpty() && (ai.focus_target() == mob ||
+            (ai.is_manual_mode(s.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Engage && ai.owner_target() == mob)))
+            return true;
+    }
+    else if (Released(s, ai, mob))
+        return true;
 
     static std::mutex mx;
     static std::unordered_map<uint64, uint32> last_ms;

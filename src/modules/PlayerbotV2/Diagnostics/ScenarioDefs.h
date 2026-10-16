@@ -59,8 +59,14 @@ struct ScenarioDef
     // arrive_near_entry (the boss's room; the encounter is pre-spawned). order_attack: `order_delay_ms` into the run the main tank is
     // ordered onto goal_entry, which is what the owner's Attack does in a raid with a human leader. 0 / false = a dungeon scenario.
     std::uint32_t arrive_near_entry = 0;
+    // The raid lands at least this far from that creature (0 = the default 40 y). A boss that aggroes on sight (Onyxia: 58 y) is not held, so a
+    // landing inside its reach starts the fight on whoever stands nearest instead of on the tank walking in (onyxia_full n6, 2026-10-14).
+    float arrive_min_yards = 0.f;
     // Staging kills every hostile on the map but the goal boss, its formation and this entry (the boss's own adds); 0 = none.
     std::uint32_t keep_entry = 0;
+    // A fight with no boss death to wait for (Majordomo Executus yields when his eight adds are dead): the goal is reached when this many
+    // creatures of these two entries have died on the map. 0 = the goal boss's death.
+    std::uint32_t goal_adds_a = 0, goal_adds_b = 0, goal_adds_needed = 0;
     bool order_attack = false;
     std::uint32_t order_delay_ms = 0;
     // A whole-dungeon clear to the last boss: long, so `runall` with no filter leaves it out (`runall full` or `run <name>` starts it).
@@ -69,17 +75,20 @@ struct ScenarioDef
     // damage leg measures. 0 = not a parity scenario.
     std::uint8_t parity = 0;
     std::uint32_t parity_leg_s = 180;
-    // The name of a member played like Karrz's own character: from the start of the run its AI is detached and the runner drives it,
+    // The name of a member played like the owner's own character: from the start of the run its bot logic is detached and the runner drives it,
     // following the main tank and attacking what the tank attacks (a player who only presses "assist"). The group logic still sees a
-    // bot-led group. nullptr = every member runs its own AI.
+    // bot-led group. nullptr = every member runs its own bot logic.
     char const* stand_in = nullptr;
     // Checkpoint starts (`scenario run <name>@<key>`): the squad enters at the entrance as usual, then is moved to a spot in sight of the first
     // spawn of the checkpoint's creature (a boss or a pack's mob) and plays on from there, bot-led and with no Hold, so a run does not replay
     // the part that is already solved. The goal and the first-death rule stay. Earlier bosses stay alive in the instance.
     std::vector<ScenarioCheckpoint> checkpoints;
+    // A goal boss with no spawn row in the creature table (a script summons it: Ragnaros, by Majordomo): the lair it is summoned at
+    // (lair_z != 0). The runner finds the room from it and summons the boss itself, as the instance script does. No DB change.
+    float lair_x = 0.f, lair_y = 0.f, lair_z = 0.f, lair_o = 0.f;
 };
 
-// The party every dungeon scenario uses: the shape of Karrz's own (tank, healer, mage, rogue) plus a hunter for the fifth. The same
+// The party every dungeon scenario uses: the shape of the owner's own (tank, healer, mage, rogue) plus a hunter for the fifth. The same
 // five characters are re-levelled and re-geared for each dungeon, so a full run of the set makes five characters, not sixty.
 inline std::vector<ScenarioMember> StandardParty()
 {
@@ -192,6 +201,9 @@ struct RaidBossRow
     std::uint32_t keep_entry = 0;        // the boss's own adds (staging leaves them alive); 0 = none
     std::uint32_t min_tranq_shots = 0;   // a kill must have seen at least this many Tranquilizing Shots (Magmadar's Frenzy); 0 = not checked
     std::uint32_t min_decurses = 0;      // ... and this many curses removed (Lucifron's, Gehennas'); 0 = not checked
+    float lair_x = 0.f, lair_y = 0.f, lair_z = 0.f, lair_o = 0.f;   // a boss a script summons (no creature row): where; see ScenarioDef::lair_x
+    float arrive_min_yards = 0.f;       // see ScenarioDef::arrive_min_yards
+    std::uint32_t goal_adds_a = 0, goal_adds_b = 0, goal_adds_needed = 0;   // see ScenarioDef::goal_adds_needed
 };
 
 // In the order of the raid. Each starts at the boss's room with the encounter pre-spawned (the earlier bosses alive too).
@@ -200,38 +212,105 @@ inline constexpr RaidBossRow kMcBosses[] = {
     { "mc_lucifron",  "Molten Core: 40 level 60 raiders to Lucifron",  12118, "Lucifron",  15, 12119, 0, 1 },   // Flamewaker Protector; Lucifron's Curse must be removed
     { "mc_magmadar",  "Molten Core: 40 level 60 raiders to Magmadar",  11982, "Magmadar",  15, 0, 1 },          // Frenzy must be tranquilized
     { "mc_gehennas",  "Molten Core: 40 level 60 raiders to Gehennas",  12259, "Gehennas",  15, 11661, 0, 1 },   // Flamewaker; Gehennas' Curse must be removed
-    { "mc_geddon",    "Molten Core: 40 level 60 raiders to Baron Geddon", 12056, "Baron Geddon", 15 },   // Inferno (19698, 20 y): the raid must leave his range; more than 6 deaths fails it
+    { "mc_sulfuron",  "Molten Core: 40 level 60 raiders to Sulfuron Harbinger", 12098, "Sulfuron Harbinger", 15, 11662 },   // Flamewaker Priests: Dark Mending is interrupted, Inspire purged, Shadow Word: Pain kept off
+    { "mc_golemagg",  "Molten Core: 40 level 60 raiders to Golemagg the Incinerator", 11988, "Golemagg the Incinerator", 15, 11672 },   // Core Ragers: the off tank holds them away from Golemagg; Magma Splash stacks on the main tank
+    // Majordomo does not die: the fight ends when his eight Flamewakers (11664 elite, 11663 healer) are dead and he yields. Magic Reflection and Damage
+    // Shield on the adds, Aegis of Ragnaros on him.
+    { "mc_majordomo", "Molten Core: 40 level 60 raiders to Majordomo Executus", 12018, "Majordomo Executus", 15, 0, 0, 0, 758.089f, -1176.71f, -118.640f, 3.12414f, 0.f, 11664, 11663, 8 },   // no creature row: the instance script summons him in his hall (classic_instance_molten_core.cpp, SummonCreature 758.089,-1176.71,-118.640); the runner summons him there
+    { "mc_geddon",    "Molten Core: 40 level 60 raiders to Baron Geddon", 12056, "Baron Geddon", 15 },   // Inferno (19698, 20 y): the raid must leave his range
+    { "mc_ragnaros",  "Molten Core: 40 level 60 raiders to Ragnaros",  11502, "Ragnaros",  20, 0, 0, 0,
+      838.308f, -831.466f, -232.185f, 2.19911f },   // no creature row: summoned at his lair (classic_boss_majordomo_executus.cpp:342). Elemental Fire on the tank, Wrath threat reset and knockback, Magma Blast out of melee reach, submerge at 3 min (Sons of Flame)
 };
 
-inline ScenarioDef MakeMcScenario(RaidBossRow const& r)
+// Where a 40-man raid scenario arrives: the instance and its entrance areatrigger target.
+struct RaidEntrance { std::uint32_t map; float x, y, z, o_deg; };
+
+inline constexpr RaidEntrance kMcEntrance  = { 409, 1091.89f, -466.985f, -105.084f, 180.f };   // areatrigger_teleport 1102886
+inline constexpr RaidEntrance kBwlEntrance = { 469, -7673.2f, -1106.2f, 396.65f, 200.f };   // areatrigger_teleport 1103726 (vanilla entrance target)
+inline constexpr RaidEntrance kOnyEntrance = { 249, 30.8916f, -54.079f, -5.02784f, 270.f };    // areatrigger_teleport 1102848
+
+inline ScenarioDef MakeRaidScenario(RaidBossRow const& r, RaidEntrance const& e, std::vector<ScenarioMember> squad)
 {
     ScenarioDef d{};
     d.name = r.name;
     d.summary = r.summary;
     d.level = 60;
-    d.squad = RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0]));
-    d.map = 409;
-    d.x = 1091.89f; d.y = -466.985f; d.z = -105.084f;               // the Molten Core entrance (areatrigger_teleport 1102886)
-    d.o = 180.f * 3.14159265f / 180.f;
+    d.squad = std::move(squad);
+    d.map = e.map;
+    d.x = e.x; d.y = e.y; d.z = e.z;
+    d.o = e.o_deg * 3.14159265f / 180.f;
     d.goal = ScenarioGoalKind::KillCreature;
     d.goal_entry = r.boss_entry;
     d.goal_name = r.boss_name;
     d.timeout_ms = r.timeout_min * 60u * 1000u;
-    d.limits.expected_map = 409;
+    d.limits.expected_map = e.map;
     d.limits.bounds = { true, d.x - 800.f, d.x + 800.f, d.y - 800.f, d.y + 800.f, d.z - 250.f, d.z + 250.f };
     d.limits.expected_group = std::uint32_t(d.squad.size());
-    d.limits.tolerated_deaths = 5;                                   // more than five dead raiders fails the run
-    d.limits.max_deaths = 6;
+    d.limits.kill_is_pass = true;                                    // playtest 2026-10-14: a boss kill passes, however many die
+    d.limits.tolerated_deaths = 0;                                   // every death is a warning in the result
+    d.limits.max_deaths = 0;                                         // and none ends the run: only a full wipe, a reset, a stall or the timeout does
     d.limits.dps_hold_ms = 20000;
-    d.limits.tanks_dead_is_wipe = true;
+    d.limits.tanks_dead_is_wipe = false;
     d.limits.min_tranq_shots = r.min_tranq_shots;
     d.limits.min_decurses = r.min_decurses;
     d.limits.stray_yards = 120.f;                                    // a raid spreads over a room
     d.arrive_near_entry = r.boss_entry;
     d.keep_entry = r.keep_entry;
+    d.goal_adds_a = r.goal_adds_a; d.goal_adds_b = r.goal_adds_b; d.goal_adds_needed = r.goal_adds_needed;
+    d.lair_x = r.lair_x; d.lair_y = r.lair_y; d.lair_z = r.lair_z; d.lair_o = r.lair_o;
+    d.arrive_min_yards = r.arrive_min_yards;
     d.order_attack = true;
     d.order_delay_ms = 20000;
     return d;
+}
+
+inline ScenarioDef MakeMcScenario(RaidBossRow const& r)
+{
+    return MakeRaidScenario(r, kMcEntrance, RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0])));
+}
+
+// ---- Onyxia's Lair: the whole fight, 40 level 60 raiders ----
+// Phase 1 (100-65 %): tank her with her back to the raid, melee behind and on the flanks, Wing Buffet / Knock Away on the tank, Flame Breath
+// and Tail Sweep cones left empty. Phase 2 (65-40 %): she flies, Fireball spreads the ranged, 5-7 whelps per wave to the tanks and AoE, and a
+// Deep Breath along one of eight lines (the 5 s wind-up is the only warning: the whole raid must leave the corridor). Phase 3 (< 40 %): she
+// lands, Bellowing Roar fear every 15-30 s (a Dwarf priest's Fear Ward on the main tank), a whelp every 1-10 s, melee again from behind.
+// The squad is the MC raid with one Dwarf priest healer for Fear Ward. A boss kill passes the run however many die; a Deep Breath that finds the
+// raid standing on the line (the 2026-10-13 wipe: 33 dead in one second) is a wipe and fails it. Read the run's [raid_breath] lines (corridor latched
+// at the wind-up), [raid_death] and the phase hp in [raid_fight].
+inline constexpr RaidRow kOnyRaid[] = {
+    { "Mctankw",  ScnRace::Human,    ScnClass::Warrior, ScenarioRoleKind::Tank,   3 },
+    { "Mctankd",  ScnRace::NightElf, ScnClass::Druid,   ScenarioRoleKind::Tank,   1 },
+    { "Mcheals",  ScnRace::Human,    ScnClass::Priest,  ScenarioRoleKind::Healer, 4 },
+    { "Mchealsd", ScnRace::Dwarf,    ScnClass::Priest,  ScenarioRoleKind::Healer, 1 },   // Fear Ward (Dwarf racial)
+    { "Mchealp",  ScnRace::Human,    ScnClass::Paladin, ScenarioRoleKind::Healer, 4 },
+    { "Mchealdr", ScnRace::NightElf, ScnClass::Druid,   ScenarioRoleKind::Healer, 3 },
+    { "Mcmage",   ScnRace::Human,    ScnClass::Mage,    ScenarioRoleKind::Dps,    5 },
+    { "Mclock",   ScnRace::Human,    ScnClass::Warlock, ScenarioRoleKind::Dps,    5 },
+    { "Mcrogue",  ScnRace::Human,    ScnClass::Rogue,   ScenarioRoleKind::Dps,    4 },
+    { "Mchunt",   ScnRace::Dwarf,    ScnClass::Hunter,  ScenarioRoleKind::Dps,    4 },
+    { "Mcwarr",   ScnRace::Dwarf,    ScnClass::Warrior, ScenarioRoleKind::Dps,    3 },
+    { "Mcret",    ScnRace::Human,    ScnClass::Paladin, ScenarioRoleKind::Dps,    1 },
+    { "Mcshad",   ScnRace::Human,    ScnClass::Priest,  ScenarioRoleKind::Dps,    2 },
+};
+
+inline ScenarioDef MakeOnyScenario()
+{
+    static constexpr RaidBossRow kOny = { "onyxia_full", "Onyxia's Lair: 40 level 60 raiders, the whole fight (phase 1 tanking, phase 2 Deep Breath and whelps, phase 3 fear)",
+                                          10184, "Onyxia", 20, 0, 0, 0, 0.f, 0.f, 0.f, 0.f, 68.f };   // Onyxia aggroes at 58 y: land outside it, the tanks pull
+    return MakeRaidScenario(kOny, kOnyEntrance, RaidSquad(kOnyRaid, sizeof(kOnyRaid) / sizeof(kOnyRaid[0])));
+}
+
+// ---- Blackwing Lair, Razorgore the Untamed: the orb fight, 40 level 60 raiders ----
+// Phase 1: nobody attacks Razorgore while a Black Dragon Egg stands (he dying early kills the raid). A DPS bot walks to the Orb of Domination
+// (GO 177808) and uses it, which engages and possesses Razorgore; the controller sends him egg to egg (Destroy Egg), Mind Exhaustion hands the
+// orb to the next bot. Phase 2: the eggs gone, the tanks hold him and the raid kills him. Pass = Razorgore killed. Read the run's [raid_fight]
+// lines and the server's classic.bwl.orb lines (who clicked, the Possess cast result, any refusal and why). Grethok stays alive (his guards
+// are the pull).
+inline ScenarioDef MakeBwlRazorgoreScenario()
+{
+    static constexpr RaidBossRow kRaz = { "bwl_razorgore", "Blackwing Lair: 40 level 60 raiders to Razorgore the Untamed (a bot takes the Orb of Domination, the eggs, then the kill)",
+                                          12435, "Razorgore the Untamed", 20, 12557 };   // 12557 Grethok the Controller
+    return MakeRaidScenario(kRaz, kBwlEntrance, RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0])));
 }
 
 // ---- damage_parity: one level 60 bot per class against a level 63 target dummy ----
@@ -309,7 +388,7 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
                               { "smite", 646, -2.585f, -766.284f, 6.172f },   // [41] the ramp up to the ship
                               { "greenskin", 647, -89.643f, -781.119f, 29.200f },   // [47] the gangway
                               { "vancleef", 639, -49.167f, -795.944f, 38.956f } };   // [50] the deck
-            // The same clear with the rogue played like Karrz's own: it follows the tank and hits the tank's target, nothing else.
+            // The same clear with the rogue played like the owner's own: it follows the tank and hits the tank's target, nothing else.
             ScenarioDef p = d;
             p.name = "deadmines_player";
             p.summary = "Deadmines: level 21 party with a rogue played like a player, entrance to Edwin VanCleef";
@@ -319,6 +398,8 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
         }
         for (RaidBossRow const& r : kMcBosses)
             v.push_back(MakeMcScenario(r));
+        v.push_back(MakeOnyScenario());
+        v.push_back(MakeBwlRazorgoreScenario());
         // The names are built once and kept: ScenarioDef carries char const*.
         static std::deque<std::string> s_parity_names;
         for (ParityRow const& r : kParityClasses)

@@ -6,7 +6,7 @@
 // 1 and resolve to the highest known rank in the snapshot view and
 // API::cast_spell.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/shaman/*Strategy.cpp, MANGOSBOT_ZERO).
 // Totems and weapon imbues come from Bot/ClassicUpkeep.cpp (one totem per
 // element by spec and party, Tremor / cleansing totems when the party needs
@@ -80,7 +80,7 @@ struct HealTarget
     int32      hp_pct = 100;
 };
 
-// Heal target picked by Karrz's scoring (ClassicHeal::PickPatient: tank
+// Heal target picked by the owner's scoring (ClassicHeal::PickPatient: tank
 // first, LOS, incoming-damage projection, healers spread); hp_pct is the
 // projected health. The bot itself at 100% when nobody needs a heal.
 HealTarget LowestFriendOrSelf(ApPredicateContext const& ctx)
@@ -207,7 +207,7 @@ bool ShouldEmergencyHealingWave(ApPredicateContext const& ctx)
     return !ctx.bot.knows_spell(LESSER_HEALING_WAVE) && Ready(ctx, HEALING_WAVE) && LowestFriendOrSelf(ctx).hp_pct <= 40;
 }
 
-// Chain Heal: 3 injured members (Karrz's "medium aoe heal"), cast on the
+// Chain Heal: 3 injured members (the owner's "medium aoe heal"), cast on the
 // injured member with the most injured within a 12.5 yd jump of it.
 ObjectGuid ChainHealTarget(ApPredicateContext const& ctx)
 {

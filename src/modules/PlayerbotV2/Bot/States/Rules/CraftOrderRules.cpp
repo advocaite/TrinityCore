@@ -19,7 +19,7 @@
 //       ticks to top the crafter up; if mats never arrive the board times the
 //       claim out and refunds the requester.
 //
-// THREADING: these rules run on the AI WORKER thread and only EMIT intents. The
+// THREADING: these rules run on the bot logic WORKER thread and only EMIT intents. The
 // actual board mutations (PostOrder / ClaimOpenOrder / MarkDelivered) and the
 // craft+mail all run on the WORLD thread inside the intent executor, where the
 // escrow debit, the live spellbook check, and the fleet-bot human-firewall live.

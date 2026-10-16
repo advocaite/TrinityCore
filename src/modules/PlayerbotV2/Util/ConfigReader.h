@@ -227,7 +227,7 @@ public:
     //   - alert_wedged_bots: max acceptable concurrently-wedged bot count.
     //   - alert_tick_p99_us: max acceptable tick p99 latency in microseconds.
     //   - alert_intent_drop_per_min: max acceptable IntentQueue drops/min
-    //     (sustained drops = an AI worker outrunning the world-thread drain).
+    //     (sustained drops = an bot worker outrunning the world-thread drain).
     //   - alert_path_fail_per_min: max acceptable path-validation failures/min.
     //   - alert_throttle_ms: per-metric re-emit suppression window (default 5m)
     //     so a sustained breach logs once per window, not once per sample.
@@ -288,7 +288,7 @@ public:
     //   (PlayerbotV2.Combat.SkipUnfightable)
     bool combat_skip_unfightable() const { return combat_skip_unfightable_; }
 
-    // Group threat discipline (port of Karrz's ike3-based bots GroupPveRestraint /
+    // Group threat discipline (port of Karrz's wow-1.12 GroupPveRestraint /
     // MCRaidHoldDamage). Non-tank bots in a group with a tank hold damage
     // until the tank has an opening threat lead and stay under max_ratio of
     // the tank's threat. Leads are level-60 values, scaled by bot level.
@@ -310,7 +310,7 @@ public:
 
     // Behaviour switches (Playerbot.Behavior.<Name>, default on = current behaviour). Each gate
     // makes its behaviour fall back to the previous simple path. Cached at load, so they are
-    // readable from the AI worker threads as well as the world thread.
+    // readable from the bot worker threads as well as the world thread.
     bool behavior_owner_follow_hold()   const { return bhv_owner_follow_hold_; }
     bool behavior_fallback()            const { return bhv_fallback_; }
     bool behavior_pull_back()           const { return bhv_pull_back_; }
@@ -353,6 +353,10 @@ public:
     bool behavior_ike3_commands()       const { return bhv_ike3_commands_; }
     bool behavior_owner_commands()      const { return bhv_owner_commands_; }
     bool behavior_fidget()              const { return bhv_fidget_; }
+    // Players who log in without the ForeverBots add-on get one line with its download link.
+    bool   addon_hint_enabled()         const { return addon_hint_enabled_; }
+    uint32 addon_hint_delay_sec()       const { return addon_hint_delay_sec_; }
+    std::string const& addon_hint_url() const { return addon_hint_url_; }
     bool behavior_pull_discipline()     const { return bhv_pull_discipline_; }
     bool behavior_solo_flee()           const { return bhv_solo_flee_; }
     bool behavior_druid_heal_form()     const { return bhv_druid_heal_form_; }
@@ -385,7 +389,7 @@ public:
     // Playerbot.Pacing.*, Karrz's VMaNGOS model. decision_delay_ms is a CEILING on how long a
     // bot waits to decide again after a cast (no tier is allowed a longer period; the shipped
     // tiers are already faster, so it never slows a bot). pvp_reaction_delay_ms is a FLOOR on
-    // the per-bot AI-tick / snapshot period while the bot is in PvP (battleground, active duel,
+    // the per-bot bot logic-tick / snapshot period while the bot is in PvP (battleground, active duel,
     // or in combat with players); never in PvE. 0 = off, 0..3000.
     struct Pacing
     {
@@ -543,6 +547,9 @@ private:
     bool   bhv_ike3_commands_        = true;
     bool   bhv_owner_commands_       = true;
     bool   bhv_fidget_               = true;
+    bool        addon_hint_enabled_   = false;
+    uint32      addon_hint_delay_sec_ = 30;
+    std::string addon_hint_url_       = "https://github.com/Karrz1/Karrz-playerbots-wow-forever/raw/main/addon/ForeverBots-addon.zip";
     bool   bhv_pull_discipline_      = true;
     bool   bhv_solo_flee_            = true;
     bool   bhv_druid_heal_form_      = true;

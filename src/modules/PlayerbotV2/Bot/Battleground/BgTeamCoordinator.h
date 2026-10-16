@@ -7,7 +7,7 @@
 // rebalancing. This service computes ONE plan per (battleground instance,
 // team) on the WORLD THREAD and publishes per-bot orders; the snapshot
 // builder copies each bot's order into its snapshot (BotSnapshot::BgState::
-// BgOrder) and the AI executes it, falling back to the legacy per-bot role
+// BgOrder) and the bot logic executes it, falling back to the legacy per-bot role
 // logic whenever no order is present — graceful degradation by design.
 //
 // Threading: Update() is the only WRITER of orders_ and runs on the WORLD
@@ -17,7 +17,7 @@
 // writer and the readers are temporally disjoint — orders_ is never mutated
 // during the build phase, and concurrent reads of a non-mutating unordered_map
 // are well-defined. Move Update() into the parallel phase and this needs a
-// shared_mutex. The AI workers only ever see orders through their snapshots.
+// shared_mutex. The bot workers only ever see orders through their snapshots.
 //
 // Inputs (all already maintained elsewhere — this class adds no harvest):
 //   * Roster: live Player objects of V2 bots in the BG (registry walk).
@@ -26,7 +26,7 @@
 //     snapshot build, including the per-node player-pressure counts).
 //   * Static script data: BattlegroundScriptMgr::GetAdvice computed HERE
 //     on the world thread from that same immutable snapshot. Never read a
-//     BotAI's BgAdviceCache from this class — it is owned by the AI worker
+//     BotAI's BgAdviceCache from this class — it is owned by the bot worker
 //     thread, which reassigns its heap vectors every ≤2s (use-after-free;
 //     adversarial review 2026-06-10).
 //

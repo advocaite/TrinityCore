@@ -11,7 +11,7 @@
 // else Imp; dungeon / raid group: Felhunter for the designated Spell Lock
 // warlocks, Imp for the rest) and points it at the victim in combat.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/warlock/*Strategy.cpp, MANGOSBOT_ZERO):
 // armor + pet upkeep, emergency Death Coil / Howl of Terror / Drain Life,
 // Life Tap at low mana, dots (Corruption, Curse of Agony, Immolate, Siphon
@@ -84,6 +84,13 @@ bool VictimIsBossLike(ApPredicateContext const& ctx)
     return v && ((v->is_dungeon_boss || v->is_boss_rank) || v->max_hp >= 100'000);
 }
 
+// The mana the filler nukes stop at: a warlock with a wand shoots below 35% on ordinary fights, and casts down to 8% against a boss or
+// when it holds no wand.
+int32 NukeManaFloor(ApPredicateContext const& ctx)
+{
+    return ctx.bot.raw().consumables.wand_school_mask != 0 && !VictimIsBossLike(ctx) ? 35 : 8;
+}
+
 int32 VictimHpPct(ApPredicateContext const& ctx)
 {
     NearbyUnit const* v = ctx.bot.victim_info();
@@ -129,11 +136,12 @@ bool ShouldHowlOfTerror(ApPredicateContext const& ctx)
     // Raid school rule: not into a mob that avoids shadow (only that veto -
     // this is the emergency fear, the threat-discipline gates do not apply).
     float x, y, z; ctx.bot.position(x, y, z);
-    if (FindAoeHazard(ctx.bot, x, y, z, 10.0f, /*damaging*/ false, /*tank*/ false, HOWL_OF_TERROR).kind
-        == AoeHazardKind::SchoolAvoided)
+    // A crowd-controlled mob in the ring vetoes it too (as Frost Nova's does).
+    AoeHazardKind const k = FindAoeHazard(ctx.bot, x, y, z, 10.0f, /*damaging*/ true, /*tank*/ false, HOWL_OF_TERROR).kind;
+    if (k == AoeHazardKind::SchoolAvoided || k == AoeHazardKind::CrowdControlled)
         return false;
-    // Raid groups: no fear with an unpulled pack within 40y, and only for a
-    // warlock an elite is hitting (ThreatDiscipline.h RaidFearAllowed).
+    // Raid groups and instances: no fear with an unpulled pack within 40y; raids
+    // also only for a warlock an elite is hitting (ThreatDiscipline.h RaidFearAllowed).
     return RaidFearAllowed(ctx.bot, ctx.group.is_raid() || ctx.bot.is_in_raid(), "Howl of Terror");
 }
 void DoHowlOfTerror(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(HOWL_OF_TERROR); }
@@ -311,7 +319,7 @@ void DoDrainSoul(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(DR
 
 bool ShouldShadowBolt(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && ManaPct(ctx) >= 8 && (Ready(ctx, SHADOW_BOLT) && ctx.bot.victim_in_spell_range(SHADOW_BOLT));
+    return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && (Ready(ctx, SHADOW_BOLT) && ctx.bot.victim_in_spell_range(SHADOW_BOLT));
 }
 void DoShadowBolt(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SHADOW_BOLT, ctx.bot.victim()); }
 
@@ -321,7 +329,7 @@ void DoShadowBolt(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(S
 // / Searing Pain (the fire filler, Shadow Bolt's mana gate).
 bool ShouldSearingPain(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && ManaPct(ctx) >= 8 && Ready(ctx, SEARING_PAIN);
+    return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && Ready(ctx, SEARING_PAIN);
 }
 
 SchoolHint::SchoolChoice const kSchoolChoices[] = {

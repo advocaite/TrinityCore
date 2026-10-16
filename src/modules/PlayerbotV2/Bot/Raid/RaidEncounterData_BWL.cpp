@@ -1,6 +1,6 @@
 #include "RaidEncounters.h"
 
-// Ported from Karrz's raid10-revamp ike3 bots (the ike3-based playerbot code). Script references (mc/..., bwl/..., ony/...) point at the
+// Ported from Karrz's raid10-revamp ike3 bots (Karrz1/wow-1.12). Script references (mc/..., bwl/..., ony/...) point at the
 // VMaNGOS scripts that Forever's scripts/Custom/Classic instances were ported from; the ids are the same.
 
 namespace Playerbot::Raid {

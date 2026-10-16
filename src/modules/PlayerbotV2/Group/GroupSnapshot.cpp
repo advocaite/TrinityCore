@@ -70,6 +70,10 @@ GroupMemberSummary const* GroupSnapshotView::tank() const
     // Skip dead tanks — every caller (heal, beacon, lifebloom, augment buff,
     // pet send, threat dump) needs a living target. Battle-rez logic uses
     // dead_member() instead.
+    // The same answer as the PvE coordinator's main tank (PveGroupCoordinator): the raid-frame Main Tank flag first, else the first
+    // live tank, so the threat hold, the healers and the pull gates agree on who the tank is.
+    for (auto const& m : g_->members)
+        if (m.is_main_tank && m.online && m.hp > 0) return &m;
     for (auto const& m : g_->members)
         if (m.role == Role::Tank && m.online && m.hp > 0) return &m;
     return nullptr;

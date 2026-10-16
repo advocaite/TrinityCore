@@ -161,7 +161,7 @@ public:
 
     // Why a mount spell would draw nothing on the client, nullptr when its model resolves: the display the aura picks (Mount
     // DB2 displays, else the creature in the aura's misc value) has no CreatureDisplayInfo or no model data / file. A bot on
-    // such a mount runs at mount speed and looks on foot (Karrz, WSG 2026-10-09: Arimer, Fareed). `display_out` receives the
+    // such a mount runs at mount speed and looks on foot (playtest, WSG 2026-10-09: Arimer, Fareed). `display_out` receives the
     // first display id checked.
     static char const* MountDisplayProblem(uint32 spell_id, uint32* display_out = nullptr);
 
@@ -652,7 +652,7 @@ public:
     // whetstone applied to a weapon).
     Result use_item_by_entry(uint32 item_entry, ObjectGuid target = ObjectGuid::Empty);
     // use_item_by_slot: same effect resolution as by-entry but addresses the
-    // item by bag/slot. Used when AI rules pre-pick a specific stack (e.g.
+    // item by bag/slot. Used when bot logic rules pre-pick a specific stack (e.g.
     // a particular potion variant when several share an entry id is rare,
     // but bag/slot avoids ambiguity).
     Result use_item_by_slot(uint8 bag, uint8 slot, ObjectGuid target = ObjectGuid::Empty);

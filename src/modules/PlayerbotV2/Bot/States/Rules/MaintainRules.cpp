@@ -122,6 +122,8 @@ bool OocRezFire(BotSnapshotView const& s, BotAI& ai,
                 GroupSnapshotView const& g,
                 BotIntentEmitter& emit, uint32)
 {
+    // Registered above the classic upkeep (992), so keep out of the hazards that sit below it.
+    if (s.is_in_damaging_liquid() || s.is_swimming()) return false;
     if (!MaintainOocRez(s, g, emit)) return false;
     ai.set_last_rule_fired("idle:ooc_rez");
     return true;
@@ -132,6 +134,7 @@ bool OocHealFire(BotSnapshotView const& s, BotAI& ai,
                  GroupSnapshotView const& g,
                  BotIntentEmitter& emit, uint32)
 {
+    if (s.is_in_damaging_liquid() || s.is_swimming()) return false;
     if (!MaintainOocHeal(s, g, emit, ai.effective_role(s))) return false;
     ai.set_last_rule_fired("idle:ooc_heal");
     return true;
@@ -348,16 +351,6 @@ bool ConjuredItemFire(BotSnapshotView const& s, BotAI& ai,
     return true;
 }
 
-// ---------- idle:ooc_food ----------
-bool OocFoodFire(BotSnapshotView const& s, BotAI& ai,
-                 GroupSnapshotView const&,
-                 BotIntentEmitter& emit, uint32)
-{
-    if (!MaintainOocFood(s, ai, emit)) return false;
-    ai.set_last_rule_fired("idle:ooc_food");
-    return true;
-}
-
 } // anonymous namespace
 
 void RegisterMaintainRules(IdleRuleRegistry& r)
@@ -381,8 +374,10 @@ void RegisterMaintainRules(IdleRuleRegistry& r)
     add("idle:apply_context_talents", 692, &ContextTalentsFire);
     add("idle:auto_equip",            690, &AutoEquipFire);
     add("idle:equip_bag_upgrade",     689, &BagUpgradeFire);
-    add("idle:ooc_rez",               688, &OocRezFire);
-    add("idle:ooc_heal",              686, &OocHealFire);
+    // 993 / 993 (were 688 / 686): above the classic upkeep (992) and the quest funnel, so the dead are raised and the hurt healed
+    // before buffs go out or a quest walk starts. Rez first: registration order breaks the tie.
+    add("idle:ooc_rez",               993, &OocRezFire);
+    add("idle:ooc_heal",              993, &OocHealFire);
     add("idle:ooc_dispel",            684, &OocDispelFire);
     add("idle:self_buff",             682, &SelfBuffFire);
     add("idle:soulstone",             680, &SoulstoneFire);
@@ -439,7 +434,8 @@ void RegisterMaintainRules(IdleRuleRegistry& r)
     }
     add("idle:group_utility",         674, &GroupUtilityFire);
     add("idle:conjured_item",         672, &ConjuredItemFire);
-    add("idle:ooc_food",              671, &OocFoodFire);
+    // Eating and drinking: idle:ooc_eat_food (OocConsumableRules). It always ran right after the old ooc_food rule declined, so it
+    // set the real thresholds; MaintainOocFood remains only for the battleground prep cascade.
 }
 
 } // namespace Playerbot

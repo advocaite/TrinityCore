@@ -380,8 +380,8 @@ uint32_t CastingMindControl(Player* p, ObjectGuid& target)
     if (Spell* cast = p->GetCurrentSpell(CURRENT_GENERIC_SPELL))
         if (cast->GetSpellInfo() && std::find(kMindControl.begin(), kMindControl.end(), cast->GetSpellInfo()->Id) != kMindControl.end())
         {
-            if (Unit* t = cast->m_targets.GetUnitTarget())
-                target = t->GetGUID();
+            if (ObjectGuid const guid = cast->m_targets.GetUnitTargetGUID(); !guid.IsEmpty())
+                target = guid;   // by GUID: the spell's object pointer can dangle between map updates
             return cast->GetSpellInfo()->Id;
         }
     return 0;
@@ -492,7 +492,7 @@ constexpr uint32_t kFaerlinaRage  = 28798;   // Enrage, every 60 s
 constexpr uint32_t kWidowsEmbrace = 28732;   // removes the enrage and blocks the next one and her volley for 30 s
 
 // Faerlina: once she enrages, a priest mind-controls a Naxxramas Worshipper and makes it cast Widow's Embrace on her
-// (naxx/classic_boss_faerlina.cpp SpellHit; the worshipper has no AI of its own, the spell is its template spell).
+// (naxx/classic_boss_faerlina.cpp SpellHit; the worshipper has no bot logic of its own, the spell is its template spell).
 // Sacrificing after the enrage, not before, buys the full minute.
 void ElectFaerlina(Election& e)
 {

@@ -1309,7 +1309,7 @@ bool InvTypeMatchesSlot(uint32 inv_type, uint8 slot)
 // idle:travel_to_hub). We probe the UnifiedTravelGraph with a throwaway
 // FindRoute and cache only the boolean verdict in BotAI keyed by the hub goal —
 // a POD the world thread owns exclusively, so (unlike the travel_plan_ vector,
-// which the AI worker owns) there is no cross-thread race. The AI worker's
+// which the bot worker owns) there is no cross-thread race. The bot worker's
 // travel-plan executor rebuilds the actual leg list itself when it runs. The
 // probe runs once per goal change, never per tick.
 // Does the travel graph reach (toMap,tx,ty,tz) from the bot's CURRENT position
@@ -1560,7 +1560,7 @@ float TriggerCreatureZone(Creature const* c, uint32& out_spell)
 // snapshot buffer (reset_for_reuse() clears contents but KEEPS heap capacity),
 // so a recycled build does near-zero container allocations.
 //
-// SAFETY GATE — the AI worker holds a shared_ptr copy of the published
+// SAFETY GATE — the bot worker holds a shared_ptr copy of the published
 // snapshot for the duration of its tick (SnapshotPublisher stores it in an
 // atomic<shared_ptr>; latest() hands out a counted copy). A buffer is only
 // safe to overwrite when NO ONE else references it. We detect that with
@@ -1598,6 +1598,7 @@ struct SnapRecyclePool
 {
     // Two retained buffers per bot.
     std::unordered_map<BotId, std::array<std::shared_ptr<BotSnapshot>, 2>> slots;
+    uint32 acquires_since_sweep = 0;
 
     // Returns a cleared, capacity-retaining buffer to build into. Prefers a
     // free (use_count==1) retained slot; otherwise allocates fresh.
@@ -1606,8 +1607,12 @@ struct SnapRecyclePool
         // Opportunistic bound: if the map has grown large (bot churn /
         // never-pruned despawns), drop entries whose BOTH slots are free so
         // it can't grow without limit. Cheap amortised sweep, world thread.
-        if (slots.size() > 4096)
+        // Also every 2048 acquires: idle workers steal any map's batch, so each thread's pool came to hold buffers for most bots, and a
+        // logged-out world bot's stayed until the map passed 4096 entries, which a 3000-bot pool never reaches. A bot whose latest
+        // snapshot is still published keeps its entry (that slot is shared).
+        if (++acquires_since_sweep >= 2048 || slots.size() > 4096)
         {
+            acquires_since_sweep = 0;
             for (auto it = slots.begin(); it != slots.end(); )
             {
                 if ((!it->second[0] || it->second[0].use_count() == 1) &&
@@ -1779,7 +1784,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // same self-cleaning behavior (clear on stop, re-anchor on move).
         bool moving = p->isMoving();
         BotAI* mc_ai = bot_ai;
-        // Fall back to a local anchor when the AI can't be resolved; without
+        // Fall back to a local anchor when the bot logic can't be resolved; without
         // persistent state the wedge-corroboration simply trusts the flag,
         // which is the safe default (matches a fresh map entry).
         BotAI::MoveCorroborate local_anchor{};
@@ -1811,7 +1816,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             mc_ai->clear_move_corroborate();
         snap->movement.is_moving = moving;
     }
-    // UNIT_STATE_IN_FLIGHT — the core is flying the bot on a taxi path. The AI
+    // UNIT_STATE_IN_FLIGHT — the core is flying the bot on a taxi path. The bot logic
     // must stand down entirely (DispatchIdle bails) so no idle/unstick/watchdog
     // rule fires a move_to or teleport that would corrupt the flight spline.
     snap->movement.is_in_taxi  = p->IsInFlight();
@@ -2034,7 +2039,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 }
             }
             snap->travel.best_mount_spell = best_sid;
-            // [mount_pick] (Karrz, AV 2026-10-11: are the 60s on the 100% mount?). One line when the pick changes: the mount, the riding
+            // [mount_pick] (playtest, AV 2026-10-11: are the 60s on the 100% mount?). One line when the pick changes: the mount, the riding
             // skill, and whether the bot holds the two mount-speed passives (86457 = 60%, 86458 = 100%) and its race's epic mount.
             if (mt_ai && best_sid != mt_ai->cached_best_mount_spell() && p->GetLevel() >= 40)
             {
@@ -2072,7 +2077,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // removes a shared-map data-race surface with zero behavior change.
         // combat_*_ms()==0 means "not timing" / "never left", exactly as a
         // missing map entry did. Fall back to local scalars if the registry
-        // can't resolve the AI (mirrors every other ai() use-site here).
+        // can't resolve the bot logic (mirrors every other ai() use-site here).
         BotAI* ct_ai = bot_ai;
         int64_t local_start = 0, local_exit = 0;
         if (snap->vitals.in_combat)
@@ -2136,7 +2141,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // Death recovery: ghost flag, corpse position, reclaim window, and the
     // corpse-to-graveyard distance State_Dead reads to choose between
     // corpse-run (no sickness, slow) and spirit-healer (sickness, instant).
-    // Computed inline because the snapshot is a value type — the AI worker
+    // Computed inline because the snapshot is a value type — the bot worker
     // can't safely walk Map / ObjectMgr lookups on its thread.
     snap->death.is_ghost = p->HasPlayerFlag(PLAYER_FLAGS_GHOST);
     snap->death.has_corpse = p->HasCorpse();
@@ -2349,7 +2354,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         }
     }
     // Owner character name for mat-share mail. Resolved once per snapshot
-    // via OwnerRegistry → CharacterCache so the AI worker doesn't need to
+    // via OwnerRegistry → CharacterCache so the bot worker doesn't need to
     // round-trip those services. Empty string when bot is unowned, or when
     // it is bound to a whole account (`.playerbot adopt`) and nobody on that
     // account is online. Without the account case an adopted bot had no
@@ -2472,7 +2477,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // Goblin=7). Bots typically only post in their faction's house but might
     // have legacy postings elsewhere from cross-faction visits, so we walk
     // them all. Per-bot cap matches the live cap of a few hundred — we don't
-    // truncate, and the AI has constant-time access via the snapshot copy.
+    // truncate, and the bot logic has constant-time access via the snapshot copy.
     {
         const ObjectGuid me = p->GetGUID();
         const time_t now = GameTime::GetGameTime();
@@ -2890,7 +2895,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // multiple slots, so accumulate (FlatCountMap::add defers the sum to
         // finalize()). Tier 3.3: was unordered_map[entry] += count.
         snap->inventory.bag_count_by_entry.add(ii.entry, ii.count);
-        // Aggregate consumable-class counts so AI can decide "do I have enough
+        // Aggregate consumable-class counts so bot logic can decide "do I have enough
         // food?" without re-resolving ItemTemplate on the worker thread.
         // Stack count per item — a single 5-stack of food bumps food_drink_count
         // by 5, matching how MaintainOocFood uses one charge per use.
@@ -3241,6 +3246,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
 
     // Classic 1.60 ammo (the hunter's "no ammo" / "low ammo" lines). Every arrow or bullet stack
     // the equipped weapon can shoot counts: Player::AutoSelectAmmo moves on to the next stack.
+    if (Item const* worn_ranged = p->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+        snap->consumables.ranged_subclass = uint8(worn_ranged->GetTemplate()->GetSubClass());
     if (p->NeedsAmmo())
     {
         Item const* ranged = p->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED);
@@ -3316,6 +3323,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     {
         snap->group.group_guid = g->GetGUID();
         snap->owner_in_group = !snap->owner_guid.IsEmpty() && g->IsMember(snap->owner_guid);
+        if (snap->owner_in_group)
+            if (Player const* owner = ObjectAccessor::FindConnectedPlayer(snap->owner_guid); owner && owner->GetMapId() == p->GetMapId())
+                snap->owner_dist = p->GetExactDist2d(owner);
     }
 
     // ---- Spellbook (sorted, binary-searchable in BotSnapshotView::knows_spell) ----
@@ -3741,7 +3751,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         auto& cds = snap->cooldowns.spell_cooldowns;
         for (auto const& bi : snap->inventory.bag_items)
         {
-            if (bi.item_class != ITEM_CLASS_CONSUMABLE) continue;
+            // The Demonic Rune is filed under Trade Goods / Other (class 7, subclass 11), and its cooldown is published like a potion's.
+            if (bi.item_class != ITEM_CLASS_CONSUMABLE && !(bi.item_class == ITEM_CLASS_TRADE_GOODS && bi.item_subclass == ITEM_SUBCLASS_TRADE_GOODS_OTHER)) continue;
             ItemTemplate const* tmpl = sObjectMgr->GetItemTemplate(bi.entry);
             if (!tmpl) continue;
             for (ItemEffectEntry const* eff : tmpl->Effects)
@@ -3796,7 +3807,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         snap->cast.last_cast_spell_id = lc_ai->last_cast_spell_id();
 
     // ---- Threat discipline context ----
-    // Port of Karrz's group threat rules (ike3-based bots MCRaidHoldDamage /
+    // Port of the owner's group threat rules (wow-1.12 MCRaidHoldDamage /
     // LooseAttackersTrigger). Resolve the group's live same-map members and
     // tanks once, then stamp every attacker / nearby enemy below with the
     // bot's threat, the best tank threat and who the mob is hitting, read
@@ -4598,6 +4609,10 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 // HasUnitFlag check read false and the bot still engaged it. The
                 // template flag is the reliable signal for these static props.
                 u.is_pacified = c->HasUnitFlag(UNIT_FLAG_PACIFIED);
+                {
+                    MovementGeneratorType const mt = c->GetMotionMaster()->GetCurrentMovementGeneratorType();
+                    u.is_fleeing = mt == FLEEING_MOTION_TYPE || mt == TIMED_FLEEING_MOTION_TYPE || mt == ASSISTANCE_MOTION_TYPE;
+                }
                 // Uninteractible (NOT_SELECTABLE): unkillable, unacquirable hazard
                 // stalkers. Engage/pull rules skip these; the in-combat advance
                 // walks the tank through them. See NearbyUnit + the harbor note.
@@ -4657,7 +4672,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             int best_cc_pri = -1;
             // Affix-buff whitelist — small static list of POSITIVE buff
             // aura ids we surface on NearbyUnit.affix_buffs so the
-            // dungeon AI can react to M+ Bolstering and similar mob-
+            // dungeon bot logic can react to M+ Bolstering and similar mob-
             // empowering affixes without a generic per-unit auras dump.
             // Extend as more "mob carries this buff → adjust pull rule"
             // mechanics get wired.
@@ -4697,7 +4712,12 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                         const int32 age  = (abase->IsPermanent() || maxd <= 0)
                             ? std::numeric_limits<int32>::max()
                             : std::max(0, maxd - abase->GetDuration());
-                        if (u.magic_buff_age_ms < 0 || age < u.magic_buff_age_ms)
+                        // Majordomo's Magic Reflection / Damage Shield stop the whole raid from hitting an add until they are stripped:
+                        // they come first, whatever younger buff the add carries (n32 mc_majordomo: the purgers took 12579 / 17794 off the
+                        // Healers seven times and never the shield).
+                        bool const shield = asi->Id == 20619 || asi->Id == 21075;
+                        bool const shield_held = u.magic_buff_spell == 20619 || u.magic_buff_spell == 21075;
+                        if (shield || (!shield_held && (u.magic_buff_age_ms < 0 || age < u.magic_buff_age_ms)))
                         {
                             u.magic_buff_age_ms = age;
                             u.magic_buff_spell  = asi->Id;
@@ -4852,7 +4872,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             u.combat_reach = t->GetCombatReach();
             if (Unit const* v = t->GetVictim())
                 u.victim = v->GetGUID();
-            // Capture npc_flags for friendly Creatures so AI can find
+            // Capture npc_flags for friendly Creatures so bot logic can find
             // vendors/repairers/bankers/trainers/flightmasters/innkeepers
             // by capability (vs by entry id). Players keep npc_flags=0.
             if (Creature const* c = t->ToCreature())
@@ -5291,7 +5311,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // are turn-in-ready or only contain implicit objectives (LEARNSPELL,
     // MIN_REPUTATION, AREATRIGGER without coords, etc).
     {
-        // bot_ai is the build-target's pre-resolved AI (function parameter).
+        // bot_ai is the build-target's pre-resolved bot logic (function parameter).
         const uint32 now_ms = GameTime::GetGameTimeMS();
         const uint32 bot_map = p->GetMapId();
         // Track best-eligible "any" + best-eligible "same-map" candidates.
@@ -5845,7 +5865,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 uint64(best_breadcrumb_sm_set ? best_breadcrumb_sm_quest : 0u);
             // Per-bot log-dedup signature lives on the bot's own BotAI
             // (Phase 4 parallel-by-Map*): formerly a process-wide BotId-keyed
-            // static map, now single-writer per worker. When the AI can't be
+            // static map, now single-writer per worker. When the bot logic can't be
             // resolved we emit unconditionally (correct, just not deduped).
             BotAI* pc_ai = bot_ai;
             const uint64 last_sig = pc_ai ? pc_ai->picker_choice_log_sig() : (pc_sig ^ 1ull);
@@ -5900,6 +5920,18 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             bool has_complete = false;
             for (auto const& dq : snap->quest_log.quests)
                 if (dq.state == 1) { has_complete = true; break; }
+            // At most one dump per bot per minute (per build thread): a bot parked on a complete quest wrote it on every build, which
+            // made [picker_none] 79% of the log at 85-150 bots and pushed every other diagnostic out of the rotation.
+            if (has_complete)
+            {
+                thread_local std::unordered_map<uint64, uint32> s_picker_none_ms;
+                uint32 const pn_now = snap->published_at_ms ? snap->published_at_ms : 1u;
+                uint32& pn_last = s_picker_none_ms[snap->guid.GetCounter()];
+                if (pn_last && pn_now - pn_last < 60000u)
+                    has_complete = false;
+                else
+                    pn_last = pn_now;
+            }
             if (has_complete)
             {
                 TC_LOG_INFO("playerbot.v2",
@@ -6658,7 +6690,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
 
     // ---- Stuck-by-terrain tracker update ----
     // Detects bots wedged on geometry pursuing an unreachable target. Per-bot
-    // state lives on BotAI (so the AI worker reads/writes; world thread here
+    // state lives on BotAI (so the bot worker reads/writes; world thread here
     // only updates with the latest movement goal + distance).
     //
     // Goal selection priority: current_objective_poi > nearest quest_turnin
@@ -7137,7 +7169,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // Walks nearby_friends + nearby_objects on the world thread (where
     // we have safe access to the live Creature / GameObject ptrs) and
     // tags each (giver, quest_id) pair where the giver accepts the quest's
-    // turn-in. Lets AI in worker threads emit complete_quest with the
+    // turn-in. Lets bot logic in worker threads emit complete_quest with the
     // pre-resolved guid rather than guessing per-NPC.
     {
         std::vector<uint32> complete_q;
@@ -7181,7 +7213,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // Quest offers: walk nearby creatures + GOs and surface any quest
         // they offer that the bot doesn't have. CanTakeQuest filters by
         // level / class / race / faction / prereq + quest log capacity.
-        // We cap surfaced offers per snapshot (the AI only acts on the
+        // We cap surfaced offers per snapshot (the bot logic only acts on the
         // first per tick; surfacing more is a small DB read but no
         // executor cost).
         constexpr size_t MAX_OFFERS = 16;
@@ -7472,7 +7504,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 if (u.npc_flags & kQuestGiverFlagMask) ++giver_npc_count;
             for (auto const& o : snap->world_objects.nearby_objects)
                 if (o.go_type == GAMEOBJECT_TYPE_QUESTGIVER) ++giver_go_count;
-            // Throttle to once per 5s per bot via the AI's last-scan
+            // Throttle to once per 5s per bot via the bot logic's last-scan
             // timestamp so we don't spam every snapshot publish.
             if (offer_bot_ai)
             {
@@ -7594,13 +7626,13 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     }
 
     // ---- Active loot rolls ----
-    // Surface in-flight group/master rolls so AI can vote without being
+    // Surface in-flight group/master rolls so bot logic can vote without being
     // event-driven. LootRoll exposes loot_obj + list_id + vote mask via
     // the Playerbot accessors we added on the core side. is_upgrade
     // pre-computes whether the roll item is a strict ilvl upgrade for any
     // equipped slot of matching inventory type (or fills an empty slot).
     {
-        // Loot etiquette (Karrz's LootRollAction IsInstanceGroupWithHuman /
+        // Loot etiquette (the owner's LootRollAction IsInstanceGroupWithHuman /
         // HumanWouldWantItem): the humans of the bot's group on its map get
         // first claim. Only gathered when a roll is waiting.
         std::vector<Player const*> humans;
@@ -7755,7 +7787,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                         if (eq.entry == 0)
                         {
                             // Empty matching-invtype slot: an upgrade
-                            // (Karrz: need for an empty slot), but never a
+                            // (the owner: need for an empty slot), but never a
                             // cosmetic shirt or tabard.
                             // An empty off hand is no reason to need a
                             // one-hander the bot can't wield there (no dual
@@ -7779,7 +7811,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                             if (!eq_tmpl) continue;
                             const float eq_score = score_block(eq.stats, eq.item_level);
                             // A real upgrade beats the worn item by at least
-                            // 5% (Karrz); side-grades are greed.
+                            // 5% (the owner); side-grades are greed.
                             const float margin   = std::max(1.f, eq_score * 0.05f);
                             if (roll_score >= eq_score + margin)
                             {
@@ -7796,7 +7828,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
 
     // ---- Mail ----
     // Snapshot the bot's mail vector. Player::GetMails() includes both
-    // delivered and pending-deliver mails; we publish all and let the AI
+    // delivered and pending-deliver mails; we publish all and let the bot logic
     // gate on `deliver_in_sec <= 0`. Skipping deleted entries because the
     // server flushes them on _SaveMail; surfacing them would cause
     // mail_delete intents to retry against rows that are already gone.
@@ -7850,7 +7882,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         for (GameObject* go : scratch_gos)
         {
             if (!go) continue;
-            // Filter to types AI actually drives. Skip everything else to
+            // Filter to types bot logic actually drives. Skip everything else to
             // keep the vector bounded — chairs, transports, etc would
             // dominate the cap in major cities. GATHERING_NODE (50) is the
             // modern herbalism/mining node type — without it in the
@@ -7880,7 +7912,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 // the static portal GO; TRANSPORT (11) is mooring rooms /
                 // elevators / etc; MO_TRANSPORT (15) is the seafaring
                 // ships and zeppelins that move between continents. The
-                // builder pre-resolves their destinations so the AI can
+                // builder pre-resolves their destinations so the bot logic can
                 // walk to them and use/board.
                 t == GAMEOBJECT_TYPE_SPELLCASTER    ||
                 t == GAMEOBJECT_TYPE_TRANSPORT      ||
@@ -8032,7 +8064,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 }
             }
             // Continental transport (ship / zeppelin). Same teleport_dest
-            // semantics: AI walks to the transport, server auto-attaches
+            // semantics: bot logic walks to the transport, server auto-attaches
             // the bot as a passenger when the bounding box overlaps, the
             // transport carries them across maps, and the bot's same-map
             // rules pick up at the destination dock. We populate the
@@ -8062,7 +8094,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                             n.teleport_dest_map = map_id;
                             // No exact dest coords — the transport drops
                             // the passenger at its dock spawn, which the
-                            // AI doesn't strictly need to plan; we just
+                            // Bot logic doesn't strictly need to plan; we just
                             // need to know "this transport reaches the
                             // goal map".
                             break;
@@ -8077,7 +8109,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // walkable board/disembark LEDGES (nearest navmesh poly beside each
             // platform-centre). Cheap after the first encounter — every stop's
             // result is cached in ElevatorIndex. The elevator rules then read the
-            // ledge via ElevatorIndex::LedgeFor on the AI worker.
+            // ledge via ElevatorIndex::LedgeFor on the bot worker.
             else if (n.go_type == GAMEOBJECT_TYPE_TRANSPORT)
             {
                 // Derive ledges for the WHOLE nearby lift cluster (not just this
@@ -9326,7 +9358,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // ---- bg_role: per-slot role from the active BattlegroundScript ----
         // Mirrors the slot→role resolution in State_Idle.cpp BgDispatch so
         // the snapshot field agrees with the role the bot will actually
-        // execute this tick. Reads the IMMUTABLE advice copy the AI worker
+        // execute this tick. Reads the IMMUTABLE advice copy the bot worker
         // publishes after each cache rebuild (BotAI::published_bg_advice —
         // adversarial review 2026-06-10: reading the worker-owned
         // BgAdviceCache directly from this world-thread code raced its
@@ -9410,7 +9442,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // the build WORKER threads. The OrderFor read is race-free because it is
         // temporally disjoint from the write — orders_ is immutable for the whole
         // build phase (see BgTeamCoordinator.h threading contract). No plan entry
-        // leaves order.kind == None and the AI falls back to per-bot role logic.
+        // leaves order.kind == None and the bot logic falls back to per-bot role logic.
         if (Services::Initialized())
             if (auto const* ord = Services::BgCoordinator().OrderFor(
                     p->GetGUID().GetCounter()))
@@ -9880,7 +9912,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         }
     }
 
-    // Publish the probe's VALIDATED route legs to the snapshot so the AI
+    // Publish the probe's VALIDATED route legs to the snapshot so the bot logic
     // worker executes THIS route instead of recomputing one. The worker's own
     // FindRoute runs with validate_source_walk=false (the default — the costly
     // live-navmesh probe is reserved for known-wedged bots here), so for a bot
@@ -10099,7 +10131,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // ---- Nearest cross-map portal/transport anchor ----
     // When the bot has a current quest goal on a different map, ask the
     // global PortalIndex for the closest static portal or ship-dock on
-    // the bot's current map that reaches the goal map. The AI rule
+    // the bot's current map that reaches the goal map. The bot logic rule
     // (idle:walk_to_known_portal) walks the bot toward this anchor; once
     // within 30 y the SPELLCASTER/TRANSPORT GO becomes visible in
     // nearby_objects and the in-range rules (use_portal /
@@ -10223,7 +10255,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     }
 
     // ---- Homebind ----
-    // Snapshot the bot's bind point so the AI can decide cross-continent
+    // Snapshot the bot's bind point so the bot logic can decide cross-continent
     // hearth (when goal is on a different map but homebind is on the goal's
     // map, hearth saves a flight + walk). Player::m_homebind.GetMapId() is
     // 0 on a freshly-created character before login, but that's gated by
@@ -10347,6 +10379,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // this the bot has no way to know who its pet is fighting.
         if (Unit const* pv = pet->GetVictim())
             snap->pet.pet_victim = pv->GetGUID();
+        snap->pet.pet_react = uint8(pet->GetReactState());
         // Pet attackers — feeds the peel branch of assist_pet. When the
         // pet's victim is mob A but mob B (a caster) is hammering the
         // pet from range, the rule prefers B so the bot peels instead
@@ -10415,7 +10448,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // their consumers land. Threat list / attackers come with PerceptionBuilder.)
 
     // Path-block telemetry — surface BotAI's monotonic path-blocked count
-    // + last-block timestamp so AI worker rules can detect anchor wedge
+    // + last-block timestamp so bot worker rules can detect anchor wedge
     // and fall through without dereferencing BotAI directly. Captured at
     // build-end so any path failures during the build window are
     // included.

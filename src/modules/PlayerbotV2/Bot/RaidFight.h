@@ -1,5 +1,5 @@
 // RaidFight - the small decisions that decide whether a raid bot fights or walks, as plain functions so they are tested without a world
-// (tests/game/ClassicRaidFight.cpp). Live MC 2026-10-11 (Karrz: "half of the bots aren't fighting", about 15 casters and hunters at full mana
+// (tests/game/ClassicRaidFight.cpp). Live MC 2026-10-11 (the owner: "half of the bots aren't fighting", about 15 casters and hunters at full mana
 // doing nothing): the owner's Attack never released the DPS when the marked mob was still idle, and ranged DPS kept walking to their
 // formation slot with the target 5-15 y away in line of sight.
 

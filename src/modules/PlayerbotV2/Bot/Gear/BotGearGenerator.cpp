@@ -30,7 +30,7 @@
 namespace
 {
 // The highest effective item level raid gear may reach: Playerbot.Gear.RaidIlvlCap when set (> 0), else the cap of
-// Playerbot.Gear.MaxTier (default 1 = Molten Core / Onyxia). Approximate Classic item level ceilings per raid tier
+// Playerbot.Gear.MaxTier (default 2 = Blackwing Lair). Approximate Classic item level ceilings per raid tier
 // (not derived from the item store, which was not reachable): pre-raid dungeon gear ~58-63, MC / Onyxia up to ~76,
 // Blackwing Lair non-set drops up to ~83, AQ40 81-88, Naxxramas 86-92. Monotone in the tier. Generation and
 // RaidEquipUpgrade both compare it with EffectiveItemLevelForLevel(item, wearer level).
@@ -50,7 +50,7 @@ int32 RaidIlvlCap()
         int32 const explicit_cap = sConfigMgr->GetIntDefault("Playerbot.Gear.RaidIlvlCap", 0, true);
         if (explicit_cap > 0)
             return explicit_cap;
-        return CapForTier(sConfigMgr->GetFloatDefault("Playerbot.Gear.MaxTier", 1.0f, true));
+        return CapForTier(sConfigMgr->GetFloatDefault("Playerbot.Gear.MaxTier", 2.0f, true));
     }();
     return cap;
 }

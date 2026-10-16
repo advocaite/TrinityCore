@@ -2,7 +2,7 @@
 ## Title: WoW Forever Bots
 ## Notes: One-click PlayerbotV2 companions: add a bot of any class and role, call, dismiss and command your bots.
 ## Author: Karrz
-## Version: 0.2.0
+## Version: 0.2.3
 ## SavedVariables: ForeverBotsDB
 
 ForeverBots.lua

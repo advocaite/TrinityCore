@@ -14,7 +14,7 @@
 //     :182-191, :221-227 — node banners + keep gate entries
 //     :386-395           — OnUnitKilled (win-condition)
 // V1 author-attested coords (NOT TC-validated; DB-driven on TC):
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Siege/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Siege/
 //     IsleOfConquestData.h:128-134 (nodes), :354-364 (Generals).
 
 #include "../BattlegroundScript.h"

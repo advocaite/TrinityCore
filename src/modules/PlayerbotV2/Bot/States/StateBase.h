@@ -40,7 +40,7 @@ void DispatchAtMailbox  (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEm
 void DispatchAtAh       (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&);
 void DispatchDecorating (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEmitter&);
 
-// Group threat discipline (State_InCombat.cpp; port of Karrz's ike3-based bots
+// Group threat discipline (State_InCombat.cpp; port of Karrz's wow-1.12
 // MCRaidHoldDamage). True while this NON-TANK grouped bot must not damage
 // `target`: the tank has not built its opening lead yet (bounded wait) or
 // the bot is at/over PlayerbotV2.Threat.MaxRatio of the tank's threat.
@@ -49,6 +49,10 @@ void DispatchDecorating (BotAI&, BotSnapshotView, GroupSnapshotView, BotIntentEm
 // owner's explicit target (the unpulled-mob hold then lapses after 4s).
 bool ThreatHoldActive(BotAI& ai, BotSnapshotView const& s, ObjectGuid target,
                       GroupSnapshotView const* g = nullptr);
+
+// The owner said Stay / Hold and no mob is on this bot: it keeps its spot. Every mover and target picker that would walk the bot
+// (melee chase, skull pick, stack / melee-behind positioning) asks this first; a mob that attacks the bot lifts it.
+bool HeldByOwner(BotAI const& ai, BotSnapshotView const& s);
 
 } // namespace States
 } // namespace Playerbot

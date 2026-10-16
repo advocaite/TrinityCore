@@ -1,4 +1,5 @@
 ﻿#include "BotAI.h"
+#include "TownLife.h"
 #include "BotSnapshotView.h"
 #include "TradeRule.h"
 #include "BotTrade.h"
@@ -34,7 +35,9 @@ void BotAI::set_rally_point(uint32 map, float x, float y, float z)
 
 void BotAI::note_cast_outcome(uint32 code, uint32 spell_id, uint32 now_ms, std::string const& bot_name)
 {
-    if (code == uint32(SPELL_FAILED_NO_AMMO))
+    // A warrior with no thrown weapon equipped fails Throw with EQUIPPED_ITEM, not NO_AMMO: the same "no ranged opener".
+    if (code == uint32(SPELL_FAILED_NO_AMMO) ||
+        (code == uint32(SPELL_FAILED_EQUIPPED_ITEM) && (spell_id == 2764 || spell_id == 2480 || spell_id == 7918 || spell_id == 7919)))
         last_no_ammo_ms_.store(now_ms ? now_ms : 1u, std::memory_order_relaxed);
     // A refused cast started no global cooldown: release the emitter's GCD hold (note_gcd_started).
     // NOT_READY keeps it: the GCD (or a cooldown) the stale snapshot missed is what refused it.
@@ -301,7 +304,7 @@ void BotAI::tick(BotSnapshotView snapshot,
     }
 
     // Pet taunt autocast. Growl / Torment / Suffering on autocast rip mobs
-    // off the group's tank (Karrz's raid change: pet Growl off in groups).
+    // off the group's tank (the owner's raid change: pet Growl off in groups).
     // Off while the bot is grouped with another member who tanks (role Tank,
     // or the coordinator's main tank) and the bot is not a tank itself; the
     // single-target taunts back on when solo or when the bot tanks (an area
@@ -406,7 +409,7 @@ void BotAI::tick(BotSnapshotView snapshot,
     // to detect zones the bot has "settled into" (cumulative >30min) and
     // rebind hearth there. Skip while in BG/dungeon (those are transient
     // and shouldn't accumulate hearth-relevant time). Delta is bounded
-    // by the AI tick interval (typically 200-1000ms).
+    // by the bot tick interval (typically 200-1000ms).
     if (snapshot.is_alive() && !snapshot.in_battleground() && !snapshot.is_in_dungeon())
     {
         const uint32 now_ms = snapshot.published_at_ms();
@@ -497,7 +500,7 @@ void BotAI::tick(BotSnapshotView snapshot,
         // The owner's release order is kept: one that reached the bot between
         // its real death and this edge (a snapshot or more later) must still
         // release it. Only an order from before this death is dropped: it was
-        // left by a revival this AI never observed. The death instant is
+        // left by a revival this bot logic never observed. The death instant is
         // Module::OnDeath's stamp; if that is missing or plainly from an
         // older death, fall back to this edge minus a small slack.
         if (const uint32 order = release_order_ms())
@@ -635,9 +638,11 @@ void BotAI::tick(BotSnapshotView snapshot,
 
 void BotAI::update_dungeon_autopilot_hold(BotSnapshotView s, GroupSnapshotView g)
 {
-    // A companion's party that is not a raid group, inside a raid map (MC 2026-10-06: Karrz's
+    // An owner Stay / Hold: the dungeon autopilot (converge, rejoin, advance, pull) walks nobody who was told to stay.
+    owner_hold_ = holding_position(s.published_at_ms());
+    // A companion's party that is not a raid group, inside a raid map (MC 2026-10-06: the owner's
     // 6-man party), never runs the raid autopilot: the tank advanced and pulled Molten Giants
-    // the party could not survive while Karrz was still forming the raid. It follows its owner
+    // the party could not survive while the owner was still forming the raid. It follows its owner
     // (State_InGroup) and defends (InCombat); converting to a raid group re-arms the run.
     // Playerbot.Behavior.OwnerFollowHold off: no hold, and a follow order left over from before
     // the switch was turned off is released.
@@ -657,7 +662,7 @@ void BotAI::update_dungeon_autopilot_hold(BotSnapshotView s, GroupSnapshotView g
                  : (g.exists() && g.is_raid() ? "the group is a raid group" : "left the raid map / owner's group"));
     }
 
-    // The owner engaging a mob himself no longer releases his follow order or opens an autopilot window (Karrz, Deadmines
+    // The owner engaging a mob himself no longer releases his follow order or opens an autopilot window (playtest, Deadmines
     // 2026-10-10: the tank ran off and pulled everything in the first room once he attacked anything). A suspended bot helps on
     // the owner's target and defends the group (State_InGroup assist chain, the tank included); only an order (attack / pull /
     // resume / aggressive, release_owner_lead) hands the pulls back to the autopilot.
@@ -737,7 +742,7 @@ void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
     // get auto-accepted so owner sparring works without a manual whisper;
     // strangers get auto-declined to avoid being trolled into PvP. The
     // friend flag is resolved on the world thread by the snapshot builder
-    // (Player::GetSocial::HasFriend + group/guild membership), so the AI
+    // (Player::GetSocial::HasFriend + group/guild membership), so the bot logic
     // worker just inspects a single bool here.
     if (s.has_duel_request())
     {
@@ -761,6 +766,9 @@ void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
         }
         else if (s.duel_initiator_is_friend())
             em.duel_accept();
+        else if (!s.duel_initiator_is_real() && !s.has_owner_character() && !s.in_group()
+                 && V2::TownLife::PactHolds(s.bot_id(), s.duel_initiator().GetCounter(), s.published_at_ms()))
+            em.duel_accept();   // another world bot asked for this duel (idle:town_duel)
         else if (polite)
         {
             // Answer a moment after the request (0-2 s, per bot), once; the verdict is stable for a minute so a

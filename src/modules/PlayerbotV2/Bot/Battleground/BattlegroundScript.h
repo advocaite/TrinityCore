@@ -303,7 +303,7 @@ private:
 // nodes can each have an active callout but the same node can't be
 // re-shouted by 40 bots.
 //
-// Threading: callout claims happen on the AI worker thread (one bot
+// Threading: callout claims happen on the bot worker thread (one bot
 // per worker per tick); the registry uses a shared_mutex for read-
 // dominant lookups + an upgrade write when claiming/expiring entries.
 //

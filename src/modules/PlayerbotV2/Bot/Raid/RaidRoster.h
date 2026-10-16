@@ -1,6 +1,6 @@
 // RaidRoster - the raid's tank and healer quota, filled from companions that have no role yet.
 //
-// A 40-player raid needs about one healer in three and four tanks, and Karrz's companions are mostly paladins and druids
+// A 40-player raid needs about one healer in three and four tanks, and the owner's companions are mostly paladins and druids
 // whose role was never set (OwnerRegistry::DeclaredRole == Unknown). PlanRaidRoles picks which of those take a healer or
 // tank role so the raid has its quota; a role anyone gave (the owner's /setrole, a stored inference) is never changed.
 // Pure: no game types, tested in tests/game/ClassicRaidRoster.cpp.

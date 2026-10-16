@@ -12,7 +12,7 @@
 //   * Initialize() runs on the world thread at boot, takes the write lock,
 //     fills the immutable vectors, then publishes them with a release store on
 //     `_initialized`.
-//   * GetNearestRepairVendor() is a STRICT PURE READER on the AI worker hot
+//   * GetNearestRepairVendor() is a STRICT PURE READER on the bot worker hot
 //     path: acquire-load the `_initialized` fence, take a shared_lock, scan the
 //     bot's same-map immutable vector, return a copy. NO mutable / lazy / memo
 //     state, NO navmesh, NO DB. It is NEVER called from the snapshot Build path

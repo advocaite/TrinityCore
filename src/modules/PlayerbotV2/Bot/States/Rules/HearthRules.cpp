@@ -28,6 +28,7 @@ bool WalkInnkeeperGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     const uint32 zid = s.zone_id();
     if (zid == 0) return false;
     if (ai.hearth_zone() == zid) return false;
+    if (s.has_actionable_quest()) return false;   // quest work in reach wins; the quest walkers would pull the bot back over the 80 y line
     return ai.ms_in_zone(zid) >= ::Playerbot::BotAI::kHearthRebindThresholdMs;
 }
 

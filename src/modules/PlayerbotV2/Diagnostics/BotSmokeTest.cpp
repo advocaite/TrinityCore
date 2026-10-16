@@ -261,7 +261,7 @@ void RunWorker(std::vector<BotId> bot_ids, LaunchOptions opts,
     }
 
     // 3c) Each bot's intent history must have at least min_intents entries.
-    //     A zero ring means the AI never fired a single intent in 60s — that's
+    //     A zero ring means the bot logic never fired a single intent in 60s — that's
     //     a regression in BotAI, the snapshot publisher, or the intent
     //     executor. Distinct from "bots that haven't spawned yet" because we
     //     already gated on AllDone above.
@@ -291,9 +291,9 @@ void RunWorker(std::vector<BotId> bot_ids, LaunchOptions opts,
     }
 
     // 3d) PerfCounters intents_dropped_total must not have grown. A drop
-    //     is "AI worker produced an intent but per-bot IntentQueue was full"
+    //     is "bot worker produced an intent but per-bot IntentQueue was full"
     //     — sustained drops mean the world-thread executor is starving and
-    //     the bot is effectively desynced from its own AI.
+    //     the bot is effectively desynced from its own bot logic.
     {
         SmokeTestAssertion as;
         as.name = "no_dropped_intents";

@@ -7,7 +7,7 @@
 //   src/server/game/Miscellaneous/SharedDefines.h:3195-3196
 //     NEW_FLAG=36, NEW_FLAG_DROP=37
 // V1 coords:
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/CTF/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/CTF/
 //     TwinPeaksData.h:80-89 (flag spawns), :165, :187 (defender posts)
 
 #include "../BattlegroundScript.h"

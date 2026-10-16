@@ -364,7 +364,7 @@ void BgTeamCoordinator::PlanCtf(TeamPlanContext& ctx)
             ctx.members[pick].assigned = true;
         }
     }
-    // -- WSG zone roles (Karrz 2026-10-08: not just a straight lane between the bases) ---------------------------------------------
+    // -- WSG zone roles (playtest 2026-10-08: not just a straight lane between the bases) ---------------------------------------------
     // Free fighters (after carrier, runner, escorts, hunters) are split over the map: mid skirmishers at the tunnel junction, a
     // camp at the ENEMY graveyard (they take the fight to the respawn point and make the return trip hard), and a guard at our OWN
     // graveyard. The slot a bot gets rotates every few minutes of match time, so the same bot does not hold one spot all game and no
@@ -494,7 +494,7 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
                      [](Demand const& a, Demand const& b)
                      { return a.emergency > b.emergency; });
 
-    // AV open-field brawl share (Karrz 2026-10-08), decided here so it can shrink the garrison budget and
+    // AV open-field brawl share (playtest 2026-10-08), decided here so it can shrink the garrison budget and
     // used further down to send the bots (see "AV open-field brawl"). Old Classic AV: a big part of each side
     // farmed kills in the valley while the rest took towers, so games lasted. The share is a random 25-55%
     // per match and team (hash of instance + team: stable for the whole match, no RNG state) and follows the
@@ -506,7 +506,7 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
     for (auto const& m : ctx.members)
         if (m.alive && !m.is_carrier) ++alive_total;
     uint64 const mid_key = (uint64(ctx.instance_id) << 2) | uint64(ctx.team);
-    // Karrz 2026-10-11: the valley brawl is OFF. Bots piled up idle in AV, and he asked to drop the fight in the middle in case it was the
+    // playtest 2026-10-11: the valley brawl is OFF. Bots piled up idle in AV, and he asked to drop the fight in the middle in case it was the
     // cause; AV bots now play the way ike3 / mod-playerbots do (towers, graveyards, captain, general, mines). Flip to true to bring it back.
     constexpr bool kAvValleyBrawl = false;
     if (kAvValleyBrawl && ctx.type_id == 1 && PosSet(ctx.fight_x, ctx.fight_y) && !all_in && !ctx.endgame_unconditional &&
@@ -729,7 +729,7 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
             if (m.alive && Dist2(m.x, m.y, ctx.endgame_x, ctx.endgame_y) < 200.f * 200.f) ++friends_near_boss;
     bool const general_ok = BgAvPlan::GeneralPushOk(enemy_towers_up, enemy_towers_razed, own_final_gy, friends_near_boss);
 
-    // -- AV open-field brawl (Karrz 2026-10-08) -------------------------------
+    // -- AV open-field brawl (playtest 2026-10-08) -------------------------------
     // Send the brawlers (share decided above) to the fight zone as ordinary AttackNode orders. The brawl ends once
     // the push for the enemy captain/general is on (a lead, a deficit, low enemy reinforcements), so matches end.
     // The brawl also goes on while the general push is held back by standing enemy towers and no captain is left to go for.
@@ -856,7 +856,7 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
             { best_cost = cost; tx = n.x; ty = n.y; tz = n.z; }
         }
         // Node-race split (WSG-free maps with 4+ nodes, i.e. AB/Gilneas style): the old single concentrated squad sent the whole
-        // team Stables -> Blacksmith across the river and nobody took the Lumber Mill, Farm or Mine (Karrz, AB test 2026-10-08).
+        // team Stables -> Blacksmith across the river and nobody took the Lumber Mill, Farm or Mine (playtest, AB test 2026-10-08).
         // Spread the free attackers over up to four takeable nodes in proportion to the node weight (script priority + 2, so the
         // Blacksmith pivot gets the biggest group), keep about one in eight unordered as roamers. Held nodes keep their garrison
         // from the defense pass above; a node that is lost or attacked turns up in the next plan and is re-assigned (the sticky
@@ -885,7 +885,7 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
         }
         if (split_cands.size() >= 2 && ctx.nodes.size() >= 4)
         {
-            // Variety (Karrz: no two matches alike): the focus rotates. Every 4 minutes of match time, per match, each candidate's
+            // Variety (the owner: no two matches alike): the focus rotates. Every 4 minutes of match time, per match, each candidate's
             // cost and weight are nudged by a hash of its position, so the main squad is not always on the same pivot node and a
             // second node regularly gets a real group.
             uint32 const var_epoch = ctx.in_progress_ms / (4u * 60u * 1000u) + ctx.instance_id * 7u;
@@ -932,10 +932,10 @@ void BgTeamCoordinator::PlanNodeRace(TeamPlanContext& ctx)
                     ctx.members[pick].assigned = true;
                 }
             }
-            // Road skirmishers (Karrz: fights on the roads between the nodes, not only at the banners). About a fifth of the bots still
+            // Road skirmishers (the owner: fights on the roads between the nodes, not only at the banners). About a fifth of the bots still
             // free go to a point midway between two of the contested nodes, picked by a hash that rotates every 3 minutes, and fight
             // whatever they meet on the way and there. Their orders are AttackNode at the road point; the 40 y engage does the rest.
-            if (split_cands.size() >= 2 && !av)   // AV: no road skirmishers (ike3 / mod-playerbots have none; Karrz 2026-10-11)
+            if (split_cands.size() >= 2 && !av)   // AV: no road skirmishers (ike3 / mod-playerbots have none; playtest 2026-10-11)
             {
                 int left = 0;
                 for (auto const& m : ctx.members)
@@ -1092,7 +1092,7 @@ void BgTeamCoordinator::Update(uint32 now_ms)
         return;
     last_plan_ms_ = now_ms;
 
-    if (!sConfigMgr->GetBoolDefault("Playerbot.Bg.Coordinator.Enable", true))
+    if (!sConfigMgr->GetBoolDefault("Playerbot.Bg.Coordinator.Enable", true, true))
     {
         if (!orders_.empty()) orders_.clear();
         last_dump_ = "coordinator disabled (Playerbot.Bg.Coordinator.Enable=0)";
@@ -1112,6 +1112,8 @@ void BgTeamCoordinator::Update(uint32 now_ms)
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
     {
         if (!e.ai) return;
+        // A bot stopped with "bgrun stop" (or not armed) never runs an order (BgDispatch returns at once), so it gets no quota slot.
+        if (!e.ai->bg_active()) return;
         Player* p = ObjectAccessor::FindConnectedPlayer(
                         ObjectGuid::Create<HighGuid::Player>(id));
         if (!p) return;
@@ -1152,13 +1154,13 @@ void BgTeamCoordinator::Update(uint32 now_ms)
         const uint16 resolved_type_id = ref->bg.current_type_id;
         // Advice is computed HERE, on the world thread, from the immutable
         // reference snapshot. Do NOT borrow a member BotAI's BgAdviceCache:
-        // that cache is OWNED BY THE AI WORKER THREAD — BgDispatch
+        // that cache is OWNED BY THE bot logic WORKER THREAD — BgDispatch
         // reassigns its heap vectors every ≤2s, so reading it here could
         // iterate freed buffers (use-after-free; adversarial review
         // 2026-06-10). Scripts are stateless and registered once at boot;
         // GetAdvice on a snapshot view is thread-safe and costs one call
         // per (instance, team) per 750ms plan — negligible next to the
-        // per-bot per-tick churn the AI-side cache exists to avoid.
+        // per-bot per-tick churn the bot logic-side cache exists to avoid.
         BattlegroundAdvice const adv =
             Services::Battlegrounds().GetAdvice(BotSnapshotView(*ref));
 

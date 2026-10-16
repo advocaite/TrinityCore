@@ -19,6 +19,8 @@
 #include <algorithm>
 #include "Travel/UnifiedTravelGraph.h"
 #include "SharedDefines.h"
+#include "Bot/ThreatDiscipline.h"   // ThreatOpeningLead (passive, tank first)
+#include "Bot/ClassicUpkeep.h"      // IsEating / IsDrinking (stand to defend)
 #include "Log.h"
 #include <cmath>
 #include <limits>
@@ -314,17 +316,19 @@ void DispatchInGroup(BotAI& ai,
     {
         if (!ai.ready_check_acked())
         {
-            // Real information (Karrz's ReadyCheckAction): low health, a mana
-            // user low on mana or broken gear answers not ready and says why
+            // Real information (the owner's ReadyCheckAction): badly low health, a mana
+            // user badly low on mana or broken gear answers not ready and says why
             // in party chat; the out-of-combat recovery rules then drink / eat
             // / repair. The check is advisory, nothing else waits on the answer.
+            // A bot a little under (just arrived, a buff cast) is ready: the whole raid answering
+            // "not ready" after a call-up read as broken (playtest 2026-10-13).
             bool ready = true;
             char const* why = nullptr;
             if (Services::Config().behavior_ready_check_info())
             {
-                if (snapshot.hp_pct() < 60)
+                if (snapshot.hp_pct() < 35)
                 { ready = false; why = "low hp, eating first"; }
-                else if (snapshot.max_power(POWER_MANA) > 0 && snapshot.power_pct(POWER_MANA) < 60)
+                else if (snapshot.max_power(POWER_MANA) > 0 && snapshot.power_pct(POWER_MANA) < 35)
                 { ready = false; why = "low on mana, drinking first"; }
                 else if (snapshot.lowest_equipped_durability_pct() < 15)
                 { ready = false; why = "my gear is broken, need a repair"; }
@@ -362,10 +366,17 @@ void DispatchInGroup(BotAI& ai,
     // re-marking mid-fight thrashes assist targets. Trigger only on the
     // leader's tick; the published skull propagates to all bot members
     // through the next group snapshot.
-    // In a raid with Playerbot.Behavior.TankMarkers on, the raid coordinator marks the tanks' mobs (the main
-    // tank's mob is the skull, PveGroupCoordinator::PlanRaidTanks): no second auto-skull from the leader.
+    // In a raid with Playerbot.Behavior.TankMarkers on, the raid coordinator marks the tanks' mobs with the symbols
+    // 0-5 (PveGroupCoordinator::PlanRaidTanks never uses skull or cross, those stay the owner's kill call): no second
+    // auto-skull from the leader.
+    // A human in the group owns the marks (playtest 2026-10-15): the leader bot never calls a skull over his, so only an
+    // all-bot group gets the auto-skull.
+    bool group_has_human = false;
+    if (auto const* mems = group.members())
+        for (auto const& m : *mems)
+            if (m.online && !m.is_bot) { group_has_human = true; break; }
     if (snapshot.in_combat() && !group.leader().IsEmpty() &&
-        group.leader() == snapshot.raw().guid &&
+        group.leader() == snapshot.raw().guid && !group_has_human &&
         !(group.is_raid() && Services::Config().behavior_tank_markers()))
     {
         const ObjectGuid current_skull = group.skull_target();
@@ -458,11 +469,7 @@ void DispatchInGroup(BotAI& ai,
              group.leader() == snapshot.raw().guid)
     {
         const ObjectGuid current_skull = group.skull_target();
-        bool human = false;
-        if (auto const* mems = group.members())
-            for (auto const& m : *mems)
-                if (m.online && !m.is_bot) { human = true; break; }
-        if (!current_skull.IsEmpty() && !human)
+        if (!current_skull.IsEmpty() && !group_has_human)
             for (auto const& u : snapshot.raw().combat.nearby_enemies)
             {
                 if (u.guid != current_skull) continue;
@@ -487,7 +494,7 @@ void DispatchInGroup(BotAI& ai,
     // already running the APL.
     if (ai.state() == BotState::InCombat) return;
 
-    // A companion follows its owner, the human it came with, even when a bot holds the lead (Karrz's GetGroupMaster).
+    // A companion follows its owner, the human it came with, even when a bot holds the lead (the owner's GetGroupMaster).
     // While the owner is offline or on another map (a taxi, a zone-in) it falls back to the group's leader.
     ObjectGuid leader = group.leader();
     auto const* members = group.members();
@@ -670,48 +677,36 @@ void DispatchInGroup(BotAI& ai,
     // Tanks pick their own targets via threat; they ignore assist but DO
     // honor skull (so they can pull/taunt the focus mob).
     //
-    // Aggression personality gates whether the bot proactively engages:
-    //   - Passive: never assist on its own. Owner-pinned focus_target still
-    //     wins (focus is an explicit owner directive, not assist), and the
-    //     bot still defends itself via the InCombat dispatch when attacked.
-    //     Useful for "follow but don't fight" RP / escort scenarios.
-    //   - Defensive: assist only when the group is taking attrition damage
-    //     (any same-map member <50% HP). Skips skull-mark assist and the
-    //     leader-victim pile-on when the group looks healthy — Defensive
-    //     bots conserve resources and let the tank manage trash. Owner
-    //     focus + dropping below the wound threshold still engages.
-    //   - Normal / Aggressive: full assist chain (focus → skull → leader
-    //     victim → any in-combat member's victim). Identical for now;
-    //     Aggressive is reserved for future opportunistic-pulling rules.
+    // Full assist chain: focus, skull, leader victim, any in-combat member's victim. The owner's stance and orders gate it, not
+    // the bot's personality.
     // Told to stay: keep the spot rather than run to the group's target, as a Passive bot would (it still fights back
     // when attacked).
-    const bool staying = ai.is_manual_mode(snapshot.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Stay;
-    const Aggression agg = staying ? Aggression::Passive : ai.personality().aggression;
+    const bool staying = ai.holding_position(snapshot.published_at_ms());   // Stay or Hold ("defensive": fights only what attacks)
+    // The bot's random personality does not decide who joins a fight: the owner's stance and orders are the only input here.
     // Owner "passive": no assist on the owner's, the skull's or a member's target; only a mob already on a group member is engaged
     // (the defend-member step below). Stance Passive, or Auto in an instance a human leads (BotAI::passive_now); an attack / pull
     // order opens a 15 s window in which it fights.
     const bool owner_passive = ai.passive_now(snapshot.is_in_instance() && !group.leader_is_bot());
-    const bool has_focus_pin = !staying && !owner_passive && !ai.focus_target().IsEmpty();
-    bool group_is_wounded = false;
-    if (agg == Aggression::Defensive)
+    // A Passive bot inside an order window (every Attack / Pull / assist order opens 15 s of it) joins the owner's own target and
+    // nothing wider: no skull, no kill focus, no other member's victim, no creature outside its scan or far from the owner (the owner,
+    // Deadmines 2026-10-15: "the bots were attacking willy-nilly, hitting things that weren't close to me"; with Attack pressed every few
+    // seconds the window never closed and the whole assist chain ran, the tank opening on mobs 32-43 y away).
+    const bool window_limited = !owner_passive &&
+        (ai.owner_stance() == BotAI::OwnerStance::Passive ||
+         (ai.owner_stance() == BotAI::OwnerStance::Auto && snapshot.is_in_instance() && !group.leader_is_bot()));
+    // A pet never starts a pull. PetAttack (the bot's own assist) leaves the pet Aggressive for good, and an aggressive pet
+    // pulls every mob around it while the group stands still (Deadmines, 2026-10-13). Between fights the pet goes back to
+    // Defensive (it fights what attacks its owner or itself), and to Passive when the group is told to stay or is passive.
+    // In a fight the bot's own attack orders move it again.
+    if (!snapshot.in_combat() && !snapshot.recently_in_combat(3000) && snapshot.has_pet())
     {
-        for (auto const& m : *members)
-        {
-            if (!m.online || m.map_id != snapshot.map_id() || m.hp <= 0) continue;
-            if (m.max_hp > 0 && (int64(m.hp) * 100) < (int64(m.max_hp) * 50))
-            { group_is_wounded = true; break; }
-        }
+        uint8 const want = (staying || owner_passive) ? 0 : 1;
+        uint8 const have = snapshot.pet_react();
+        if (have != want && (want == 0 || have == 2))
+            emit.pet_set_react_state(want);
     }
-    // Combat-in-progress override: if ANY same-map group member is
-    // currently in combat, every non-Passive bot assists. This is a
-    // symptom-driven signal — we *see* combat happening — and is more
-    // reliable than the dungeon-active flag (which can be inconsistent
-    // across the squad when `;all run` doesn't land on every bot, or
-    // when the squad is fighting world-content without the dungeon
-    // mode set). Real-player intent: "the group is fighting, I help."
-    // Defensive personality stops being "wait for HP to drop below 50%"
-    // and becomes "join the fight already in progress." Passive stays
-    // opted out (owner explicitly told it to never assist).
+    // Combat-in-progress signal: ANY same-map group member currently in combat. Symptom-driven and more reliable than the
+    // dungeon-active flag (which can be inconsistent across the squad when `;all run` doesn't land on every bot).
     bool any_member_in_combat = false;
     for (auto const& m : *members)
     {
@@ -720,12 +715,10 @@ void DispatchInGroup(BotAI& ai,
         if (m.in_combat) { any_member_in_combat = true; break; }
     }
     const bool engage_allowed =
-        owner_passive || ai.owner_stance() == BotAI::OwnerStance::Aggressive ||
-        (agg != Aggression::Passive)
-            ? (agg != Aggression::Defensive || group_is_wounded ||
-               has_focus_pin || any_member_in_combat)
-            : has_focus_pin;
-    if (engage_allowed)
+        owner_passive || ai.owner_stance() == BotAI::OwnerStance::Aggressive || !staying;
+    // Not in a battleground: BgDispatch (State_Idle) and the in-combat BG layer own movement and targets there. This chain trusts
+    // creature victims at any range, so a teammate's fight with a mob pulled a bot off its ordered march (AV tower runs).
+    if (engage_allowed && !snapshot.in_battleground())
     {
     if (snapshot.victim().IsEmpty())
     {
@@ -743,9 +736,7 @@ void DispatchInGroup(BotAI& ai,
                     if (u.guid == focus && u.hp > 0) { assist_target = focus; break; }
         }
         // Skull mark wins for everyone (after focus). Only use it if it's
-        // actually nearby — out-of-vision skulls are stale. Defensive bots
-        // skip skull pile-ons (the tank can manage their own kill order)
-        // unless the group is already wounded enough to need extra DPS.
+        // actually nearby — out-of-vision skulls are stale.
         //
         // CRITICAL: non-tanks must wait for the tank (or another group
         // member) to be engaged with the skull before opening on it.
@@ -755,8 +746,7 @@ void DispatchInGroup(BotAI& ai,
         // should be pulling it). Observed 2026-05-15: Defensive
         // warlock attacked skull immediately on mark, before tank
         // had any threat. Causes loss-of-aggro wipes.
-        if (assist_target.IsEmpty() && !owner_passive &&
-            (agg != Aggression::Defensive || group_is_wounded))
+        if (assist_target.IsEmpty() && !owner_passive && !window_limited)
         {
             if (ObjectGuid skull = group.skull_target(); !skull.IsEmpty())
             {
@@ -800,7 +790,7 @@ void DispatchInGroup(BotAI& ai,
         // It names only mobs already fighting the group, so it outranks the
         // leader's victim: a raid DPS joins the coordinated target instead
         // of whatever the (often human, non-tank) leader is hitting.
-        if (assist_target.IsEmpty() && !owner_passive && ai.effective_role(snapshot) != Role::Tank)
+        if (assist_target.IsEmpty() && !owner_passive && !window_limited && ai.effective_role(snapshot) != Role::Tank)
         {
             auto const& kf = snapshot.raw().pve_order;
             if (kf.active && !kf.kill_focus.IsEmpty())
@@ -835,13 +825,30 @@ void DispatchInGroup(BotAI& ai,
                 // wedge class this guard exists for involved Player/Pet
                 // guids only, and start_attack's IsValidAttackTarget gate
                 // refuses anything that slips through at engage time.
-                return v.IsCreature();
+                // In a raid only what the scan holds: a victim outside the scan has no threat figures (ThreatHold reads none and lets it through), so a
+                // raid DPS 87 y out at the lair's cliff edge opened on Onyxia the moment the tank was ordered, before any hold applied
+                // (onyxia_full n57 run 1: Mcshadb first, the lair whelps joined the pull at 12 s). It opens once the mob is in its scan.
+                return v.IsCreature() && !snapshot.is_in_raid();
             };
-            if (resolves_hostile(leader_member->victim))
+            if (window_limited)
+            {
+                // The owner's own target only, in the bot's scan and within 25 y of the owner.
+                for (auto const& u : snapshot.raw().combat.nearby_enemies)
+                {
+                    if (u.guid != leader_member->victim || u.hp <= 0) continue;
+                    float const lx = u.x - leader_member->x, ly = u.y - leader_member->y;
+                    if (lx * lx + ly * ly <= 25.f * 25.f) assist_target = u.guid;
+                    break;
+                }
+            }
+            // Only members on this bot's own map: a raider out of the instance (a corpse run, a graveyard) fights what it meets there, and
+            // copying it set the stray bots fighting each other's mobs in Eastvale while the raid lay dead in Onyxia's Lair, so a member of
+            // the group stayed in combat and the owner could not release (n58 live 2026-10-15 11:28, Amastorion).
+            else if (leader_member->map_id == snapshot.map_id() && resolves_hostile(leader_member->victim))
                 assist_target = leader_member->victim;
-            if (assist_target.IsEmpty())
+            if (assist_target.IsEmpty() && !window_limited)
                 for (auto const& m : *members)
-                    if (m.online && m.in_combat && resolves_hostile(m.victim))
+                    if (m.online && m.map_id == snapshot.map_id() && m.in_combat && resolves_hostile(m.victim))
                     { assist_target = m.victim; break; }
         }
         // Defend-member engage (ALL roles, tanks very much included): a mob
@@ -864,10 +871,22 @@ void DispatchInGroup(BotAI& ai,
             {
                 if (u.hp <= 0 || u.victim.IsEmpty() || !u.in_los) continue;
                 bool attacks_member = (u.victim == snapshot.raw().guid);
+                GroupMemberSummary const* victim_member = nullptr;
                 if (!attacks_member)
                     for (auto const& m : *members)
-                        if (m.guid == u.victim) { attacks_member = true; break; }
+                        if (m.guid == u.victim) { attacks_member = true; victim_member = &m; break; }
                 if (!attacks_member) continue;
+                // Passive, tank first (playtest 2026-10-14): a mob on another member is the tank's to pick up; a damage bot joins once the
+                // tank has its opening lead, or at once when the member it is on is under 70 % (a healer waits for nothing here: it heals).
+                if (owner_passive && victim_member && ai.effective_role(snapshot) == Role::Dps && !u.is_player)
+                    if (GroupMemberSummary const* gt = group.tank();
+                        gt && gt->is_alive && gt->online && gt->map_id == snapshot.map_id() && gt->guid != snapshot.raw().guid &&
+                        victim_member->hp_pct() >= 70 &&
+                        // Bounded: the threat hold releases on the tank's lead or after its opening wait (a party's 6 s from the tank's first
+                        // damage), so a tank that never reaches the lead (Deadmines 2026-10-15: Disc on the Overseer, the damage bots
+                        // stood for the whole fight) does not hold the group out for good.
+                        ThreatHoldActive(ai, snapshot, u.guid, &group))
+                        continue;
                 // A spare duty tank (the plan gave it tank duty but the main tank holds the pull) stays near the
                 // pack until a mob hits it itself or the plan assigns it one; it does not run at every mob that
                 // hits a member before the fight has started.
@@ -877,7 +896,30 @@ void DispatchInGroup(BotAI& ai,
                 if (dsq < best_dsq) { best_dsq = dsq; assist_target = u.guid; }
             }
         }
+        // Defending stands a bot up (playtest, Deadmines 2026-10-15: "the mage is getting attacked and the other three guys are just
+        // sitting drinking"). A meal or drink is only broken by the bot's own damage or by standing, so a seated bot whose group
+        // member has a mob on it gets to its feet at once, ahead of the tank-first wait and whether or not it has the mob in sight.
+        if ((Classic::IsEating(snapshot) || Classic::IsDrinking(snapshot)) && snapshot.is_alive())
+        {
+            float ex, ey, ez; snapshot.position(ex, ey, ez);
+            for (auto const& u : snapshot.raw().combat.nearby_enemies)
+            {
+                if (u.hp <= 0 || u.victim.IsEmpty()) continue;
+                bool on_member = (u.victim == snapshot.raw().guid);
+                if (!on_member)
+                    for (auto const& m : *members)
+                        if (m.guid == u.victim && m.online && m.is_alive) { on_member = true; break; }
+                if (!on_member) continue;
+                float const edx = u.x - ex, edy = u.y - ey;
+                if (edx * edx + edy * edy > 40.f * 40.f) continue;
+                emit.stand();
+                ai.set_last_rule_fired("ingroup:stand_to_defend");
+                return;
+            }
+        }
         // Aggressive stance: any hostile close to the owner is attacked, whether or not anyone is fighting yet.
+        // In a party the owner told it to go: the tank-first hold below does not cap this pick (a raid keeps it).
+        bool aggressive_pick = false;
         if (assist_target.IsEmpty() && ai.owner_stance() == BotAI::OwnerStance::Aggressive && !group.leader_is_bot())
         {
             float best_dsq = std::numeric_limits<float>::max();
@@ -889,24 +931,40 @@ void DispatchInGroup(BotAI& ai,
                 const float d2 = ox * ox + oy * oy;
                 if (d2 <= kR2 && d2 < best_dsq) { best_dsq = d2; assist_target = u.guid; }
             }
+            aggressive_pick = !assist_target.IsEmpty() && !snapshot.is_in_raid();
         }
         // Threat discipline (State_InCombat.cpp ThreatHoldActive): a non-tank
         // does not open on the tank's mob until the tank has its opening lead.
         if (!assist_target.IsEmpty() && assist_target != snapshot.victim() &&
-            !ThreatHoldActive(ai, snapshot, assist_target, &group))
+            (aggressive_pick || !ThreatHoldActive(ai, snapshot, assist_target, &group)))
         {
             emit.start_attack(assist_target);
             ai.set_last_rule_fired("ingroup:assist");
+            // Why a bot opened on its own (playtest, Deadmines 2026-10-15: "they run in as if not passive"): the stance, the order window
+            // and the mob's state at the moment of the opener, once a second per bot at most.
+            static std::atomic<uint32> s_assist_why_ms{ 0 };
+            uint32 const now_aw = snapshot.published_at_ms();
+            uint32 last_aw = s_assist_why_ms.load(std::memory_order_relaxed);
+            if (now_aw - last_aw >= 500u && s_assist_why_ms.compare_exchange_strong(last_aw, now_aw))
+            {
+                NearbyUnit const* au = nullptr;
+                for (auto const& u : snapshot.raw().combat.nearby_enemies)
+                    if (u.guid == assist_target) { au = &u; break; }
+                float ax = 0.f, ay = 0.f, az = 0.f; snapshot.position(ax, ay, az);
+                float const ad = au ? std::sqrt((au->x - ax) * (au->x - ax) + (au->y - ay) * (au->y - ay)) : -1.f;
+                TC_LOG_INFO("playerbot.v2",
+                    "[assist_why] {} opens on entry {} ({:.0f}y): stance {} passive_now {} order_window {} follow_order {} mob in_combat {} mob_victim_kind {} tank_threat {}",
+                    snapshot.name(), au ? au->entry : 0u, ad, int(ai.owner_stance()), owner_passive ? 1 : 0,
+                    ai.owner_order_window_open() ? 1 : 0, ai.owner_follow_order() ? 1 : 0, au && au->unit_in_combat ? 1 : 0,
+                    au ? int(au->victim_kind) : -1, au ? au->tank_threat : -1);
+            }
         }
     }
     else
     {
         // Bot already has a victim. Honor focus pivots first, then skull
         // pivots. Focus is owner-pinned and outranks the raid leader's
-        // skull mark; both override the bot's pre-engaged target. Defensive
-        // bots still pivot off focus (owner directive) but skip skull
-        // pivots when the group is healthy — same conserve-resource logic
-        // as the open-engage path.
+        // skull mark; both override the bot's pre-engaged target.
         if (ObjectGuid focus = ai.focus_target();
             !focus.IsEmpty() && focus != snapshot.victim())
         {
@@ -918,7 +976,6 @@ void DispatchInGroup(BotAI& ai,
                     return;
                 }
         }
-        if (agg != Aggression::Defensive || group_is_wounded)
         {
             if (ObjectGuid skull = group.skull_target();
                 !skull.IsEmpty() && skull != snapshot.victim())
@@ -993,8 +1050,11 @@ void DispatchInGroup(BotAI& ai,
     // bot tell). ComputeFormationOffset yields the per-slot
     // distance+angle for the owner-configured formation; Free/slot-0
     // collapses to a plain follow so unconfigured squads are unchanged.
+    // One formation system at a time: with the owner formation on (Playerbot.Behavior.Formation) the slot ring below is the
+    // formation, and the plain follow is the rest; the legacy fixed 12 y circle / 8 y spread would otherwise take over the moment
+    // any member fights and send the group out of the owner's heal / buff range.
     FormationOffset formation_offset = ComputeFormationOffset(
-        ai.effective_formation_type(snapshot.in_combat()),
+        Services::Config().behavior_formation() ? FormationType::Free : ai.effective_formation_type(snapshot.in_combat()),
         ai.formation_slot(),
         kFollowDistance);
     // Owner formation (circle / arrow / line / column + spacing preset, Playerbot.Behavior.Formation): a stable
@@ -1103,6 +1163,13 @@ void DispatchInGroup(BotAI& ai,
                                dist < kDetourMaxRange;
     // Owner said stay/hold: keep the spot until follow/resume.
     const bool holding_position = ai.holding_position(snapshot.published_at_ms());
+    // An Attack / Pull walk to the ordered mob, or a pull back's approach and retreat, is the idle rules' movement (this layer runs
+    // after them): a follow or slot move here would walk the tank back to the owner mid-pull. Bounded to 45 y so a bot that is
+    // far from the owner still rejoins.
+    const bool order_owns_movement =
+        (ai.pull_back_active() ||
+         (ai.is_manual_mode(snapshot.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Engage)) &&
+        dist < kDetourMaxRange;
     bool const refollow = ai.take_formation_refollow();
     // Owner formation: the bot's goal is its SLOT, recomputed every tick from the owner's live position and facing,
     // not "within the recall slack of the owner" (a slot ring wider than the slack, or any spot inside the ring,
@@ -1115,7 +1182,7 @@ void DispatchInGroup(BotAI& ai,
         auto& ft = ai.formation_track();
         constexpr float kArriveYd = 1.5f, kStartYd = 2.5f, kRetargetYd = 2.0f;
         constexpr uint32 kMinReissueMs = 500, kStuckMs = 3000, kFallbackMs = 8000;
-        bool const gated = in_active_bg || dungeon_run_owns_movement || detour_leased || holding_position || snapshot.is_rooted();
+        bool const gated = in_active_bg || dungeon_run_owns_movement || detour_leased || holding_position || order_owns_movement || snapshot.is_rooted();
         float const slot_dist = DistanceXY(bx, by, slot_x, slot_y);
         bool const moving = snapshot.raw().movement.is_moving;
         // 0 = none, 1 = move, 2 = hold, 3 = fallback
@@ -1172,7 +1239,7 @@ void DispatchInGroup(BotAI& ai,
         ai.formation_track().dest_valid = false;
 
     if (!formation_slot_active &&
-        !in_active_bg && !dungeon_run_owns_movement && !detour_leased && !holding_position &&
+        !in_active_bg && !dungeon_run_owns_movement && !detour_leased && !holding_position && !order_owns_movement &&
         (dist > kRecallSlack || (refollow && dist > 1.5f)) && !snapshot.is_rooted())
     {
         // Follow uses MotionMaster MoveFollow, which silently re-emits forever

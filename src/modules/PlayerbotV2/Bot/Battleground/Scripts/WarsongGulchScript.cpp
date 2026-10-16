@@ -10,7 +10,7 @@
 //     :3195    — GAMEOBJECT_TYPE_NEW_FLAG = 36
 //     :3196    — GAMEOBJECT_TYPE_NEW_FLAG_DROP = 37
 // V1 coords:
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/CTF/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/CTF/
 //     WarsongGulchData.h:38-47 (flag spawns), :123-149 (defender posts)
 
 #include "../BattlegroundScript.h"
@@ -40,8 +40,8 @@ public:
         a.role_by_slot = {
             BgRole::FlagCarrier,
             BgRole::FCEscort,
-            BgRole::Defender,     // flag room guards: two, each at its own post beside the stand (not on it: Karrz, two bots camped on
-            BgRole::Defender,     // the stand). Ported from the ike3 bots' two defender posts (the ike3-based playerbot code)
+            BgRole::Defender,     // flag room guards: two, each at its own post beside the stand (not on it: the owner, two bots camped on
+            BgRole::Defender,     // the stand). Ported from the ike3 bots' two defender posts (Karrz1/wow-1.12 raid10-revamp bcc8b9f)
             BgRole::Roamer,
             BgRole::Roamer,
             BgRole::Attacker,

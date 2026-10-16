@@ -10,7 +10,7 @@ Public License version 2 (`COPYING` at the repository root), the same terms as T
   module layout and most of the bot brain, travel and fleet code come from there.
 - **Classic (1.12) adaptation, raid, battleground, world-population and auction house work**
   was added for WoW Forever by Karrz (Karrz1).
-- **ike3 / cmangos playerbots** (Ike's mangosbot for cMaNGOS; GPL-2.0): several behaviours
+- **ike3 / cmangos playerbots** (ike3's mangosbot, https://github.com/ike3/mangosbot-bots, for cMaNGOS; GPL-2.0): several behaviours
   (raid brain, speech lines, rpg, battleground paths and objectives, travel) were ported from a
   VMaNGOS-based bot tree that derives from ike3 bots, VMaNGOS and cMaNGOS (all GPL-2.0).
   Source comments name the routines they follow.

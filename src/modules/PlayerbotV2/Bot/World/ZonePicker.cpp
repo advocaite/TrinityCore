@@ -364,6 +364,8 @@ constexpr uint16 kVanillaCapitals[] = { 1519, 1537, 1657, 1637, 1638, 1497 };
 
 bool VanillaZoneLevelRange(uint32 zone_id, uint8& lo, uint8& hi)
 {
+    // The ground outside Onyxia's Lair is an area of its own (2159): it is the Dustwallow Marsh entrance, not a town without levels.
+    if (zone_id == 2159) zone_id = 15;
     for (VanillaZone const& z : kVanillaZones)
     {
         if (z.zone != zone_id) continue;

@@ -48,7 +48,7 @@ struct BotRegistryEntry
     size_t                          intent_history_head = 0;   // next write slot
     size_t                          intent_history_size = 0;   // [0, kIntentHistoryCap]
     mutable std::mutex              intent_history_mtx;
-    // Corpses queued for looting (FIFO). Drained by State_Idle on the AI
+    // Corpses queued for looting (FIFO). Drained by State_Idle on the bot logic
     // worker thread; written by V2::Module::OnDeath on the world thread.
     // The mutex bridges those threads — without it the deque races (both
     // sides do push_back/pop_front). Bounded by kPendingLootMax so a

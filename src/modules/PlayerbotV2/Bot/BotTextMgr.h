@@ -1,7 +1,7 @@
 // BotTextMgr - the bots' speech lines, carried over from Karrz's ike3 playerbot build.
 //
 // Data: {Playerbot.SharedDatabase}.playerbot_v2_bot_text / _bot_text_chance (migration 0019). Loaded
-// once by Module::Init before any bot logs in; read-only afterwards, so the AI workers and the world
+// once by Module::Init before any bot logs in; read-only afterwards, so the bot workers and the world
 // thread may read it concurrently without a lock.
 //
 // A line is picked at random among the rows of one key ('hello', 'goodbye', 'reply',
@@ -21,7 +21,7 @@
 //   Playerbot.Chatter.GroupCooldownMs 20000  minimum gap between two unsolicited lines in one group
 //   Playerbot.Chatter.BotCooldownMs   60000  minimum gap between two unsolicited lines from one bot
 //
-// SpeechTick (below) is the per-tick side, run by the AI worker from the snapshot: ike3's SayStrategy
+// SpeechTick (below) is the per-tick side, run by the bot worker from the snapshot: ike3's SayStrategy
 // combat callouts for companions (critical / low health, low mana, out of ammo, the tank's taunt
 // lines, the "so many mobs" line on a big pull) and SuggestWhatToDoAction's lines from world bots in
 // their zone's General / Trade channel. It emits ChatIntents like any other rule.
@@ -158,7 +158,7 @@ void AddSelfPlaceholders(TextPlaceholders& ph, uint8 cls, uint8 race, uint8 leve
 enum class Slot : uint8 { Greet, LevelUp, Broadcast };
 bool TakeSlot(Slot slot, uint64 group_low, BotId bot, uint32 now_ms);
 
-// ---- lines for the AI worker (snapshot data only; the caller emits them as party chat) ----
+// ---- lines for the bot worker (snapshot data only; the caller emits them as party chat) ----
 
 // ike3 'hello' (or 'hello_follow' for a companion joining its owner). Empty when chatter is off or
 // another bot of the group greeted moments ago.
@@ -190,14 +190,14 @@ void SayGoodbye(Player* bot, Player* owner);
 // a 90 s gap per bot. The text is a small built-in pool varied by class, role and personality.
 enum class Banter : uint8 { Ready, Wipe, Thanks, Ouch, BossKill };
 
-// AI worker: the line to say now for `kind`, or empty (gates / roll / cooldown said no). The caller emits it.
+// bot worker: the line to say now for `kind`, or empty (gates / roll / cooldown said no). The caller emits it.
 std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s);
 // A boss (dungeon boss or world boss) died to `killer` or a group member. Called by the kill listener for any
 // killer. One nearby companion of the killer's group may say "gg" and one may bow (the killer is a real player,
 // "the owner finished the boss") or cheer.
 void OnBossKilled(Player* killer, Creature* boss);
 
-// ---- per-tick speech (AI worker; snapshot data only; emits at most one ChatIntent per tick) ----
+// ---- per-tick speech (bot worker; snapshot data only; emits at most one ChatIntent per tick) ----
 
 // ike3 SayStrategy + SuggestWhatToDoAction, see the header comment. Called from
 // BotAI::dispatch_layers every tick, whatever the bot's state.

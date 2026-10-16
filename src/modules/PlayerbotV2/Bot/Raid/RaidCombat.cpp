@@ -67,12 +67,15 @@ bool DispatchRaidOrder(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em
     }
 
     // 1. Hazards first: leaving Inferno / Living Bomb range / a breath corridor beats everything else.
-    //    A deduped re-emit (same point, still walking) still owns the tick so the rotation does not chase back in.
+    //    A deduped re-emit (same point, still walking) still owns the tick so the rotation does not chase back in. A move that was
+    //    refused (the path ring, the API's no-path answer) owns nothing: the bot stood on the spot casting and attacking nothing.
     if (o.move)
     {
-        emit.move_to(o.move_x, o.move_y, o.move_z, /*run=*/true);
-        ai.set_last_rule_fired("raid:move");
-        return true;
+        if (emit.move_to(o.move_x, o.move_y, o.move_z, /*run=*/true) || emit.move_already_emitted(o.move_x, o.move_y, o.move_z))
+        {
+            ai.set_last_rule_fired("raid:move");
+            return true;
+        }
     }
 
     // A debuff that turns the bot's rotation against the raid (Nefarian's priest call): no rotation until it fades, a heal
@@ -82,6 +85,18 @@ bool DispatchRaidOrder(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em
         if (s.is_casting())
             emit.cancel_cast();
         ai.set_last_rule_fired("raid:hold_rotation");
+        return true;
+    }
+
+    // A melee bot whose target stands in a hazard it has just left (Inferno, a cloud): no rotation, the rotation's approach would walk it
+    // straight back in. The brain sets the flag every plan while the hazard is up; it clears when the circle closes. (MC Geddon n8 run 4: six
+    // melee left the Inferno circle, the rotation sent them back at second six, and the last tick killed all six at 17-20 y; the flag had
+    // been set for every plan and nothing read it.) An elected job (a dispel) still runs.
+    if (o.hold_melee && o.cast_kind == RaidOrder::CastKind::None)
+    {
+        // The victim stays selected: the brain raises the flag only while the victim stands in the hazard, so dropping it would clear the flag
+        // and the rotation would walk back in on the next plan.
+        ai.set_last_rule_fired("raid:melee_hold");
         return true;
     }
 
@@ -126,6 +141,13 @@ bool DispatchRaidOrder(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em
         std::find(o.forbidden_targets.begin(), o.forbidden_targets.end(), victim) != o.forbidden_targets.end();
     // An idle DPS bot picks up the fallback too, unless its owner told it to stay.
     bool const idleDps = victim.IsEmpty() && !o.fallback_target.IsEmpty() && !ai.holding_position(s.published_at_ms());
+    // An idle tank (its enemy is airborne or dead) takes the brain's ground target.
+    bool const idleTank = victim.IsEmpty() && o.fallback_target.IsEmpty() && !o.tank_fallback_target.IsEmpty() && !ai.holding_position(s.published_at_ms());
+    if (idleTank && emit.start_attack(o.tank_fallback_target))
+    {
+        ai.set_last_rule_fired("raid:switch_target");
+        return true;
+    }
     if (forbidden || idleDps)
     {
         if (!o.fallback_target.IsEmpty() && o.fallback_target != victim)
@@ -217,7 +239,9 @@ void RegisterRaidIdleRules(IdleRuleRegistry& r)
     move.fire = [](BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
     {
         RaidOrder const& o = s.raw().raid_order;
-        emit.move_to(o.move_x, o.move_y, o.move_z, /*run=*/true);
+        // A refused move does not claim the tick (see raid:move in DispatchRaidOrder): the idle rules below get the bot.
+        if (!emit.move_to(o.move_x, o.move_y, o.move_z, /*run=*/true) && !emit.move_already_emitted(o.move_x, o.move_y, o.move_z))
+            return false;
         ai.set_last_rule_fired("idle:raid_move");
         return true;
     };

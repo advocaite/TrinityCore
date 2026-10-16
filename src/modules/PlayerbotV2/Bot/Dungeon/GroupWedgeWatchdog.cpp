@@ -45,7 +45,7 @@ void GroupWedgeWatchdog::Update(uint32 now_ms)
         return;
     last_tick_ms_ = now_ms;
 
-    if (!sConfigMgr->GetBoolDefault("PlayerbotV2.GroupWedge.Enabled", true))
+    if (!sConfigMgr->GetBoolDefault("PlayerbotV2.GroupWedge.Enabled", true, true))
     {
         if (!groups_.empty()) groups_.clear();
         return;
@@ -54,11 +54,11 @@ void GroupWedgeWatchdog::Update(uint32 now_ms)
     // Tunables (read live so they are hot-reloadable; quiet defaults so the keys
     // are optional). A wedge is "no forward progress (group centroid moved
     // < MoveYards) AND not in real combat for WindowMs".
-    const uint32 windowMs = uint32(sConfigMgr->GetIntDefault("PlayerbotV2.GroupWedge.WindowMs", 20000));
-    const float  cohereY  = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.CohereYards", 30.0));
-    const float  splitY   = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.SplitYards", 45.0));
-    const float  farY     = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.FarYards", 45.0));
-    const float  moveY    = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.MoveYards", 12.0));
+    const uint32 windowMs = uint32(sConfigMgr->GetIntDefault("PlayerbotV2.GroupWedge.WindowMs", 20000, true));
+    const float  cohereY  = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.CohereYards", 30.0, true));
+    const float  splitY   = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.SplitYards", 45.0, true));
+    const float  farY     = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.FarYards", 45.0, true));
+    const float  moveY    = float(sConfigMgr->GetFloatDefault("PlayerbotV2.GroupWedge.MoveYards", 12.0, true));
 
     // -- Bucket grouped, instanced bots by (group, map) (mirror PveGroupCoordinator) --
     struct Bucket
@@ -66,6 +66,7 @@ void GroupWedgeWatchdog::Update(uint32 now_ms)
         uint64 group_low = 0;
         uint32 map_id    = 0;
         std::vector<std::pair<uint64, Player*>> bots;
+        bool owner_ordered = false;   // a bot is under the owner's Stay / Hold / Follow order: standing still is the order, not a wedge
     };
     std::unordered_map<uint64, Bucket> buckets;
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
@@ -84,6 +85,8 @@ void GroupWedgeWatchdog::Update(uint32 now_ms)
         b.group_low = glow;
         b.map_id    = m->GetId();
         b.bots.emplace_back(uint64(id), p);
+        if (e.ai->holding_position(now_ms) || e.ai->owner_follow_order())
+            b.owner_ordered = true;
     });
 
     // Forget groups that are no longer bucketed (left instance / disbanded).
@@ -96,6 +99,13 @@ void GroupWedgeWatchdog::Update(uint32 now_ms)
             Services::Snapshots().latest_group(b.bots.front().first);
         if (!gs || gs->members.empty())
             continue;
+        // A human-led party is the owner's to move (he can be AFK, or wait for his Attack), and an ordered Stay / Hold / Follow is
+        // standing still on purpose: neither is a wedge.
+        if (b.owner_ordered || !GroupSnapshotView(*gs).leader_is_bot())
+        {
+            groups_.erase(key);
+            continue;
+        }
 
         // Alive, same-map member geometry. (Corpse-runners / cross-map laggards
         // excluded — a wedge is about the live body's progress.)

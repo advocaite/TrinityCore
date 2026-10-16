@@ -66,7 +66,7 @@ public:
     size_t Count() const { return _pockets.size(); }
 
     // Pocket whose bbox contains (x,y,z) on `map`, or nullptr. O(pockets) — a
-    // handful of entries — safe to call per-tick from the AI workers.
+    // handful of entries — safe to call per-tick from the bot workers.
     PortalPocket const* PocketContaining(uint32 map, float x, float y, float z) const;
 
     std::vector<PortalPocket> const& Pockets() const { return _pockets; }

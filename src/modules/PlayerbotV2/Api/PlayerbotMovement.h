@@ -12,7 +12,7 @@
 //   * Jumps and other ballistic moves refuse to launch into walls / closed
 //     doors / cliff faces.
 //   * Off-mesh recovery (FARFROMPOLY_START) re-snaps the bot to the nearest
-//     valid navmesh poly before the AI re-emits movement.
+//     valid navmesh poly before the bot logic re-emits movement.
 //
 // Inspiration: mod-playerbots' SearchForBestPath / CheckCollisionAndGetValidCoords
 // (AzerothCore module), mapped onto TrinityCore's PathGenerator + vmap/mmap
@@ -97,7 +97,7 @@ float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool*
 // surrounding floor: ~14-16y for city lifts. Detour caps a findNearestPoly
 // box at ~128 overlapped polys, so keep `hz` modest (≤8y) to avoid grabbing a
 // poly from a different elevator floor. Runs on the world thread (queries the
-// live navmesh); never call from an AI worker.
+// live navmesh); never call from an bot worker.
 bool NearestNavPoint(Player* p, float tx, float ty, float tz,
                      float hxy, float hz, Position& out);
 

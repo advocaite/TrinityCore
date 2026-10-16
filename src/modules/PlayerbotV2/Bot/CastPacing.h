@@ -1,6 +1,6 @@
 // CastPacing.h - per-bot cast-speed context and multiplier (Playerbot.Cast.*).
 //
-// Pure functions over a snapshot view and the config: no Player access, safe on the AI
+// Pure functions over a snapshot view and the config: no Player access, safe on the bot logic
 // threads. PlayerbotV2.cpp publishes the result core-side (API::set_cast_speed_multiplier)
 // and BotSnapshotView scales its in-flight cast caps by the same number.
 #pragma once

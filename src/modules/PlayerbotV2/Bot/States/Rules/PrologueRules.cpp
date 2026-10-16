@@ -14,12 +14,14 @@
 // hazards. Holding mode is the exception — it preserves the legacy
 // "fall through" semantic via fire-returns-false.
 
+#include <atomic>
 #include "Bot/IdleRule.h"
 #include "Group/GroupSnapshot.h"
 #include "Bot/BotAI.h"
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/ThreatDiscipline.h"            // RaidLogDue (opener pull discipline)
+#include "Bot/States/StateBase.h"        // ThreatHoldActive
 #include "Bot/MarkGate.h"                   // Playerbot.Behavior.MarksNeedOrder
 #include "Bot/ClassicUpkeep.h"            // Classic::IsBossUnit
 #include "Bot/States/MaintainHelpers.h"   // States::GroupAnchorTank
@@ -87,7 +89,7 @@ bool WatchdogFire(BotSnapshotView const& s, BotAI& ai,
 {
     const uint32 wdog_now_ms = s.published_at_ms();
     float bx, by, bz; s.position(bx, by, bz);
-    const uint32 epoch = wdog_now_ms / 2000u;
+    const uint32 epoch = wdog_now_ms / 8000u;   // one heading per 8 s window, so the escape runs straight instead of re-aiming every 2 s
     const uint64 mixed = (uint64(s.bot_id()) * 0x9E3779B97F4A7C15ULL)
                        ^ (uint64(epoch) * 0xBF58476D1CE4E5B9ULL);
     const float angle = (float(mixed & 0xFFFFu) / 65536.0f) * 6.2831853f;
@@ -147,6 +149,21 @@ bool OpenerGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
         ai.reset_opener_own_since();
         return false;
     }
+    // A tank on the owner's Attack / Pull order, the mob not yet reached: idle:owner_engaging walks it in (own pathing, straight
+    // line when the navmesh has none). The opener (993) held the tick with a cast the mob was out of range for, and the tank stood
+    // still for seconds before the pull (Deadmines 2026-10-15, 7 s from the order to the first step).
+    if (s.is_in_dungeon() && ai.effective_role(s) == Role::Tank && ai.is_manual_mode(s.published_at_ms()) &&
+        ai.owner_command() == BotAI::OwnerCommand::Engage && ai.owner_target() == s.victim())
+        for (NearbyUnit const& u : s.nearby_enemies())
+            if (u.guid == s.victim())
+            {
+                float px, py, pz;
+                s.position(px, py, pz);
+                float const dx = u.x - px, dy = u.y - py;
+                if (dx * dx + dy * dy > (std::max(u.combat_reach, 4.0f) + 3.5f) * (std::max(u.combat_reach, 4.0f) + 3.5f))
+                    return false;
+                break;
+            }
     // ABSOLUTE opener ceiling inside a dungeon (2026-07-21). The per-victim
     // give-up (opener_victim_since_ms, 25s) is DEFEATED when the server-side
     // victim selection flips between GUIDs every tick: set_opener_victim
@@ -257,7 +274,7 @@ bool OpenerFire(BotSnapshotView const& s, BotAI& ai,
     // leaves the snapshot). Most scripted dungeon bosses (incl. Admiral Ripsnarl)
     // are not flagged as bosses by the core, so fall back to the per-dungeon
     // advice.bosses entry list. Computed once per fresh victim (the advice copy is
-    // non-trivial) and cached on the AI.
+    // non-trivial) and cached on the bot logic.
     if (vu && fresh_open)
     {
         bool is_boss = Classic::IsBossUnit(*vu);  // either boss flag (is_dungeon_boss is never set on this core)
@@ -419,6 +436,8 @@ bool FollowPullThreatGate(BotSnapshotView const& s, BotAI& ai,
     if (s.in_combat() || s.is_casting() || !s.is_alive()) return false;
     if (s.raw().movement.is_mounted) return false;
     if (s.in_battleground() || s.is_in_dungeon()) return false;
+    // Passive = defend only; Stay / Hold = keep the spot: neither starts a fight with a mob in the corridor.
+    if (ai.passive_now(false) || ai.holding_position(s.published_at_ms())) return false;
     if (!g.exists()) return false;
     ObjectGuid const leader_guid = g.leader();
     if (leader_guid.IsEmpty() || leader_guid == s.guid()) return false;
@@ -521,11 +540,89 @@ bool OwnerEngageGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
 {
     return ManualModeActive(s, ai) && ai.owner_command() == BotAI::OwnerCommand::Engage;
 }
-bool OwnerEngageFire(BotSnapshotView const&, BotAI& ai,
-                     GroupSnapshotView const&, BotIntentEmitter&, uint32)
+bool OwnerEngageFire(BotSnapshotView const& s, BotAI& ai,
+                     GroupSnapshotView const& g, BotIntentEmitter& emit, uint32)
 {
+    // A tank ordered onto a mob (raid boss or dungeon pull) walks up to it and attacks. The rule used to do nothing but hold the tick, which suits a bot that is
+    // already in the fight; a tank ordered onto a stationary boss (Ragnaros has no combat movement) from 37 y away stood there for the
+    // whole Engage window while the boss killed the casters with Magma Blast (MC Ragnaros 2026-10-13 eb79ff8d).
+    ObjectGuid const owner_target = ai.owner_target();
+    bool target_in_sight = false;
+    for (NearbyUnit const& u : s.nearby_enemies())
+        if (u.guid == owner_target && u.hp > 0)
+        {
+            target_in_sight = true;
+            break;
+        }
+    if (s.is_in_dungeon() && s.is_alive() && !s.in_combat() && !s.is_casting() && ai.effective_role(s) == Role::Tank)
+    {
+        ObjectGuid const target = owner_target;
+        for (NearbyUnit const& u : s.nearby_enemies())
+        {
+            if (u.guid != target || u.hp <= 0)
+                continue;
+            float px, py, pz;
+            s.position(px, py, pz);
+            float const dx = u.x - px, dy = u.y - py;
+            float const dist = std::sqrt(dx * dx + dy * dy);
+            float const stand = std::max(u.combat_reach, 4.0f) + 2.0f;   // inside melee reach of a big boss, not inside the boss
+            if (dist > stand + 1.5f && dist > 0.1f)
+            {
+                float const gx = u.x - dx / dist * stand, gy = u.y - dy / dist * stand;
+                {
+                    // Every 2 s (one line at a time across bots): where the tank is and what its walk to the ordered mob looks like.
+                    static std::atomic<uint32> s_walk_log_ms{0};
+                    uint32 const now_log = s.published_at_ms();
+                    uint32 last_log = s_walk_log_ms.load(std::memory_order_relaxed);
+                    if (now_log - last_log >= 2000u && s_walk_log_ms.compare_exchange_strong(last_log, now_log))
+                        TC_LOG_INFO("playerbot.v2", "[engage_walk] {} at ({:.1f},{:.1f},{:.1f}) to mob {} at ({:.1f},{:.1f},{:.1f}) dist={:.1f} stand={:.1f} dst=({:.1f},{:.1f}) moving={} path_dest={} los={}",
+                                    s.name(), px, py, pz, u.entry, u.x, u.y, u.z, dist, stand, gx, gy, s.is_moving() ? 1 : 0,
+                                    s.has_path_destination() ? 1 : 0, u.in_los ? 1 : 0);
+                }
+                // The same walk emitted a moment ago is under way (the dedup answers false for it): not a refusal, so no direct
+                // straight-line walk replaces the pathed one.
+                if (emit.move_already_emitted(gx, gy, u.z) || emit.move_to(gx, gy, u.z, /*run*/ true))
+                {
+                    ai.set_last_rule_fired("idle:owner_engage_close");
+                    return true;
+                }
+                // The navmesh gave no route (mine carts and props between the tank and the pull, Deadmines 2026-10-14: the tank said
+                // "pulling" and stood still): a mob in sight and close is walked to in a straight line, bounded to 25 y.
+                if (u.in_los && dist <= 25.0f &&
+                    emit.move_to(u.x - dx / dist * stand, u.y - dy / dist * stand, u.z, /*run*/ true, /*direct*/ true))
+                {
+                    ai.set_last_rule_fired("idle:owner_engage_close_direct");
+                    return true;
+                }
+            }
+            else if (emit.start_attack(target))
+            {
+                ai.set_last_rule_fired("idle:owner_engaging");
+                return true;
+            }
+            break;
+        }
+    }
+    // A non-tank that did not open on the Attack order (a party's casters wait for the tank, BotCommandParser "attack") opens once
+    // the threat hold lets go: the tank has its lead, or the bounded wait is over.
+    if (target_in_sight && s.is_alive() && !s.in_combat() && !s.is_casting() && s.victim().IsEmpty() &&
+        ai.effective_role(s) != Role::Tank && !States::ThreatHoldActive(ai, s, owner_target, &g) &&
+        emit.start_attack(owner_target))
+    {
+        ai.set_last_rule_fired("idle:owner_engaging");
+        return true;
+    }
+    // The ordered mob is dead or gone and the bot is out of the fight: the Attack / Pull order is done. It ends here instead of
+    // holding the tick for the rest of its 30 s window (looting, drinking and buffing below priority 975 were starved).
+    if (!target_in_sight && !s.in_combat())
+    {
+        ai.exit_manual();
+        return false;
+    }
     ai.set_last_rule_fired("idle:owner_engaging");
-    return true;
+    // A companion whose ordered mob is not near keeps its upkeep going (rez, heal, buffs, drink), as under follow and stay;
+    // with the mob in sight the rule still holds the tick.
+    return !s.is_companion_with_owner() || target_in_sight;
 }
 
 // idle:owner_disengage
@@ -631,14 +728,27 @@ bool FallbackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& 
     const bool healer = ai.effective_role(s) == Role::Healer;
     auto tag = [&](char const* idle_tag, char const* combat_tag)
     { ai.set_last_rule_fired(in_combat_state ? combat_tag : idle_tag); };
+    // A raid avoid circle (Baron Geddon's Inferno, a Living Bomb carrier) outranks the order's walk. The bot standing in one is left to
+    // the raid brain's step-out; a rally point or slot inside one is not walked into, the bot waits where it is (MC Geddon 2026-10-12:
+    // Fall back sent bots back to a rally point inside Inferno, 14 of the deaths read combat:fallback_hold / fallback_return).
+    PveOrder const& hazard_order = s.raw().pve_order;
+    bool const hazards = Services::Config().behavior_avoid_circles() && hazard_order.active && hazard_order.avoid_circle_count > 0;
+    if (hazards && hazard_order.in_avoid_circle(bx, by, 0.0f))
+        return false;
     // Head for (x,y,z) unless a live path already ends there (re-issuing restarts the spline).
     auto head_to = [&](float x, float y, float z, bool run)
     {
+        if (hazards && hazard_order.in_avoid_circle(x, y, 2.0f))
+        {
+            if (s.is_moving()) emit.stop_movement();
+            return false;
+        }
         if (s.is_moving() && s.has_path_destination())
         {
             float qx, qy, qz; s.path_destination(qx, qy, qz);
             if (d2xy(qx, qy, x, y) < 2.0f * 2.0f) return true;
         }
+        if (emit.move_already_emitted(x, y, z)) return true;   // under way, not refused
         return emit.move_to(x, y, z, run);
     };
 
@@ -807,14 +917,17 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     float bx, by, bz; s.position(bx, by, bz);
     auto d2xy = [](float ax, float ay, float cx, float cy) { return (ax - cx) * (ax - cx) + (ay - cy) * (ay - cy); };
     // head_to is true when the move was queued; false = refused (counted by hopeless()).
-    auto head_to = [&](float x, float y, float z, bool run)
+    auto head_to = [&](float x, float y, float z, bool run, bool direct = false)
     {
         if (s.is_moving() && s.has_path_destination())
         {
             float qx, qy, qz; s.path_destination(qx, qy, qz);
             if (d2xy(qx, qy, x, y) < 2.0f * 2.0f) return true;
         }
-        return emit.move_to(x, y, z, run);
+        // The same walk was emitted a moment ago: it is under way, not refused (Deadmines 2026-10-15 n43: the retake's approach
+        // re-asked for its spot each tick, the dedup answered false, and two of those ended the order as "path refused 2x").
+        if (emit.move_already_emitted(x, y, z)) return true;
+        return emit.move_to(x, y, z, run, direct);
     };
     // The movement toward a goal is hopeless: a path refusal (move refused, or the path-block counter grew) on 2
     // ticks, or no closer to the goal for 4 s. `why` says which.
@@ -881,7 +994,7 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         {
             opener_unavail = true;
             ai.edit_pull_back([](BotAI::PullBackPlan& q) { q.opener_unavail = true; });
-            TC_LOG_INFO("playerbot.v2", "[pull_back] {} ranged opener unavailable (NO_AMMO): taunt / plain engage instead", s.name());
+            TC_LOG_INFO("playerbot.v2", "[pull_back] {} ranged opener refused (no ammo or no usable ranged weapon): taunt / plain engage instead", s.name());
         }
         // Opener: first ready ranged spell of the class whose window holds d; none (or it did not take) = plain engage.
         struct Opener { uint32 spell; float min_d, max_d; };
@@ -905,12 +1018,32 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
             TC_LOG_INFO("playerbot.v2", "[pull_back] {} the opener did not engage {} within 3 s: target {:.0f}y, in sight {}, hp {}",
                 s.name(), p.target.GetCounter(), d, tu ? (tu->in_los ? "yes" : "NO") : "?", tu ? tu->hp : -1);
         }
+        // A warrior's shot is the one his ranged slot fires: Throw needs a thrown weapon, Shoot Bow / Gun / Crossbow the matching
+        // weapon and ammo. Picking by "known" alone sent Throw from a gun-wearing tank; the core refused it EQUIPPED_ITEM, the order
+        // dropped the opener and the tank walked into the pack and body-pulled it (playtest 2026-10-15).
+        auto weapon_fires = [&](uint32 spell) -> bool
+        {
+            if (s.cls() != 1) return true;   // CLASS_WARRIOR only
+            uint8 const sub = s.ranged_subclass();
+            switch (spell)
+            {
+                case 2764: return sub == 16;                              // Throw: ITEM_SUBCLASS_WEAPON_THROWN
+                case 2480: return sub == 2 && s.ammo_count() > 0;         // Shoot Bow: ITEM_SUBCLASS_WEAPON_BOW
+                case 7918: return sub == 3 && s.ammo_count() > 0;         // Shoot Gun: ITEM_SUBCLASS_WEAPON_GUN
+                case 7919: return sub == 18 && s.ammo_count() > 0;        // Shoot Crossbow: ITEM_SUBCLASS_WEAPON_CROSSBOW
+                default:   return true;
+            }
+        };
         Opener const* pick = nullptr;
         // A retake (the mob is on somebody else): a ranged hit does not take it, only a taunt / melee swing does.
         if (!opener_failed && !opener_unavail && p.retakes == 0)
             for (size_t i = 0; i < n; ++i)
-                if (s.knows_spell(list[i].spell) && s.cd_remaining(list[i].spell).count() == 0)
+                if (s.knows_spell(list[i].spell) && s.cd_remaining(list[i].spell).count() == 0 && weapon_fires(list[i].spell))
                 { pick = &list[i]; break; }
+        if (!pick && !p.opened_ms && p.retakes == 0 && !p.opener_failed_logged &&
+            RaidLogDue(RaidLogKey(s, RaidLogKind::PullBackOpener), now_ms, 10000u))
+            TC_LOG_INFO("playerbot.v2", "[pull_back] {} no ranged opener (ranged slot subclass {}, ammo {}): walking in to pull by hand",
+                s.name(), s.ranged_subclass() == 0xFF ? -1 : int(s.ranged_subclass()), s.ammo_count());
         // No ranged opener: the plain engage starts from 15y (a retake: from taunt range).
         const float reach = pick ? pick->max_d : (p.retakes ? 5.0f : 15.0f);
         const float near_min = pick ? pick->min_d : 0.0f;
@@ -957,6 +1090,13 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
                         queued = head_to(ax, ay, az, true);
                         TC_LOG_INFO("playerbot.v2", "[pull_back] {} straight-line spot ({:.1f},{:.1f},{:.1f}) {}", s.name(), ax, ay, az,
                             queued ? "queued" : "refused too");
+                        // Mob in sight and close, no route from the navmesh (a lip in the floor, Deadmines 2026-10-15): walk the line itself.
+                        if (!queued && tu && tu->in_los && d <= 25.0f)
+                        {
+                            queued = head_to(ax, ay, az, true, /*direct*/ true);
+                            TC_LOG_INFO("playerbot.v2", "[pull_back] {} direct walk to ({:.1f},{:.1f},{:.1f}) {}", s.name(), ax, ay, az,
+                                queued ? "queued" : "refused");
+                        }
                     }
                 }
             }
@@ -1062,6 +1202,11 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     bool others = false;   // something besides the pull target is on us
     for (auto const& u : s.raw().combat.attackers)
         if (u.guid != p.target && u.hp > 0) { others = true; break; }
+    // The mob is on the tank and the tank is fighting: the pull is over and the tank rules own the fight. The leash below only walks a
+    // tank the mob has not taken yet; applied to an engaged boss it dragged the main tank off Baron Geddon toward the return point, inside
+    // his Inferno circle (MC 2026-10-13: Devane died 20 y out, rule combat:pull_back_leash, no target for 12 s before).
+    if (tu->victim == s.guid() && s.in_combat() && now_ms - p.phase_ms > 3000u)
+        return false;
     if (d2xy(bx, by, p.rx, p.ry) > 12.0f * 12.0f)
     {
         if (!s.victim().IsEmpty()) emit.stop_attack();
@@ -1077,6 +1222,45 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
 }
 
 } // namespace States
+
+// idle:owner_use - the owner's "use <object>": walk to within reach of the object, use it once, then stay (the command set Stay).
+bool OwnerUseGate(BotSnapshotView const&, BotAI& ai, GroupSnapshotView const&, uint32)
+{
+    return ai.owner_use_active();
+}
+bool OwnerUseFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    BotAI::OwnerUseOrder const o = ai.owner_use_order();
+    uint32 const now_ms = s.published_at_ms();
+    auto finish = [&](char const* why)
+    {
+        ai.end_owner_use();
+        TC_LOG_INFO("playerbot.v2", "[owner_use] {} order ends: {}", s.name(), why);
+        return false;
+    };
+    if (!o.set) return finish("cleared");
+    if (!s.is_alive()) return finish("dead");
+    if (o.map != s.map_id()) return finish("left the map");
+    if (now_ms - o.set_ms > 30000u) return finish("not in reach after 30 s");
+    float bx, by, bz; s.position(bx, by, bz);
+    float const dx = o.x - bx, dy = o.y - by;
+    float const d = std::sqrt(dx * dx + dy * dy);
+    if (d > 4.5f || std::fabs(o.z - bz) > 5.0f)
+    {
+        // Stop 2.5 y short on the line from the bot: the object itself (an altar, a brazier) is often solid.
+        float const k = d > 2.5f ? (d - 2.5f) / d : 0.0f;
+        float const mx = bx + dx * k, my = by + dy * k;
+        if (!emit.move_already_emitted(mx, my, o.z) && !emit.move_to(mx, my, o.z, /*run*/ true))
+            return finish("no path to the object");
+        ai.set_last_rule_fired("idle:owner_use_walk");
+        return true;
+    }
+    emit.use_game_object(o.go);
+    ai.end_owner_use();
+    TC_LOG_INFO("playerbot.v2", "[owner_use] {} uses object {} at {:.1f}y", s.name(), o.go.GetCounter(), d);
+    ai.set_last_rule_fired("idle:owner_use");
+    return true;
+}
 
 void RegisterPrologueRules(IdleRuleRegistry& r)
 {
@@ -1102,6 +1286,7 @@ void RegisterPrologueRules(IdleRuleRegistry& r)
     // 994: the owner's fallback order owns the tick above the opener (States::FallbackTick).
     add("idle:fallback",          994, &FallbackGate,       &FallbackFire);
     add("idle:pull_back",         994, &PullBackGate,       &PullBackFire);
+    add("idle:owner_use",         994, &OwnerUseGate,       &OwnerUseFire);
     add("combat:opener",          993, &OpenerGate,         &OpenerFire);
     // 991: fires BEFORE owner_following (990) so a corridor threat
     // preempts the no-op follow tag and start_attack interrupts the

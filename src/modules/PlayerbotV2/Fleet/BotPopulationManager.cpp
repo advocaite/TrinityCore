@@ -2,9 +2,11 @@
 #include "../Util/SlowCall.h"
 #include "BotPopulationManager.h"
 #include "ClassicSpec.h"
+#include "SoakAnchors.h"
 #include "CompanionRole.h"
 #include "BotQueueFiller.h"
 #include "InstanceGroupCap.h"
+#include "InstanceEntry.h"
 #include "RaidSubgroupPlan.h"
 #include "BotSetupPipeline.h"
 #include "WorldBotSpawner.h"
@@ -101,7 +103,7 @@ void WarnOversizedInstanceGroups(uint32 now_ms)
             if (open_world)
             {
                 // Open world: any owner whose companions out exceed the cap, grouped with them or not (a player who logged in
-                // with 9 companions still online from before the cap, Karrz 2026-10-08).
+                // with 9 companions still online from before the cap, playtest 2026-10-08).
                 // Companions above the open-world cap (called in an instance, or relogged with a big group) are dismissed once
                 // the owner has stood outside for kTrimGraceMs. Invited world bots are not owned, so they are never trimmed.
                 uint32 const open_cap = InstanceGroupCapFor(p, nullptr);
@@ -377,7 +379,7 @@ bool IsAlliedRace(uint32 race)
 // Bots that must run the starter-only rescue (complete the starter quest chain
 // + relocate to capital, kept at start level) even with no distribution bucket,
 // because they're created in ISOLATED / phased starter zones whose scripted
-// intro grants essential class/racial abilities the bot AI can't earn by normal
+// intro grants essential class/racial abilities the bot bot logic can't earn by normal
 // questing:
 //   - Death Knight  → Acherus (map 609)
 //   - Demon Hunter  → Mardum  (map 1481)
@@ -1134,6 +1136,12 @@ void BotPopulationManager::CompanionUpkeep(BotId id, Player* p)
     GrantCompanionStarterPet(id, p);
     // A companion geared before per-bot gear variety wears the same top pick per slot as every other bot of its class
     // and level; it gets its one re-roll here (or in FinishCompanionSetup when it is called), whichever comes first.
+    // A level-cap companion that has had the first re-roll but not the raid-gear variety pass gets it here (RerollCompanionGear).
+    if (Services::Owners().GearVaried(id) && !Services::Owners().GearVariedRaid(id) && Gear::RaidGearActive(p->GetLevel()))
+    {
+        uint32 changed = 0;
+        RerollCompanionGear(p, changed);
+    }
     if (!Services::Owners().GearVaried(id))
     {
         uint32 changed = 0;
@@ -1186,7 +1194,7 @@ void BotPopulationManager::DrainCompanionDeletes()
                 ++it;
             continue;
         }
-        // Same sequence as `.playerbot delete`: forget the AI and the bot mark before the character row goes.
+        // Same sequence as `.playerbot delete`: forget the bot logic and the bot mark before the character row goes.
         if (Services::Registry().has(id))
         {
             Services::Scheduler().unregister_bot(id);
@@ -1227,7 +1235,7 @@ Role BotPopulationManager::ApplyCompanionRole(Player* bot, Role requested, char 
                        : choice.source == Fleet::CompanionRoleSource::SpecHybrid ? "spec_hybrid" : "spec";
     if (!choice.pin)
     {
-        // Not chosen by anybody: the AI keeps reading the live talents, the quota fill still sees it as unset, nothing is stored.
+        // Not chosen by anybody: the bot logic keeps reading the live talents, the quota fill still sees it as unset, nothing is stored.
         BotAI* ai = Services::Registry().ai(id);
         if (ai && ai->role_override() != Role::Unknown)
             ai->set_role_override(Role::Unknown);
@@ -1323,7 +1331,7 @@ void BotPopulationManager::DrainCompanionSetups()
         BotId const id = it->first;
         PendingCompanion const pending = it->second;
         Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
-        // Wait until the bot is in the world with its AI registered (Module::OnPlayerLogin).
+        // Wait until the bot is in the world with its bot logic registered (Module::OnPlayerLogin).
         if (!bot || !bot->IsInWorld() || !Services::Registry().has(id))
         {
             // queued_ms is getMSTime(); OnWorldTick's now_ms counts from the module's first tick, so compare on one clock.
@@ -1523,7 +1531,7 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
     uint32 const riding = api.learn_riding_free();
 
     // The role the owner asked for (`.bot add <class> healer`), else the one stored with the companion (`.bot call`, a
-    // relog), else what its talents say; pinned as the AI role and the virtual spec, and stored. Before the talent step,
+    // relog), else what its talents say; pinned as the bot logic role and the virtual spec, and stored. Before the talent step,
     // which spends the points down the pinned spec's build.
     ApplyCompanionRole(bot, Role(role_value), "setup");
     ::Playerbot::Result const talents = bot->GetLevel() >= 10 ? api.apply_starter_talents() : ::Playerbot::Result::Ok;
@@ -1595,14 +1603,24 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
     {
         // Bring it to the owner (same map: a near teleport; otherwise a map change), straight into its place.
         // Same angle convention as the follow it gets next (MoveFollow: relative to the owner's facing).
-        float x, y, z;
-        owner->GetNearPoint(bot, x, y, z, slot_offset.distance, owner->GetOrientation() + slot_offset.angle_radians);
-        ::Playerbot::BotMovement::SafeTeleport(bot, owner->GetMapId(), x, y, z, owner->GetOrientation(), 0);
-        // A level 10+ hunter's pet, once ever. Mid map change it is not in the world yet: CompanionUpkeep grants it then.
-        GrantCompanionStarterPet(id, bot);
+        // Into the owner's instance the companion joins the group first: the door checks look at the group's instance, and a
+        // stale lock on another instance is dropped before the port (Fleet/InstanceEntry.h).
+        bool const joinFirst = owner->GetMap() && owner->GetMap()->IsDungeon() && !alreadyGrouped;
+        if (joinFirst)
+            joinFailure = JoinOwnerGroup(owner, bot);
+        if (joinFailure.empty())
+        {
+            float x, y, z;
+            owner->GetNearPoint(bot, x, y, z, slot_offset.distance, owner->GetOrientation() + slot_offset.angle_radians);
+            Fleet::PrepareInstanceEntry(bot, owner->GetMapId());
+            ::Playerbot::BotMovement::SafeTeleport(bot, owner->GetMapId(), x, y, z, owner->GetOrientation(), 0);
+            // A level 10+ hunter's pet, once ever. Mid map change it is not in the world yet: CompanionUpkeep grants it then.
+            GrantCompanionStarterPet(id, bot);
 
-        // Group with the owner (see JoinOwnerGroup).
-        joinFailure = JoinOwnerGroup(owner, bot);
+            // Group with the owner (see JoinOwnerGroup).
+            if (!joinFirst)
+                joinFailure = JoinOwnerGroup(owner, bot);
+        }
     }
     bool const grouped = joinFailure.empty();
 
@@ -1682,7 +1700,7 @@ static int32 OwnerGearCap(Player const* bot)
 // where the slot is empty or the pick scores at least kRaidUpgradeRatio above the worn piece (Gear::ScoreItemRaid, the
 // same score the generator ranks by), so existing gear is only ever upgraded. A two-hander replaces a mainhand + offhand
 // pair only when it beats their combined score. Logs one "[gear]" line. Returns the number of slots changed. World thread.
-static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = false, bool reroll_all = false)
+static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = false, bool reroll_all = false, bool vary = false)
 {
     refused_any = false;
     uint8 const lvl = p->GetLevel();
@@ -1703,6 +1721,11 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
             ctx.ilvl_cap = OwnerGearCap(p);
     }
     std::vector<Gear::GearItem> const picks = Gear::GenerateGearFor(ctx);
+    // Variety (an owned level-cap companion, once): the generator picks among the best few pieces by the bot's guid, but the regear only
+    // ever upgraded, so companions geared before variety all still wear the same top piece per slot. A worn piece goes for the bot's own
+    // pick when the pick is the same quality or better and scores within 5% of it; a tier-set or best-in-slot choice is the owner's.
+    bool const vary_ok = vary && !ctx.world_bot() && !Gear::Owned::IsCapMode(ctx.gear_mode);
+    constexpr float kVaryFloor = 0.95f;
 
     auto slot_score = [&](Item const* it, uint8 slot) -> int32
     {
@@ -1743,7 +1766,10 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
             {
                 Item const* mh = p->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
                 if (mh && mh->GetTemplate() && mh->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON)
+                {
+                    refused_any = refused_any || gtpl->GetInventoryType() == INVTYPE_SHIELD;   // the second pass, once the one-hander is on
                     continue;
+                }
             }
             int32 const pick_score = ::Playerbot::Gear::ScoreItemRaid(gtpl, cls, ctx.spec, lvl, g.slot);
             Item* off_for_2h = nullptr;
@@ -1768,7 +1794,16 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
                 // An off hand that is not a weapon on a class that must have one (rogue, non-protection warrior, hunter, enhancement shaman) goes for any weapon pick.
                 bool const dead_offhand = ::Playerbot::Gear::OffhandMustBeWeapon(cls, ctx.spec) && g.slot == EQUIPMENT_SLOT_OFFHAND && cur->GetTemplate() &&
                                           cur->GetTemplate()->GetClass() != ITEM_CLASS_WEAPON && gtpl->GetClass() == ITEM_CLASS_WEAPON;
-                bool const better = tier_pick || worn_pvp || dead_offhand || worn_over || (reroll_all && ctx.world_bot()) || (cur_score <= 0 ? pick_score > cur_score
+                // A protection tank's hands: a two-hander in the main hand goes for the one-hander pick, and an off hand that is not a shield
+                // goes for the shield pick, whatever they score (n43 onyxia_full: two of three protection warriors in the Tier 1 gear had no
+                // shield, no Shield Slam and a third of the armor; the 10 % upgrade rule kept the two-hander).
+                bool const shield_tank = ctx.spec == 73 || ctx.spec == 66;
+                bool const shield_fix = shield_tank && cur->GetTemplate() &&
+                    ((g.slot == EQUIPMENT_SLOT_MAINHAND && cur->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON && gtpl->GetInventoryType() != INVTYPE_2HWEAPON) ||
+                     (g.slot == EQUIPMENT_SLOT_OFFHAND && gtpl->GetInventoryType() == INVTYPE_SHIELD && cur->GetTemplate()->GetInventoryType() != INVTYPE_SHIELD));
+                bool const vary_swap = vary_ok && cur_score > 0 && !off_for_2h && cur->GetTemplate() &&
+                                       gtpl->GetQuality() >= cur->GetTemplate()->GetQuality() && float(pick_score) >= float(cur_score) * kVaryFloor;
+                bool const better = shield_fix || vary_swap || tier_pick || worn_pvp || dead_offhand || worn_over || (reroll_all && ctx.world_bot()) || (cur_score <= 0 ? pick_score > cur_score
                                                                 : float(pick_score) >= float(cur_score) * Gear::kRaidUpgradeRatio);
                 if (!better)
                     continue;
@@ -1852,6 +1887,19 @@ BotPopulationManager::RerollResult BotPopulationManager::RerollCompanionGear(Pla
     {
         bool refused = false;
         changed_slots = RaidRegearPass(p, refused);
+        // Once per companion: swap the clone-top pieces for the bot's own near-equal picks.
+        bool const first_vary = !Services::Owners().GearVariedRaid(id);
+        if (first_vary)
+        {
+            bool refused_v = false;
+            uint32 const varied = RaidRegearPass(p, refused_v, /*only_over_cap=*/false, /*reroll_all=*/false, /*vary=*/true);
+            changed_slots += varied;
+            if (!refused_v)
+            {
+                Services::Owners().MarkGearVariedRaid(id);
+                TC_LOG_INFO("playerbot.v2", "[gear_vary] {}: {} piece(s) swapped for its own picks", p->GetName(), varied);
+            }
+        }
         if (EnsureShieldTankWeapon(p))
             ++changed_slots;
         return RerollResult::Done;
@@ -1967,7 +2015,7 @@ BotPopulationManager::RerollResult BotPopulationManager::RerollCompanionGear(Pla
     return RerollResult::Done;
 }
 
-// Karrz 2026-10-08 (MC raid): WSG bots (Dascard, Nadoc, Brahad) sat in his raid group while he was dead in Molten Core, and their combat in
+// playtest 2026-10-08 (MC raid): WSG bots (Dascard, Nadoc, Brahad) sat in his raid group while he was dead in Molten Core, and their combat in
 // the battleground greyed out his Release Spirit ("a member of your group is in combat"). A pool / JIT bot has no business in a human's
 // regular group while it is in a battleground: its battleground group is the BG group, and an earlier group (the "original group" a
 // battleground restores on leaving, or one it never left) is dropped here. Owned companions keep their owner's group. Every 10 s.
@@ -2003,7 +2051,7 @@ void BotPopulationManager::BgGroupHygiene(uint32 now_ms)
     });
 }
 
-// Karrz 2026-10-08: world, pool and BG bots are T1 at most and mostly blue; bots made before that cap (or logged in with a worn T3 piece)
+// playtest 2026-10-08: world, pool and BG bots are T1 at most and mostly blue; bots made before that cap (or logged in with a worn T3 piece)
 // kept their gear until the 5 minute sweep, and then only 25 per sweep. Every 15 s this walks the online bots, and any bot without an owner
 // that wears a piece above the world cap (or an epic beyond its share) is regeared right away under the world rules, up to 8 bots a pass.
 // Covers login (the next pass) and BG entry (the bot is online and in the world by then). Logs one [gear] scrub line per bot.
@@ -3266,12 +3314,12 @@ bool BotPopulationManager::IsAmbientBot(BotId id, Player const* p) const
     auto it = pipeline_row_cache_.find(uint64(id));
     // A battleground JIT bot (jit tag still set) belongs to the queue filler, not to the world spawner.
     return it != pipeline_row_cache_.end() && it->second.dist_level > 0 && it->second.jit_tag.empty()
-        && !IsPlayerOwnedAlt(id, p);
+        && !IsPlayerOwnedAlt(id, p) && !(p && IsSoakAnchor(p->GetName()));   // a soak anchor stands in for a player, it is not a resident
 }
 
 bool BotPopulationManager::AmbientFleetEnabled()
 {
-    return Services::Config().population_total_target() > 0 || sConfigMgr->GetBoolDefault("Playerbot.World.Enable", false);
+    return Services::Config().population_total_target() > 0 || sConfigMgr->GetBoolDefault("Playerbot.World.Enable", false, true);
 }
 
 std::string BotPopulationManager::WorldReport() const { return world_spawner_->Report(); }
@@ -4210,7 +4258,7 @@ void BotPopulationManager::SeedBgMatches(uint32 now_ms)
     // Population 0 means owner bots only: no ambient fleet, so no ambient
     // matches either (each seed JIT-creates and logs in a full BG roster).
     if (!AmbientFleetEnabled()) return;
-    const int32 matches_cap = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.Matches", 0);
+    const int32 matches_cap = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.Matches", 0, true);
     if (matches_cap <= 0) return;
     constexpr uint32 kSeedIntervalMs = 3u * 60u * 1000u;
     if (last_bg_seed_ms_ && (now_ms - last_bg_seed_ms_) < kSeedIntervalMs) return;
@@ -4287,7 +4335,7 @@ void BotPopulationManager::SeedBgMatches(uint32 now_ms)
     static std::vector<uint16> seed_types;
     {
         std::vector<uint16> wanted;
-        std::string const list = sConfigMgr->GetStringDefault("Playerbot.Bg.AutoSeed.Types", "");
+        std::string const list = sConfigMgr->GetStringDefault("Playerbot.Bg.AutoSeed.Types", "", true);
         if (list.empty())
             wanted = { 2, 3, 1 };
         else
@@ -4324,7 +4372,7 @@ void BotPopulationManager::SeedBgMatches(uint32 now_ms)
     // can be changed via `.reload config` without a restart. Useful BMLs:
     // WSG 1014, AB 1018, EotS 7, Twin Peaks 108, BfG 120, Kotmogu 699.
     const int32 forced_bg_type =
-        sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.ForceType", 0);
+        sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.ForceType", 0, true);
     const uint16 bg_type = forced_bg_type > 0
         ? uint16(forced_bg_type)
         : seed_types[bg_seed_rotation_ % seed_types.size()];
@@ -4352,7 +4400,7 @@ void BotPopulationManager::SeedArenaMatches(uint32 now_ms)
     // `Playerbot.Bg.AutoSeed.Arena` = desired number of concurrent seeded
     // skirmishes (0 = disabled). One skirmish needs both factions' groups.
     if (!AmbientFleetEnabled()) return;   // owner bots only, see SeedBgMatches
-    const int32 arena_cap = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.Arena", 0);
+    const int32 arena_cap = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.Arena", 0, true);
     if (arena_cap <= 0) return;
 
     constexpr uint32 kArenaSeedIntervalMs = 3u * 60u * 1000u;
@@ -4373,7 +4421,7 @@ void BotPopulationManager::SeedArenaMatches(uint32 now_ms)
     // the same override that pins BG seeds can pin a specific arena
     // (4=Nagrand, 5=Blade's Edge, 6=AllArenas, 8=Ruins, 10=Sewers, 11=RoV).
     uint16 arena_bml = 6;   // BATTLEGROUND_AA
-    const int32 forced = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.ForceType", 0);
+    const int32 forced = sConfigMgr->GetIntDefault("Playerbot.Bg.AutoSeed.ForceType", 0, true);
     if (forced > 0)
     {
         if (BattlegroundTemplate const* ftmpl =
@@ -4556,7 +4604,7 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
             if (!is_prep && !is_running) continue;
             // Only SUSTAIN a RUNNING battleground that has a human in it. A bot-only running match is not refilled: it runs down and ends
             // on its own, so few instances stay alive and real players are put into the ones that are (owner directive 2026-06-17, confirmed
-            // by Karrz 2026-10-11: as few instances as possible, as many real players in each). PREP BGs are left ungated so a forming
+            // by playtest 2026-10-11: as few instances as possible, as many real players in each). PREP BGs are left ungated so a forming
             // human match still fills before its gates open (the human is invited but may not have entered m_Players yet).
             bool const has_human = BgHasHumanPlayer(bg);
             if (is_running && !has_human) continue;

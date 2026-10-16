@@ -34,6 +34,7 @@ struct BossWarning
     uint32_t    repeatMs;      // earliest re-use after the previous one (0 = does not repeat / not predictable)
     uint32_t    leadMs;        // warn this long before the earliest time
     uint32_t    resyncAura;    // aura that appears when the spell has just landed (0 = none)
+    char const* carrierLabel = nullptr;   // when set, a raid member gaining resyncAura is named at once: "<name> <carrierLabel>"
 };
 
 struct BossWarnEvent

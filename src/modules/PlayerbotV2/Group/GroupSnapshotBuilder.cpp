@@ -337,8 +337,9 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
                 {
                     m.is_casting    = true;
                     m.casting_spell = casting->m_spellInfo->Id;
-                    if (Unit* tgt = casting->m_targets.GetUnitTarget())
-                        m.casting_target = tgt->GetGUID();
+                    // By GUID: the Spell's raw object pointer is only refreshed on the spell's own update, so a target that despawned or died in the
+                    // last map update (a whelp, n33 onyxia_full crash 02:38) is a dangling pointer here.
+                    m.casting_target = casting->m_targets.GetUnitTargetGUID();
                     m.casting_end_ms = GameTime::GetGameTimeMS()
                         + static_cast<uint32>(std::max<int32>(casting->GetRemainingCastTime(), 0));
                     // [raid_rez] cast state: a resurrection in flight (MC 2026-10-08: every healer waited on a rez cast that never
@@ -356,7 +357,7 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
                         }
                         if (due)
                         {
-                            Unit* rt = casting->m_targets.GetUnitTarget();
+                            Unit* rt = ObjectAccessor::GetUnit(*mp, casting->m_targets.GetUnitTargetGUID());
                             TC_LOG_INFO("playerbot.v2",
                                 "[raid_rez] cast state: {} spell {} state={} time_left={} ms target={} alive={} ghost={} resurrect_requested={}",
                                 mp->GetName(), casting->m_spellInfo->Id, uint32(casting->getState()), casting->GetRemainingCastTime(),

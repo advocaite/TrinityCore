@@ -1,7 +1,7 @@
 // SnapshotBuildPool - A fixed, persistent worker pool used to parallelize the
 // per-tick snapshot Build phase by Map* (PlayerbotV2 #5 Phase 4).
 //
-// Unlike AiWorkerPool (a long-lived producer/consumer queue that runs the AI
+// Unlike AiWorkerPool (a long-lived producer/consumer queue that runs the bot logic
 // tick), this pool is a *fork-join barrier* primitive: the world thread submits
 // a batch of independent tasks (one per Map* partition) via run_and_wait(),
 // the persistent workers drain them in parallel, and run_and_wait() returns

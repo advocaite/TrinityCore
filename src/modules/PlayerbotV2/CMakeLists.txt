@@ -64,10 +64,10 @@ function(playerbot_v2_configure_sublib target_name)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Sub-library: Bot — top-level AI (state machine, snapshot/builder/view,
+# Sub-library: Bot — top-level bot logic (state machine, snapshot/builder/view,
 # personality, RNG, command parser, intent emitter/executor, registries,
 # class tables, recipe difficulty), plus the State_* files under Bot/States/.
-# This is the AI core; it's referenced by Combat / Group / Session.
+# This is the bot logic core; it's referenced by Combat / Group / Session.
 # ---------------------------------------------------------------------------
 add_library(playerbot-v2-bot STATIC)
 CollectAndAddSourceFiles(playerbot-v2-bot ${CMAKE_CURRENT_SOURCE_DIR}/Bot)
@@ -106,7 +106,7 @@ CollectAndAddSourceFiles(playerbot-v2-session ${CMAKE_CURRENT_SOURCE_DIR}/Sessio
 playerbot_v2_configure_sublib(playerbot-v2-session)
 
 # ---------------------------------------------------------------------------
-# Sub-library: Threading — AI worker pool, snapshot publisher, tick scheduler,
+# Sub-library: Threading — bot worker pool, snapshot publisher, tick scheduler,
 # lock hierarchy. The hot path; small but heavily used.
 # ---------------------------------------------------------------------------
 add_library(playerbot-v2-threading STATIC)

@@ -74,6 +74,10 @@ Install the `ForeverBots` folder into `Interface\AddOns` (the folder name must s
 out of date AddOns"). The addon only sends ordinary chat, so it needs nothing else on the client.
 
 - `/fb` opens or closes the window (it stays open across relog). The window has:
+  - **Raid ready** (also `/fb raidready`): calls your saved bots (`.bot summon saved`), waits until the group stops growing,
+    makes it a raid when it holds more than five, sets formation circle and spacing close, sends `resume` and the
+    crowd-control switch, sets the Main Tank flag when you target a group member, and starts a ready check about twenty
+    seconds later while the bots buff themselves. Not in combat; a new click or combat cancels it.
   - **Add buttons**: one per class and role (`.bot add <class> <role>`).
   - **Orders**: Follow, Stay, Attack (your target), Resume, Pull, Flee, Come, Stop, Release, Pull back, Fall back,
     Set rally. They go out in party/raid chat, so typing the word is identical.
@@ -87,7 +91,7 @@ out of date AddOns"). The addon only sends ordinary chat, so it needs nothing el
   frame (drag it, position is saved): the eight icons (click assigns, right-click clears), Follow, Stay, Attack,
   Pull back, Dist -/+, Dismiss and a status line with the bot's last confirmation. `/fb bot on|off` toggles it.
   The client cannot tell a bot from a human, so do not use the panel on real players.
-- Slash commands that work without the window: `/fb add <class> [role]`, `/fb call|dismiss|save|unsave|regear
+- Slash commands that work without the window: `/fb add <class> [role]`, `/fb raidready`, `/fb call|dismiss|save|unsave|regear
   [name|all]`, `/fb delete <name>`, `/fb list`, `/fb fallback`, `/fb pullback`, `/fb rally`, `/fb formation
   circle|arrow|line|none`, `/fb spacing tight|close|spread`, `/fb distance <1-20>`, `/fb maintank [name]`, `/fb tank
   <name> <marker>|clear`, `/fb assign <name> <marker> [role]`, `/fb assign list`.
@@ -147,10 +151,11 @@ from the bot.
 | `repair` | yes | yes | Same pattern with a repair vendor: `Raveni: repairing at ...`. |
 | `loot` | yes | yes | Need before greed with the usual etiquette (human gets first claim). `Raveni: need before greed, the usual rules`. |
 | `loot all` | yes | yes | The bot rolls for itself on every drop and takes every corpse item, greys included. `Raveni: looting everything, greys included, and rolling for myself`. Memory only (resets on relog). |
+| `use <object name or id>` | yes | yes | Uses a dungeon object near the bot: an altar, brazier, lever or orb (`use altar`, `use brazier`). The bot walks to the nearest match within 30 yards, uses it once and then stays there until you say `follow`. For an object that needs several people, such as the Blackrock Altar in Upper Blackrock Spire (three), click it yourself and send it to two bots by name: `;Raveni:use altar`, `;Doran:use altar`. Nothing matching: `no 'altar' within 30 yards of me`. |
 
 ### Gear and economy by whisper (selected NPC needed)
 
-`buy <entry> [n]`, `buyfood`, `buypot`, `buybandage`, `buyall`, `use <entry>`, `equip <entry>`, `bank`, `auction`,
+`buy <entry> [n]`, `buyfood`, `buypot`, `buybandage`, `buyall`, `equip <entry>`, `bank`, `auction`,
 `mail`, `train`, `talents [apply]`, `upgrades [apply]`, `fly <node>` and the `*_all` broadcasts such as
 `repair_all`, `sell_all`, `buyfood_all`. They need a selected vendor/auctioneer/flight master where the bot has
 to interact. The full index is the `commands` whisper.
@@ -265,8 +270,8 @@ World bots are ambient characters with no owner (`Playerbot.World.Enable = 1` sp
   Invites: `Playerbot.Interact.AutoAcceptInvites` (`none`, `friends_or_higher`, `guild_or_higher`, `anyone`).
 - Companion banter (`PartyBanter`): a short lowercase line now and then on ready check, wipe, rez, death, boss
   kill; never in a group over 15 or with `Playerbot.Chatter.Enabled = 0`.
-- Hostile-faction world bots can be placed near you (`Playerbot.World.FriendlyPct`, default 80); set it to 100 to
-  avoid fights on a PvP realm.
+- Hostile-faction world bots can be placed near you (`Playerbot.World.FriendlyPct` and the per-zone `*FriendlyPct` keys, all 100 = none by default); lower them to
+  get them (they fight on a PvP realm).
 
 ## 12. Config keys
 
@@ -310,7 +315,7 @@ Defaults are those of `conf/playerbot.conf.dist`. Behaviour switches are read wh
 **Social and world (default)**: `BotWhisperable` 1, `WorldBotSayReply` 1, `PoliteWorldBots` 1, `PartyBanter` 1,
 `SocialEmotes` 1, `Fidget` 1, `Playerbot.Chatter.Enabled` 1, `Playerbot.Interact.AutoAcceptInvites` friends_or_higher,
 `Playerbot.Interact.AutoLeaderHandover` 1, `Playerbot.World.Enable` 0 (`MaxBots` 100, `BotsPerPlayer` 25,
-`ActivityRadius` 300, `FriendlyPct` 80), `Playerbot.Population.TotalTarget` 0.
+`ActivityRadius` 300, `FriendlyPct` 100), `Playerbot.Population.TotalTarget` 0.
 
 **Battlegrounds**: `Playerbot.Bg.AutoSeed.Matches` 0, `Playerbot.Bg.AutoJoin` 0, `Playerbot.Bg.MakeRoomForPlayers` 1,
 `Playerbot.Bg.Coordinator.Enable` 1.

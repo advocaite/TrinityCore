@@ -25,6 +25,12 @@
 #include "Bot/DeathHotspots.h"
 #include "Bot/States/MaintainHelpers.h"   // States::ChunkedWalkToward
 #include "Travel/QuestHubDatabase.h"
+#include "Travel/TownNpcIndex.h"
+#include "Bot/TownLife.h"
+#include "Bot/BotRegistry.h"
+#include "Fleet/OwnerRegistry.h"
+#include "Util.h"
+#include "Config.h"
 #include "Bot/World/ZonePicker.h"
 #include "GameTime.h"
 #include "UnitDefines.h"   // UNIT_NPC_FLAG_FLIGHTMASTER / _QUESTGIVER
@@ -176,18 +182,32 @@ bool PvpHelpCalloutFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView c
     return true;
 }
 
+// Playerbot.World.TownLife (default 1): the shows below and the level-gated LFG yells. Read once at start.
+bool TownLifeEnabled()
+{
+    static bool const on = sConfigMgr->GetBoolDefault("Playerbot.World.TownLife", true);
+    return on;
+}
+
 // ---------- idle:yell_lfg ----------
+// A solo bot in a rested area (town / inn) now and then calls for a group. The level-60 bots call for any group; a bot of a dungeon's
+// level names that dungeon, but only a few take part at a time. Nothing here forms a group: a bot joins one only when a real player
+// invites it (the invite rules), so a dungeon is never run by bots alone and costs no RAM until a player asks for it.
 bool YellLfgGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,uint32)
 {
     if (s.in_group()) return false;
-    if (s.level() < 60) return false;
-    if (s.raw().identity.rest_bonus_xp <= 0) return false;
+    if (s.level() < 13) return false;
+    if (s.has_owner_character()) return false;
+    // A rested place: the rested pool fills in inns and cities, but a level-60 bot has none, so a capital counts as well.
+    if (s.raw().identity.rest_bonus_xp <= 0 && !::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id())) return false;
     if (ai.personality().verbosity == Verbosity::Silent) return false;
     if (s.is_moving() || s.in_combat() || s.is_casting()) return false;
     if (s.raw().movement.is_mounted) return false;
-
     constexpr uint32 kYellThrottleMs = 45u * 60u * 1000u;
     const uint32 yell_now_ms = s.published_at_ms();
+    // Below level 60 only a share of the bots call at a time (a different set every 45 minutes).
+    if (s.level() < 60 && (!TownLifeEnabled() || !V2::TownLife::TakesPart(s.bot_id(), 3u, yell_now_ms, 15u, kYellThrottleMs))) return false;
+
     if (ai.last_yell_lfg_ms() == 0)
     {
         const uint32 stagger = (s.bot_id() * 9173u) % kYellThrottleMs;
@@ -206,18 +226,18 @@ bool YellLfgFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,B
     const uint32 yell_now_ms = s.published_at_ms();
     constexpr char const* kTankYells[] = {
         "Tank LFG, msg me!",
-        "Looking for heroic group, can tank.",
-        "Tank for hire, dungeons or M+.",
+        "Looking for a group, can tank.",
+        "Tank here, any dungeon, whisper me.",
     };
     constexpr char const* kHealerYells[] = {
         "Healer LFG.",
-        "Looking for group to heal, dungeon or raid.",
+        "Looking for a group to heal, whisper me.",
         "Healer available, msg me for runs.",
     };
     constexpr char const* kDpsYells[] = {
         "DPS LFG.",
         "Looking for any group.",
-        "Hi! Anyone running content tonight?",
+        "Hi! Anyone running a dungeon tonight?",
         "lfg, can do most stuff.",
     };
     constexpr uint32 kTankSize = sizeof(kTankYells) / sizeof(kTankYells[0]);
@@ -232,7 +252,16 @@ bool YellLfgFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,B
         phrase = kHealerYells[sel_seed % kHealerSize];
     else
         phrase = kDpsYells[sel_seed % kDpsSize];
-    emit.yell_world(phrase);
+    // A bot of a dungeon's level names the dungeon.
+    std::string line = phrase;
+    if (s.level() < 60)
+        if (char const* dungeon = V2::TownLife::LfgDungeonFor(s.level(), sel_seed))
+        {
+            char const* rolename = role == Role::Tank ? "tank" : role == Role::Healer ? "healer" : "dps";
+            line = std::string("LFG ") + dungeon + ", " + rolename + " here. Whisper me!";
+        }
+    V2::TownLife::Counters().lfg_calls.fetch_add(1, std::memory_order_relaxed);
+    emit.yell_world(line);
     ai.set_last_yell_lfg_ms(yell_now_ms);
     ai.set_last_rule_fired("idle:yell_lfg");
     return true;
@@ -704,6 +733,150 @@ bool LeaveWaterFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
                                      hub->location.GetPositionZ(), "idle:leave_water", now_ms);
 }
 
+// ---------- idle:inn_rest ----------
+// In a capital a share of the bots (most at night) walk to the nearest inn and sit there for a while. One check of the town NPC index
+// per tick, only for the bots whose turn it is.
+constexpr float kInnSearchYards = 150.0f;
+constexpr float kInnStandYards = 5.0f;
+
+bool InnRestGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (!TownLifeEnabled()) return false;
+    if (!::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id())) return false;
+    int const hour = TimeBreakdown(GameTime::GetGameTime()).tm_hour;
+    if (!V2::TownLife::TakesPart(s.bot_id(), 1u, s.published_at_ms(), V2::TownLife::InnPercent(hour), 15u * 60u * 1000u)) return false;
+    if (!s.is_alive() || s.in_combat() || s.is_casting() || s.has_owner_character() || s.in_group()) return false;
+    if (s.is_in_instance() || s.is_in_dungeon() || s.in_battleground() || s.raw().movement.is_mounted) return false;
+    return s.enemies_within(40.0f) == 0 && !s.has_actionable_quest();
+}
+
+bool InnRestFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    auto const* inn = ::Playerbot::V2::Travel::TownNpcIndex::Instance().Nearest(
+        s.map_id(), bx, by, bz, UNIT_NPC_FLAG_INNKEEPER, s.is_alliance(), kInnSearchYards);
+    if (!inn) return false;
+    // Stand a few yards from the innkeeper, on the side the bot comes from, so a crowd does not stack on one point.
+    float const dx = bx - inn->x, dy = by - inn->y, len = std::hypot(dx, dy);
+    float const ux = len > 0.5f ? dx / len : 1.0f, uy = len > 0.5f ? dy / len : 0.0f;
+    float const stand = kInnStandYards + float(s.bot_id() % 5u);
+    float const tx = inn->x + ux * stand, ty = inn->y + uy * stand;
+    if (std::hypot(bx - tx, by - ty) > 4.0f)
+        return States::ChunkedWalkToward(s, ai, emit, tx, ty, inn->z, "idle:inn_rest", now_ms);
+    V2::TownLife::Counters().inn_ticks.fetch_add(1, std::memory_order_relaxed);
+    if (s.is_moving()) return false;
+    emit.sit();
+    ai.set_last_rule_fired("idle:inn_rest");
+    return true;
+}
+
+// ---------- idle:mailbox ----------
+// A few bots in a town walk to the nearest mailbox and stand there a while, then the window turns over and they go back to their errands.
+// The share is picked per time window by hash, so nothing is stored per bot.
+constexpr float kMailboxSearchYards = 120.0f;
+constexpr float kMailboxStandYards = 2.5f;
+constexpr uint32 kMailboxWindowMs = 90u * 1000u;
+
+bool MailboxGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (!TownLifeEnabled()) return false;
+    if (!::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id())) return false;
+    if (!V2::TownLife::TakesPart(s.bot_id(), 5u, s.published_at_ms(), 4u, kMailboxWindowMs)) return false;
+    if (!s.is_alive() || s.in_combat() || s.is_casting() || s.has_owner_character() || s.in_group()) return false;
+    if (s.is_in_instance() || s.is_in_dungeon() || s.in_battleground() || s.raw().movement.is_mounted) return false;
+    return s.enemies_within(40.0f) == 0 && !s.has_actionable_quest();
+}
+
+bool MailboxFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    auto const* box = ::Playerbot::V2::Travel::TownNpcIndex::Instance().NearestMailbox(s.map_id(), bx, by, bz, kMailboxSearchYards);
+    if (!box) return false;
+    V2::TownLife::Counters().mailbox_ticks.fetch_add(1, std::memory_order_relaxed);
+    float const dx = bx - box->x, dy = by - box->y, len = std::hypot(dx, dy);
+    if (len > kMailboxStandYards + 1.5f)
+    {
+        float const ux = dx / len, uy = dy / len;
+        return States::ChunkedWalkToward(s, ai, emit, box->x + ux * kMailboxStandYards, box->y + uy * kMailboxStandYards, box->z, "idle:mailbox", now_ms);
+    }
+    if (s.is_moving()) return false;
+    ai.set_last_rule_fired("idle:mailbox");
+    return true;
+}
+
+// ---------- idle:town_duel ----------
+// A bot in a town challenges a nearby world bot of about its level (spell 7266, Duel); the other accepts (BotAI duel pact), the duel runs
+// the usual way. A share of the bots take part, a pair at a time, at most once every 15 minutes per bot.
+bool TownDuelGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32)
+{
+    if (!TownLifeEnabled()) return false;
+    if (!V2::TownLife::TakesPart(s.bot_id(), 2u, s.published_at_ms(), 6u, 20u * 60u * 1000u)) return false;
+    if (!s.is_alive() || s.in_combat() || s.is_casting() || s.has_owner_character() || s.in_group()) return false;
+    if (s.is_in_instance() || s.is_in_dungeon() || s.in_battleground() || s.raw().movement.is_mounted || s.is_moving()) return false;
+    if (s.hp_pct() < 90 || s.level() < 6 || s.enemies_within(40.0f) > 0 || s.has_actionable_quest()) return false;
+    if (s.raw().social_events.has_duel_request || s.duel_in_progress()) return false;
+    uint32 const now = s.published_at_ms();
+    if (ai.last_town_show_ms() && now - ai.last_town_show_ms() < 15u * 60u * 1000u) return false;
+    if (!V2::TownLife::TakesPart(s.bot_id(), 2u, now, 6u, 20u * 60u * 1000u)) return false;
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    return ::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id())
+        || ::Playerbot::V2::Travel::TownNpcIndex::Instance().CountNear(s.map_id(), bx, by, 60.0f, s.is_alliance(), 0xFFFFFFFFu) >= 3;
+}
+
+bool TownDuelFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    for (auto const& u : s.nearby_friends())
+    {
+        if (!u.is_player || u.is_in_group || u.hp <= 0 || u.max_hp <= 0) continue;
+        float const d = std::hypot(u.x - bx, u.y - by);
+        if (d < 6.0f || d > 25.0f) continue;
+        uint64 const other = u.guid.GetCounter();
+        if (!Services::Registry().has(BotId(other)) || Services::Owners().GetOwner(BotId(other)).account_id != 0) continue;   // a world bot only
+        int const other_hp = int((int64(u.hp) * 100) / u.max_hp);
+        if (!V2::TownLife::DuelPartners(s.level(), s.hp_pct(), u.level, other_hp, s.bot_id(), other)) continue;
+        uint32 const now = s.published_at_ms();
+        V2::TownLife::PactSet(other, s.bot_id(), now);
+        emit.cast(7266u, u.guid);   // Duel
+        V2::TownLife::Counters().duels.fetch_add(1, std::memory_order_relaxed);
+        ai.set_last_town_show_ms(now);
+        ai.set_last_rule_fired("idle:town_duel");
+        return true;
+    }
+    return false;
+}
+
+// ---------- idle:campfire ----------
+// Outdoors at night, a few bots that stand still light a campfire (Basic Campfire, 818); the usual ambient sit does the rest.
+bool CampfireGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32)
+{
+    if (!TownLifeEnabled()) return false;
+    if (!s.is_alive() || s.in_combat() || s.is_casting() || s.has_owner_character() || s.in_group() || s.is_moving()) return false;
+    if (s.is_in_instance() || s.is_in_dungeon() || s.in_battleground() || s.raw().movement.is_mounted || s.is_swimming()) return false;
+    if (s.enemies_within(40.0f) > 0 || !s.knows_spell(818u)) return false;
+    int const hour = TimeBreakdown(GameTime::GetGameTime()).tm_hour;
+    if (hour >= 6 && hour < 18) return false;
+    uint32 const now = s.published_at_ms();
+    uint8 lo = 0, hi = 0;
+    if (!::Playerbot::V2::World::VanillaZoneLevelRange(s.zone_id(), lo, hi)) return false;   // outdoors, not in a capital
+    if (ai.last_moving_ms() == 0 || now - ai.last_moving_ms() < 30u * 1000u) return false;   // has stood still a while
+    if (ai.last_town_show_ms() && now - ai.last_town_show_ms() < 20u * 60u * 1000u) return false;
+    return V2::TownLife::TakesPart(s.bot_id(), 4u, now, 4u, 30u * 60u * 1000u);
+}
+
+bool CampfireFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    ai.set_last_town_show_ms(s.published_at_ms());
+    emit.cast(818u);
+    V2::TownLife::Counters().campfires.fetch_add(1, std::memory_order_relaxed);
+    ai.set_last_rule_fired("idle:campfire");
+    return true;
+}
+
 } // anonymous namespace
 
 void RegisterAmbientRules(IdleRuleRegistry& r)
@@ -842,6 +1015,40 @@ void RegisterAmbientRules(IdleRuleRegistry& r)
         rule.gate     = &AmbientStateEmoteGate;
         rule.fire     = &AmbientStateEmoteFire;
         rule.min_interval_ms = 60000;
+        r.register_rule(std::move(rule));
+    }
+    {
+        // Town life (Bot/TownLife.h): just above the rpg errands (110-135), so a bot whose turn it is does the show instead of strolling, and
+        // below upkeep, quests and travel. Each takes part only for a share of the bots.
+        IdleRule rule;
+        rule.name     = "idle:inn_rest";
+        rule.priority = 139;
+        rule.gate     = &InnRestGate;
+        rule.fire     = &InnRestFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:mailbox";
+        rule.priority = 138;
+        rule.gate     = &MailboxGate;
+        rule.fire     = &MailboxFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:town_duel";
+        rule.priority = 137;
+        rule.gate     = &TownDuelGate;
+        rule.fire     = &TownDuelFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:campfire";
+        rule.priority = 136;
+        rule.gate     = &CampfireGate;
+        rule.fire     = &CampfireFire;
         r.register_rule(std::move(rule));
     }
 }

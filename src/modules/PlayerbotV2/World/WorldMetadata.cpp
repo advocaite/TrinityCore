@@ -19,7 +19,7 @@ namespace
 std::string const& SharedDb()
 {
     static std::string const db =
-        sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot");
+        sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot", true);
     return db;
 }
 } // anonymous

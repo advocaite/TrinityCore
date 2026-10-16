@@ -745,7 +745,11 @@ void BotChatReactor::React(Player* sender, Group* group, std::string const& msg)
                     else /* go */
                     {
                         mai->set_chat_pause_until_ms(0);
-                        mai->release_owner_lead();   // DungeonFlow: "go" opens the human-lead release window
+                        // DungeonFlow: only "go" opens the human-lead release window. "pull" / "pulling" / "engage" are the owner's own
+                        // orders (their handlers decide what the autopilot may do); opening the window for every bot on them let the
+                        // tank autopilot pull on and run back and the casters wander (Deadmines 2026-10-14).
+                        if (ContainsWord(norm, "go"))
+                            mai->release_owner_lead();
                     }
                 }
             }

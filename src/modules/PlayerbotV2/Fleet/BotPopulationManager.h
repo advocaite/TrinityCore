@@ -159,7 +159,7 @@ public:
     // Returns the role pinned. World thread only.
     static Role ApplyCompanionRole(Player* bot, Role requested, char const* where);
 
-    // `.bot save`: stores the role the companion plays right now (its AI role, else what its talents say) when none is stored yet, so a
+    // `.bot save`: stores the role the companion plays right now (its bot logic role, else what its talents say) when none is stored yet, so a
     // call or relog brings it back as it was saved instead of re-reading talents that may have changed or not been bought. A role
     // already stored (declared) is left as it is. Returns the role stored. World thread only.
     static Role StoreCurrentRole(Player* bot);

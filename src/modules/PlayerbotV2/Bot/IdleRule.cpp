@@ -16,12 +16,12 @@ void IdleRuleRegistry::register_rule(IdleRule r)
 {
     // finalize() runs after every register_rule from RegisterAllIdleRules.
     // Hitting this branch means someone is registering a rule AFTER init,
-    // which would race with AI workers calling tick(). Refuse instead.
+    // which would race with bot workers calling tick(). Refuse instead.
     if (finalized_)
     {
         TC_LOG_ERROR("playerbot.v2",
             "[IdleRuleRegistry] register_rule('{}', prio={}) called after "
-            "finalize() — refusing to mutate vector while AI workers tick. "
+            "finalize() — refusing to mutate vector while bot workers tick. "
             "All rule registration must complete in RegisterAllIdleRules.",
             r.name, r.priority);
         return;
@@ -62,6 +62,12 @@ void IdleRuleRegistry::finalize()
         rule.world_errand = IsWorldErrand(rule.name);
     std::stable_sort(rules_.begin(), rules_.end(),
         [](IdleRule const& a, IdleRule const& b) { return a.priority > b.priority; });
+    throttled_ = 0;
+    for (IdleRule& rule : rules_)
+        rule.throttle_slot = rule.min_interval_ms != 0 ? int(throttled_++) : -1;
+    fired_ = std::make_unique<std::atomic<uint32>[]>(rules_.size());
+    for (size_t i = 0; i < rules_.size(); ++i)
+        fired_[i].store(0, std::memory_order_relaxed);
     finalized_ = true;
 }
 
@@ -85,31 +91,59 @@ std::string_view IdleRuleRegistry::tick(BotSnapshotView const& s, BotAI& ai,
         });
         finalize();
     }
-    for (auto const& r : rules_)
+    for (size_t ri = 0; ri < rules_.size(); ++ri)
     {
+        auto const& r = rules_[ri];
         if (r.priority < min_priority) break;   // rules_ sorted desc — bail early
         if (!r.enabled) continue;
         if (!r.gate)    continue;
         if (r.world_errand && s.is_companion_with_owner()) continue;
-        // Per-rule gate-throttle. Rules with min_interval_ms > 0 skip
-        // the gate entirely until the throttle window elapses. Saves
-        // the gate-call cost for low-urgency rules (mail, calendar,
-        // auction, charter) that don't need 5Hz responsiveness.
-        if (r.min_interval_ms != 0)
+        // Per-rule gate-throttle, kept per bot: a rule with min_interval_ms > 0 is looked at by a given bot no more than once per interval
+        // (low-urgency rules such as mail, calendar, auction and charter do not need every tick). The first look is spread over the
+        // interval by a hash of bot and rule, so a fleet does not look in the same second.
+        if (r.throttle_slot >= 0)
         {
-            if (r.last_gate_attempt_ms != 0
-                && (now_ms - r.last_gate_attempt_ms) < r.min_interval_ms)
+            uint32& next = ai.gate_next_ms(size_t(r.throttle_slot), throttled_);
+            if (next == 0)
+            {
+                uint32 const h = (uint32(s.bot_id()) + 1u) * 2654435761u ^ (uint32(r.throttle_slot) + 1u) * 2246822519u;
+                next = (now_ms + (h >> 7) % r.min_interval_ms) | 1u;
+            }
+            if (int32(now_ms - next) < 0)
                 continue;
-            r.last_gate_attempt_ms = now_ms;
+            next = (now_ms + r.min_interval_ms) | 1u;
         }
         if (!r.gate(s, ai, g, now_ms)) continue;
         if (r.fire && r.fire(s, ai, g, emit, now_ms))
         {
             r.last_fired_ms = now_ms;
+            if (fired_) fired_[ri].fetch_add(1, std::memory_order_relaxed);
             return r.name;
         }
     }
     return {};
+}
+
+std::vector<std::pair<std::string_view, uint32>> IdleRuleRegistry::FireCensus(size_t top, std::vector<std::string_view> const& always) const
+{
+    std::vector<std::pair<std::string_view, uint32>> all;
+    if (!fired_) return all;
+    for (size_t i = 0; i < rules_.size(); ++i)
+        all.emplace_back(std::string_view(rules_[i].name), fired_[i].load(std::memory_order_relaxed));
+    std::stable_sort(all.begin(), all.end(), [](auto const& a, auto const& b) { return a.second > b.second; });
+    std::vector<std::pair<std::string_view, uint32>> out;
+    for (auto const& row : all)
+        if (out.size() < top && row.second > 0) out.push_back(row);
+    // Every throttled rule too: the ones the old fleet-wide clock starved are the ones to watch.
+    for (size_t i = 0; i < rules_.size(); ++i)
+        if (rules_[i].min_interval_ms != 0
+            && std::none_of(out.begin(), out.end(), [&](auto const& o) { return o.first == rules_[i].name; }))
+            out.push_back({ std::string_view(rules_[i].name), fired_[i].load(std::memory_order_relaxed) });
+    for (std::string_view want : always)
+        for (auto const& row : all)
+            if (row.first == want && std::none_of(out.begin(), out.end(), [&](auto const& o) { return o.first == want; }))
+                out.push_back(row);
+    return out;
 }
 
 std::vector<IdleRuleRegistry::RuleDiagnostic>
@@ -171,8 +205,8 @@ void RegisterAllIdleRules(IdleRuleRegistry& r)
     // RegisterBgRules(r); ...
 
     // CRITICAL: finalize sorts rules_ + locks against further register_rule.
-    // Must run BEFORE any AI worker calls tick(). Services::Init calls
-    // RegisterAllIdleRules immediately before starting the AI worker pool
+    // Must run BEFORE any bot worker calls tick(). Services::Init calls
+    // RegisterAllIdleRules immediately before starting the bot worker pool
     // (see Services.cpp), so finalize() runs single-threaded here.
     r.finalize();
 }

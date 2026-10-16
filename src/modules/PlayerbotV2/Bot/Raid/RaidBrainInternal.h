@@ -55,7 +55,7 @@ bool Controlled(Unit* u);
 // Path queries are capped per plan pass (all bots together, see ResetPathProbes): urgent probes (leaving a hazard,
 // a carrier run, scripted mechanics, a breath / cone) may use the whole cap, the rest (spread, role spots, stay near)
 // stop early so an escape never finds the pass's budget spent.
-bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false);
+bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false, bool hazard = false);
 void ResetPathProbes();
 bool SetMove(RaidOrder& out, float x, float y, float z, char const* reason);
 // Best nearby point that increases the distance to every raid member in `others`.

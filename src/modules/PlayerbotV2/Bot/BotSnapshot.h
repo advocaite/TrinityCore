@@ -1,5 +1,5 @@
 // BotSnapshot - Per-bot immutable snapshot. Built on world thread, consumed
-// read-only by AI workers. See CONTRACTS.md §2.1.
+// read-only by bot workers. See CONTRACTS.md §2.1.
 //
 // First-iteration shape: includes the load-bearing fields needed by the initial
 // state machine (Idle, LoggingIn, Travelling) and APL evaluator. Additional
@@ -73,7 +73,7 @@ struct EquippedItem
     uint8  durability_pct;
     // First ON_USE spell from ItemTemplate.Effects, or 0 when the item has
     // no on-use effect (most weapons/armor; trinkets / engineering tinkers
-    // typically carry one). Resolved in the builder so AI can call
+    // typically carry one). Resolved in the builder so bot logic can call
     // is_ready(on_use_spell_id) without dragging ItemTemplate into the
     // worker thread. Used by InCombat for trinket auto-fire on cooldown.
     uint32 on_use_spell_id = 0;
@@ -94,7 +94,7 @@ struct InventoryItem
     bool   is_quest_item;
     // Item level (0 for non-equippable / non-leveled). Lets the auto-equip
     // rule compare upgrades against the currently-equipped item without
-    // re-resolving the live Item* on the AI worker thread.
+    // re-resolving the live Item* on the bot worker thread.
     uint16 item_level;
     // Target equipment slot (EQUIPMENT_SLOT_HEAD .. RANGED) the bot would
     // wear this item in. Resolved by Player::FindEquipSlot in the builder
@@ -126,7 +126,7 @@ struct InventoryItem
     ItemStatBlock stats{};
 };
 
-// One enumerable objective from `Quest::Objectives`. Captured per-tick so AI
+// One enumerable objective from `Quest::Objectives`. Captured per-tick so bot logic
 // can decide which one to chase next without round-tripping the world thread
 // for every (quest, obj) pair. `type` matches QuestObjectiveType (KILL=0 /
 // ITEM=1 / GAMEOBJECT=2 / TALKTO=3 / AREATRIGGER=10 etc); `object_id` is the
@@ -316,7 +316,7 @@ struct NearbyUnit
     ObjectGuid victim;          // Who this unit is currently attacking (Empty if none).
     // For Creature units: lower 32 bits of UNIT_NPC_FLAG_* (vendor/repair/
     // banker/trainer/flightmaster/innkeeper/etc). Zero for player units.
-    // Lets AI rules find capability-bearing NPCs without round-tripping
+    // Lets bot logic rules find capability-bearing NPCs without round-tripping
     // through a per-creature ObjectAccessor lookup.
     uint32     npc_flags = 0;
     // Dungeon-boss flag (creature_template.flags_extra & 0x10000000).
@@ -350,6 +350,9 @@ struct NearbyUnit
     // and wedge InCombat forever firing at a target that never dies (observed
     // live: Grimfang frozen 2.5min shooting Valley-of-Trials Training Dummy).
     bool       is_pacified = false;
+    // The creature is running away (a low-health mob fleeing for help, or feared): its motion is Fleeing, Timed fleeing or
+    // Assistance. Melee do not chase it out of the group.
+    bool       is_fleeing = false;
     // UNIT_FLAG_UNINTERACTIBLE (0x02000000, the old NOT_SELECTABLE): players
     // cannot select/target the unit, and Unit::IsValidAttackTarget rejects it —
     // so a bot can NEVER acquire it as a victim. Invisible "stalker" / trigger
@@ -448,12 +451,12 @@ struct NearbyUnit
     // sizing (Combat/Apl/ApClassicHeal.h). 0 for friends.
     float      melee_swing = 0.f;
 
-    // ---- Threat discipline (port of Karrz's GroupPveRestraint /
-    // MCRaidHoldDamage / LooseAttackers, ike3-based bots ike3 playerbot). Read by the
+    // ---- Threat discipline (port of the owner's GroupPveRestraint /
+    // MCRaidHoldDamage / LooseAttackers, wow-1.12 ike3 playerbot). Read by the
     // builder from the unit's ThreatManager on the build thread; consumed by
     // BotSnapshotView::threat_hold() and loose_attacker(). Zero / false on
     // units without a threat list (players, threatless creatures).
-    // The bot's threat on this unit: max(bot, bot's pet), as Karrz counts it.
+    // The bot's threat on this unit: max(bot, bot's pet), as the owner counts it.
     float      my_threat = 0.f;
     // Highest threat any group TANK (see CombatTargetsState::group_tank)
     // within 50y of the unit holds on it. 0 when the group has no tank.
@@ -1074,7 +1077,7 @@ struct WorldQuestEntry
 };
 // Quest discovery rollup. Lists of nearby questgivers (offers + turn-ins),
 // bag items that start a quest, and world-quest givers within range. All
-// resolved by the snapshot builder so AI workers don't round-trip
+// resolved by the snapshot builder so bot workers don't round-trip
 // ObjectMgr / Creature::hasInvolvedQuest from the worker thread.
 struct QuestDiscoveryState
 {
@@ -1203,7 +1206,7 @@ struct QuestLogState
     // The VALIDATED bridge route to the objective, computed by the builder's
     // world-thread probe with navmesh-checked source attaches (see
     // RouteRequest::validate_source_walk). Mirrors BotAI::PlanLeg field-for-
-    // field. The AI worker MUST execute these legs instead of recomputing
+    // field. The bot worker MUST execute these legs instead of recomputing
     // the route: its own FindRoute can't validate attaches off the world
     // thread, so it would produce the euclidean walk-only route the wedged
     // bot provably can't follow (the exact failure this exists to fix —
@@ -1387,7 +1390,7 @@ struct CombatTargetsState
 // Per-bot navigation telemetry surfaced to rules so they can short-circuit
 // when the bot's been wedged. BotAI tracks path failures via
 // `note_path_blocked`; the snapshot Builder copies the count + last-time
-// here so AI worker rules can read without dereferencing BotAI directly.
+// here so bot worker rules can read without dereferencing BotAI directly.
 //
 // `count` is the CONSECUTIVE (current-wedge) count of API::move_to results
 // that returned Result::Locked (NoPath / FarFromPolyEnd / Incomplete / Short).
@@ -1470,7 +1473,7 @@ struct BankState
 };
 
 // Active group/master loot rolls awaiting the bot's vote. See
-// LootRollEntry for per-row semantics; AI emits LootRollIntent.
+// LootRollEntry for per-row semantics; bot logic emits LootRollIntent.
 struct LootRollEntry
 {
     ObjectGuid loot_object;
@@ -1479,7 +1482,7 @@ struct LootRollEntry
     uint8      vote_mask;
     bool       is_upgrade;
     bool       is_quest_item;
-    // Loot etiquette with a human in the group (Karrz's LootRollAction):
+    // Loot etiquette with a human in the group (the owner's LootRollAction):
     // a human group member on the bot's map, and whether one of them could
     // use the item and would want it (HumanWouldWantItem).
     bool       human_in_group = false;
@@ -1494,7 +1497,7 @@ struct LootRollsState
     void reset() { loot_rolls.clear(); }
 };
 
-// Nearby GameObjects within ~30yd that the AI cares about (mailbox,
+// Nearby GameObjects within ~30yd that the bot logic cares about (mailbox,
 // chests, herbs/ore, fishing holes, questgivers, binders, hazards,
 // portals). go_type mirrors GAMEOBJECT_TYPE_*. Sorted by distance so
 // the closest survive the bounded cap.
@@ -1551,7 +1554,7 @@ struct MovementState
     bool is_mounted  = false;
     bool is_moving   = false;
     // True while the CORE is flying the bot on a taxi path (UNIT_STATE_IN_
-    // FLIGHT). The AI must do NOTHING during a taxi flight — the
+    // FLIGHT). The bot logic must do NOTHING during a taxi flight — the
     // FlightPathMovementGenerator owns movement; any idle rule that emits a
     // move_to / teleport (watchdog_escape, unstick, hearth rescue) would
     // corrupt the flight. DispatchIdle and GlobalStuckRescue bail on this.
@@ -1597,7 +1600,7 @@ struct EnvironmentState
 // Dungeon execution context (Phase A of GROUP_DUNGEON_PLAN.md). Populated
 // when bot is inside an instance map so the dungeon-run rules can drive
 // tank pulls, interrupt rotation, wipe recovery, and run-completion
-// without round-tripping the InstanceScript from the AI worker. Also holds
+// without round-tripping the InstanceScript from the bot worker. Also holds
 // the cheaper "encounter context" pair (npc_id + phase) used by per-script
 // hooks. See per-field comments on the legacy flat fields (now consumed)
 // for full semantics.
@@ -1670,6 +1673,8 @@ struct PetState
     // the assist-pet rule: bot picks up the pet's target so a hunter
     // standing idle while his cat melees a mob actually opens up too.
     ObjectGuid             pet_victim;
+    // The pet's react state (REACT_PASSIVE 0 / DEFENSIVE 1 / AGGRESSIVE 2 / ASSIST 3).
+    uint8                  pet_react = 1;
     // Mob guids actively engaging the pet (anyone with the pet in
     // m_attackers). Capped at 4 to keep the snapshot lean. Drives the
     // peel half of assist_pet: when pet melees mob A but mob B is
@@ -1710,6 +1715,7 @@ struct PetState
         pet_auras.clear();
         stable_pets.clear();
         pet_victim = ObjectGuid::Empty;
+        pet_react = 1;
         pet_attackers.clear();
         pet_taunt_spells.fill(0);
         pet_taunt_count = 0;
@@ -2087,7 +2093,7 @@ struct ReputationEntry { uint32 faction_id; int32 standing; uint8 rank; };
 // Bot progression rollup. Trained skills, currency wallet, faction
 // reputations. Builder writes; rules read via view accessors. Separated
 // out so the snapshot publisher can re-use the cached vector across
-// ticks for AI threads where the underlying player object hasn't
+// ticks for bot logic threads where the underlying player object hasn't
 // gained new entries (BotSetupPipeline holds the long-term cache;
 // snapshot replays into the vector when invalidated).
 struct ProgressionState
@@ -2136,7 +2142,7 @@ inline float EquipFitScore(ItemStatBlock const& blk, uint16 item_level,
     return v;
 }
 
-// Bag / equipment summary. Cached aggregates the AI consults to gate
+// Bag / equipment summary. Cached aggregates the bot logic consults to gate
 // vendor-visit and equip-upgrade decisions without re-walking equipped[] /
 // bag_items every tick. bag_free_slots is the count of empty inventory
 // slots across all bags (cached because GetFreeInventorySlotCount walks
@@ -2216,7 +2222,7 @@ struct VendorVisitState
     void reset() { *this = VendorVisitState{}; }
 };
 
-// Consumables — stack-quantity counts the AI checks for OOC restock and the
+// Consumables — stack-quantity counts the bot logic checks for OOC restock and the
 // vendor-visit FSM gate. Built by the snapshot builder by walking bag_items
 // and sniffing item class / subclass. Health vs mana potion split is filled
 // only when the potion's primary spell effect is heal vs restore (so healers
@@ -2232,6 +2238,9 @@ struct ConsumablesState
     // ammo, 1 = arrows, 2 = bullets. ammo_count is every usable projectile in the bags.
     uint8  ammo_kind           = 0;
     uint32 ammo_count          = 0;
+    // Item subclass of the weapon in the ranged slot (ITEM_SUBCLASS_WEAPON_*), 0xFF = slot empty. The pull-back opener
+    // picks the shot that weapon fires (Throw / Shoot Bow / Gun / Crossbow), never one the core refuses EQUIPPED_ITEM.
+    uint8  ranged_subclass     = 0xFF;
     // Wand users (mage / priest / warlock) with a ranged weapon equipped: the
     // school mask of its damage (1 << ItemTemplate::GetDamageType(), as
     // Spell::Spell sets for a ranged-attack spell such as Shoot). 0 = none.
@@ -2268,7 +2277,7 @@ struct ClassicUpkeepState
 struct BgState
 {
     // Up to PLAYER_MAX_BATTLEGROUND_QUEUES (3 in 12.0) active queues per
-    // bot. AI uses count > 0 to gate against re-queuing the same BG.
+    // bot. bot logic uses count > 0 to gate against re-queuing the same BG.
     std::vector<BgQueueEntry> queues;
 
     // True when the bot is inside a battleground instance (vs queued for /
@@ -2521,7 +2530,7 @@ struct ArchetypeState
 // Craft-order board projection (#4B-2(a)). Read-only slice of
 // Fleet::CraftOrderBoard surfaced into each bot's snapshot so economy idle
 // rules can decide WITHOUT locking the board (the world thread populates this
-// from the board during Build; rules read it on the AI worker thread). All
+// from the board during Build; rules read it on the bot worker thread). All
 // fields default to "no order" so an un-populated snapshot is fail-closed.
 //
 // my_open_order_count  : how many Open orders this bot has POSTED as requester
@@ -2596,7 +2605,7 @@ struct BotSnapshot
     SnapshotVer version = 0;
     BotId       bot_id  = 0;
     TickId      world_tick = 0;
-    // GameTimeMS at publication. Lets the AI worker compute snapshot age
+    // GameTimeMS at publication. Lets the bot worker compute snapshot age
     // ("how stale is this fact base?") and the /age whisper report it.
     // Mirrors GameTime::GetGameTimeMS at builder-exit; uint32 so it
     // matches the underlying TC clock.
@@ -2646,7 +2655,7 @@ struct BotSnapshot
     GuildState guild{};
     // Bot's owner character name resolved at snapshot time (empty when
     // unowned or the cache lookup fails). Used by mat-share-to-owner mail
-    // rule so the AI worker can address mail without round-tripping the
+    // rule so the bot worker can address mail without round-tripping the
     // owner registry + character cache from the worker thread.
     std::string owner_name;
     // Owner character guid (Empty when unowned or account-only ownership).
@@ -2655,6 +2664,9 @@ struct BotSnapshot
     // The owner is in the bot's group: the bot is a companion and does what its owner's party does, not world-bot
     // errands (questing, vendors, gathering, travel). See IdleRuleRegistry::tick.
     bool owner_in_group = false;
+    // Flat distance to the owner when it is on the bot's map, else -1. nearby_friends keeps only the 12 nearest friends, so in a raid
+    // the owner is rarely in it (companion_may_sit).
+    float owner_dist = -1.0f;
     // Owner "max dps" / "save mana" (BotAI::tactic_burn / tactic_save_mana), mirrored by the builder.
     bool tactic_burn = false;
     bool tactic_save_mana = false;
@@ -2706,10 +2718,10 @@ struct BotSnapshot
     // semantics.
     SecondaryStatsState secondary_stats{};
     // (upgrades_pending migrated into bags.upgrades_pending above)
-    // Aggregate stack-quantity counts of consumable categories the AI cares
+    // Aggregate stack-quantity counts of consumable categories the bot logic cares
     // about for OOC restock decisions. Filled by the builder by walking
     // bag_items and sniffing item template GetClass/GetSubClass — saves the
-    // AI worker thread from looking up ItemTemplates for every bag item just
+    // bot worker thread from looking up ItemTemplates for every bag item just
     // to know "do I have enough food?". Populated for the categories the
     // auto-restock rules actually consult; add more as new rules need them.
     // (smallest_bag_capacity / has_empty_bag_slot migrated into bags above)
@@ -2777,17 +2789,17 @@ struct BotSnapshot
     // questgivers (creature OR game object) that can accept a complete
     // quest from the bot's log. Built by walking nearby_friends +
     // nearby_objects in the snapshot builder against the bot's complete
-    // quests via Creature/GameObject::hasInvolvedQuest. AI iterates and
+    // quests via Creature/GameObject::hasInvolvedQuest. bot logic iterates and
     // emits QuestCompleteIntent for the first matching entry — no need
     // to round-trip the live world from the worker thread.
     using QuestTurnIn = Playerbot::QuestTurnIn;
     // Resolved quest offers: pairs of {giver_guid, quest_id} for nearby
     // questgivers that have a quest the bot doesn't yet hold and is
-    // eligible for. Same shape as quest_turnins. AI emits QuestAcceptIntent.
+    // eligible for. Same shape as quest_turnins. bot logic emits QuestAcceptIntent.
     // (quest_turnins / quest_offers migrated into quest_discovery below)
     // Bag items that start a quest the bot hasn't picked up yet (modern WoW
     // "letter from X" / "mysterious package" pickups). Each entry is the
-    // item entry + quest id; AI fires UseItemByEntryIntent to trigger the
+    // item entry + quest id; bot logic fires UseItemByEntryIntent to trigger the
     // pickup dialog and the snapshot's normal quest_offers accept path
     // takes it from there. Filtered by CanTakeQuest in the builder so we
     // don't surface items the bot can't actually start.
@@ -2837,12 +2849,12 @@ struct BotSnapshot
     //                              scenario hasn't started a step yet.
     //   * current_step_progress  : count of completed criteria so far.
     using ScenarioStepInfo = Playerbot::ScenarioStepInfo;
-    // scenario_step lives inside quest_log. Keep the alias for AI callers
+    // scenario_step lives inside quest_log. Keep the alias for bot logic callers
     // that build a ScenarioStepInfo locally (e.g. /dungeon callouts).
 
     // Active group/master loot rolls awaiting the bot's vote — REFACTOR_2
     // sub-struct. See LootRollsState / LootRollEntry above for per-row
-    // semantics. AI emits LootRollIntent.
+    // semantics. bot logic emits LootRollIntent.
     using LootRollEntry = Playerbot::LootRollEntry;
     LootRollsState loot{};
 
@@ -2912,7 +2924,7 @@ struct BotSnapshot
     // Returns this object to the exact state of a freshly default-constructed
     // BotSnapshot, but RETAINS the heap capacity of every inner container so
     // a subsequent Build() can refill without reallocating. The world thread
-    // calls this on the prior snapshot ONLY when use_count()==1 (no AI worker
+    // calls this on the prior snapshot ONLY when use_count()==1 (no bot worker
     // can still be reading it) — see BotSnapshotBuilder::Build.
     //
     // COMPLETENESS IS LOAD-BEARING: a member missed here leaks last tick's
@@ -2934,6 +2946,7 @@ struct BotSnapshot
         owner_name.clear();
         owner_guid = ObjectGuid::Empty;
         owner_in_group = false;
+        owner_dist = -1.0f;
         tactic_burn = false;
         tactic_save_mana = false;
 

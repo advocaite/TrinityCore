@@ -3,7 +3,7 @@
 // Ideas ported from the two reference bot families, rewritten for our team planner (credit: ike3 playerbots for the
 // capture-skip / role split ideas, liyunfan1223/mod-playerbots BattleGroundTactics.cpp for the capture abort, the 60 s
 // objective reset and the camp-the-enemy-graveyard rule). Values are vanilla 1.12 behaviour (AB capture 60 s, AV tower 5 min).
-// Written for Karrz (Karrz).
+// Written for Karrz.
 #pragma once
 
 #include <cmath>

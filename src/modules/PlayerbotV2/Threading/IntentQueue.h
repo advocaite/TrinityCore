@@ -1,5 +1,5 @@
 // IntentQueue - Lock-free MPSC ring buffer.
-// Many AI workers + fleet thread produce; world thread consumes.
+// Many bot workers + fleet thread produce; world thread consumes.
 // CONTRACTS.md §5.1.
 
 #pragma once
@@ -14,12 +14,14 @@ namespace Playerbot {
 // Default ring depth. One of these exists per REGISTERED bot, and the slot
 // array is sized capacity * sizeof(Slot) where Slot is an atomic<uint64_t>
 // alongside a whole Intent - so this number is the single biggest per-bot
-// allocation in the module. It is deliberately left at the historical value:
-// push() drops the intent and bumps intents_dropped_total when the ring is
-// full, so shrinking it trades memory for lost bot actions under burst. Size it
-// from the measured peak (".playerbot inspect" reports "Dropped total") rather
-// than from the typical depth, which is under five.
-inline constexpr size_t kDefaultIntentQueueCapacity = 4096;
+// allocation in the module. push() drops the intent and bumps
+// intents_dropped_total when the ring is full, so shrinking it trades memory
+// for lost bot actions under burst. 4096 slots were 768 KiB resident per bot
+// (165 MB at 220 bots) for a queue the world thread drains (64 per bot per
+// tick) faster than a bot fills it; 1024 keeps a wide margin over any burst
+// at a quarter of the memory. Check ".playerbot inspect" "Dropped total"
+// after a long session before going lower.
+inline constexpr size_t kDefaultIntentQueueCapacity = 1024;
 
 class IntentQueue
 {

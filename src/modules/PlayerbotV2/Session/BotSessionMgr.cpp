@@ -19,7 +19,7 @@ BotSessionMgr::~BotSessionMgr()
 {
     // Sessions are owned by shared_ptr; clearing the map runs each session's
     // destructor which logs out + saves the player. Ordering note: this runs
-    // at module Shutdown, after the AI worker pool has stopped, so no AI
+    // at module Shutdown, after the bot worker pool has stopped, so no bot logic
     // worker is still pushing intents into a session being torn down.
     std::lock_guard lk(mtx_);
     sessions_.clear();

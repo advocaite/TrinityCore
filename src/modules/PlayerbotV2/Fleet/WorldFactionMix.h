@@ -1,7 +1,7 @@
 // WorldFactionMix - share of an anchor's own faction among the world bots around it, by zone: the pure rule behind
 // WorldBotSpawner (new spawns and wakes).
 //
-// Karrz, 2026-10-11: in the contested zones (Plaguelands around Light's Hope Chapel, Stranglethorn, Hillsbrad, Arathi...) there must
+// the owner, 2026-10-11: in the contested zones (Plaguelands around Light's Hope Chapel, Stranglethorn, Hillsbrad, Arathi...) there must
 // be a real enemy presence at the player's level for world PvP, while capitals and home zones stay mostly the player's own faction.
 // Zones are data (kZoneTiers); a zone not listed keeps the plain FriendlyPct. The level window is not touched here: enemy bots
 // are drawn from the same level range as friendly ones.
@@ -55,7 +55,7 @@ inline ZoneTier TierOfZone(uint32_t zone)
 
 struct FactionMix
 {
-    uint32_t default_pct   = 80;   // Playerbot.World.FriendlyPct: zones not listed
+    uint32_t default_pct   = 80;   // Playerbot.World.FriendlyPct: zones not listed (these struct values are test data; the spawner and conf ship 100)
     uint32_t capital_pct   = 90;   // Playerbot.World.CapitalFriendlyPct
     uint32_t home_pct      = 90;   // Playerbot.World.HomeFriendlyPct
     uint32_t border_pct    = 75;   // Playerbot.World.BorderFriendlyPct
@@ -84,6 +84,27 @@ inline uint32_t FriendlyPctFor(FactionMix const& m, uint32_t zone)
 inline bool BotIsAlliance(bool anchor_alliance, uint32_t roll, uint32_t pct)
 {
     return roll < pct ? anchor_alliance : !anchor_alliance;
+}
+
+// The faction a capital city belongs to (playtest, 2026-10-12: a level 60 Horde troll walked around Ironforge among level 21s; a real
+// Horde player does not stroll through an Alliance capital). 1 = Alliance, 2 = Horde, 0 = not a capital.
+inline int CapitalFactionOfZone(uint32_t zone)
+{
+    switch (zone)
+    {
+        case 1519: case 1537: case 1657: return 1;   // Stormwind, Ironforge, Darnassus
+        case 1637: case 1497: case 1638: return 2;   // Orgrimmar, Undercity, Thunder Bluff
+        default: return 0;
+    }
+}
+
+// Faction of one bot around an anchor standing in `zone`: in a capital it is always the capital's own faction, whoever the anchor is
+// (a Horde player visiting Ironforge meets Alliance bots); elsewhere the zone share relative to the anchor.
+inline bool BotIsAllianceInZone(uint32_t zone, bool anchor_alliance, uint32_t roll, uint32_t pct)
+{
+    if (int const capital = CapitalFactionOfZone(zone))
+        return capital == 1;
+    return BotIsAlliance(anchor_alliance, roll, pct);
 }
 
 } // namespace Playerbot::V2::Fleet

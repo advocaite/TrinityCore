@@ -5,7 +5,7 @@
 //   - idle:ic_potion          (combat healthstone / potion, as State_InCombat)
 //   - idle:ooc_eat_food       (sit-eat-drink between pulls)
 //   - idle:ooc_bandage        (self-bandage when low HP and no food works)
-//   - idle:loot_roll          (auto-vote on group loot rolls with Karrz's
+//   - idle:loot_roll          (auto-vote on group loot rolls with the owner's
 //                              human-first etiquette; reports loot_roll /
 //                              loot_roll_quest / loot_roll_de / *_human)
 //   - idle:equip_upgrade      (stat-priority + ilvl scored equip swap)
@@ -121,7 +121,7 @@ bool OocPotionGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
     const auto thr = GetIdleConsumeThresholds(ai);
     if (s.hp_pct() >= thr.potion_below) return false;
     if (Classic::SafeToRecover(s, &g) && Classic::BestConsumable(s, Classic::ConsumableKind::Food))
-        return false;   // eat instead (idle:ooc_eat_food / idle:ooc_food)
+        return false;   // eat instead (idle:ooc_eat_food)
     return Classic::BestConsumable(s, Classic::ConsumableKind::HealingPotion) != 0;
 }
 
@@ -146,7 +146,7 @@ bool OocPotionFire(BotSnapshotView const& s, BotAI& ai,
 // The in-combat dispatcher (State_InCombat MaybeUseSurvivalItem) covers a
 // bot in its combat state; this catches the ticks where the bot is already
 // in combat but still dispatched as idle. Same decision for both
-// (Classic::PickCombatHealthItem, Karrz's UsePotionsStrategy): at 30% health
+// (Classic::PickCombatHealthItem, the owner's UsePotionsStrategy): at 30% health
 // or below a healthstone, then the best healing potion for the level, kept
 // while a group heal is about to land (unless at 20% or below), one combat
 // consumable per 2.5 s and only items off cooldown.
@@ -168,7 +168,7 @@ bool IcPotionFire(BotSnapshotView const& s, BotAI& ai,
 }
 
 // ---------- idle:ooc_eat_food ----------
-// Sit-eat-drink between pulls (Karrz's UseFoodStrategy): eat below 90%
+// Sit-eat-drink between pulls (the owner's UseFoodStrategy): eat below 90%
 // health, drink below 70% mana, only when SafeToRecover - nothing attacks the
 // bot and nobody (group member or enemy) is fighting within 45 yards - so a
 // companion eats at its owner's side and stands up for the next pull. While
@@ -189,7 +189,7 @@ bool OwnerNotLeading(BotSnapshotView const& s, GroupSnapshotView const& g)
     return false;
 }
 
-// Open-world drink threshold (Karrz's UseFoodStrategy). A healer grouped in
+// Open-world drink threshold (the owner's UseFoodStrategy). A healer grouped in
 // an instance drinks below Classic::kPullReadyHealerManaPct instead - the mana
 // its tank waits for before the next pull - so it never holds a pull it is not
 // drinking for (Classic::OocDrinkStartManaPct).
@@ -199,6 +199,10 @@ constexpr int32 kOocDrinkBelowManaPct = 70;
 int32 OocDrinkStart(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
     if (s.is_in_raid() && ai.holding_position(now_ms) && Classic::IsGroupHealer(s, &g))
+        return Classic::kHeldRaidHealerManaPct;
+    // The owner's hold in a raid is the wait for a boss pull for the casters and hunters too: they drink to the same mark (playtest, live MC
+    // 2026-10-12: "full mana for fights").
+    if (s.is_in_raid() && ai.holding_position(now_ms) && s.max_power(POWER_MANA) > 0)
         return Classic::kHeldRaidHealerManaPct;
     return Classic::OocDrinkStartManaPct(s, &g, kOocDrinkBelowManaPct);
 }
@@ -215,7 +219,19 @@ bool OocEatFoodGate(BotSnapshotView const& s, BotAI& ai,
     if (s.raw().movement.is_mounted) return false;
     if (s.is_encounter_in_progress()) return false;
     if (!Classic::SafeToRecover(s, &g)) return false;
-    Classic::RecoveryPick const pick = Classic::PickRecovery(s, 90, OocDrinkStart(s, ai, g, now_ms));
+    // A solo quester does not sit down with its quest kill targets ready to engage in scan range; a grouped bot goes at the
+    // group's pace, so this never applies to it.
+    if (!s.in_group())
+    {
+        for (auto const& ao : s.actionable_objectives())
+        {
+            if (ao.type == /*MONSTER*/ 0 ||
+                ao.type == /*KILL_WITH_LABEL*/ 21 ||
+                (ao.type == /*ITEM*/ 1 && ao.source_guid.IsCreature()))
+                return false;
+        }
+    }
+    Classic::RecoveryPick const pick = Classic::PickRecovery(s, GetIdleConsumeThresholds(ai).food_floor, OocDrinkStart(s, ai, g, now_ms));
     if (pick.item)
         return !s.raw().movement.is_moving;
     return pick.hold;
@@ -225,7 +241,7 @@ bool OocEatFoodFire(BotSnapshotView const& s, BotAI& ai,
                     GroupSnapshotView const& g,
                     BotIntentEmitter& emit, uint32 now_ms)
 {
-    Classic::RecoveryPick const pick = Classic::PickRecovery(s, 90, OocDrinkStart(s, ai, g, now_ms));
+    Classic::RecoveryPick const pick = Classic::PickRecovery(s, GetIdleConsumeThresholds(ai).food_floor, OocDrinkStart(s, ai, g, now_ms));
     if (pick.item)
     {
         emit.emit(UseItemByEntryIntent{pick.item, s.raw().guid});
@@ -238,7 +254,7 @@ bool OocEatFoodFire(BotSnapshotView const& s, BotAI& ai,
 }
 
 // ---------- idle:ooc_bandage ----------
-// Self-bandage below 50% health (Karrz: out-of-combat bandages when no
+// Self-bandage below 50% health (the owner: out-of-combat bandages when no
 // healer is near). Bandages need First Aid at the item's rank (the supplies
 // restock teaches it); Recently Bandaged blocks another for a minute.
 constexpr uint32 kRecentlyBandaged = 11196;
@@ -319,7 +335,7 @@ bool LootRollFire(BotSnapshotView const& s, BotAI& ai,
     {
         uint8 vote = 0;
         char const* rule_name = "idle:loot_roll";
-        // Loot etiquette with a human in the group (Karrz's LootRollAction):
+        // Loot etiquette with a human in the group (the owner's LootRollAction):
         // the human gets first claim. Bind on pickup, or not equipment
         // (tokens, quest items) the human could use: pass. Bind on equip the
         // human could use: greed at most.

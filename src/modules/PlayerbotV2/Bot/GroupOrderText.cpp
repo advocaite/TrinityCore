@@ -53,6 +53,10 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
         return std::nullopt;
     if (order == "assist")
         order = "attack";
+    // "pull rti" is a Pull on the marked mob: one tank pulls the skull (else cross) when nothing is selected. Read as its own words it
+    // reached every bot, and every tank-role bot pulled the owner's selection.
+    if (order.rfind("pull rti", 0) == 0)
+        order = "pull";
     if (order == "pullback" || order == "pull and back")
         order = "pull back";
     return order;

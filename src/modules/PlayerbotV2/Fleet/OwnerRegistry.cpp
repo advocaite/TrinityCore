@@ -25,6 +25,7 @@ size_t OwnerRegistry::LoadFromDb()
     owners_.clear();
     starter_pet_granted_.clear();
     gear_varied_.clear();
+    gear_varied_raid_.clear();
     declared_role_.clear();
     subgroup_.clear();
     spec_.clear();
@@ -47,6 +48,8 @@ size_t OwnerRegistry::LoadFromDb()
             starter_pet_granted_.insert(bot);
         if (f[5].GetUInt8() != 0)
             gear_varied_.insert(bot);
+        if (f[5].GetUInt8() >= 2)
+            gear_varied_raid_.insert(bot);
         if (uint8 const r = f[6].GetUInt8(); r >= 1 && r <= 3)
             declared_role_[bot] = Role(r - 1);
         if (uint8 const sg = f[7].GetUInt8(); sg >= 1 && sg <= 8)
@@ -162,7 +165,7 @@ void OwnerRegistry::SetOwner(BotId bot, uint32 account_id, uint64 player_guid)
         if (account_id == 0 && player_guid == 0)
         {
             owners_.erase(bot);
-            // The declared role stays with the character through a dismissal: re-added, it plays what it played (Karrz
+            // The declared role stays with the character through a dismissal: re-added, it plays what it played (the owner
             // 2026-10-08: dismissed paladins and druids came back as tanks from a talent inference).
         }
         else
@@ -211,6 +214,23 @@ void OwnerRegistry::MarkStarterPetGranted(BotId bot)
             return;
     }
     Db().DirectPExecute("UPDATE playerbot_v2_character SET starter_pet_granted = 1 WHERE character_guid_low = {}", bot);
+}
+
+bool OwnerRegistry::GearVariedRaid(BotId bot) const
+{
+    std::shared_lock lk(mtx_);
+    return gear_varied_raid_.contains(bot);
+}
+
+void OwnerRegistry::MarkGearVariedRaid(BotId bot)
+{
+    {
+        std::unique_lock lk(mtx_);
+        gear_varied_.insert(bot);
+        if (!gear_varied_raid_.insert(bot).second)
+            return;
+    }
+    Db().DirectPExecute("UPDATE playerbot_v2_character SET gear_varied = 2 WHERE character_guid_low = {}", bot);
 }
 
 bool OwnerRegistry::GearVaried(BotId bot) const

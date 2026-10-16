@@ -25,7 +25,7 @@ namespace Playerbot::V2::Travel {
 namespace {
 
 // Race-id -> team bit. Mirrors TC's Player::TeamForRace without pulling in
-// Player.h (the per-tick lookup runs on AI worker threads which intentionally
+// Player.h (the per-tick lookup runs on bot worker threads which intentionally
 // don't touch Player). Pandaren-neutral (24) treated as Neutral until they
 // pick a faction; bots are spawned with race 25/26 so that case is rare.
 // Bit0 Alliance, Bit1 Horde, Bit2 Neutral.
@@ -411,7 +411,7 @@ LevelingHubChoice QuestHubDatabase::SelectLevelingHub(
     // needs only the snapshot — no Player), tag band membership, and stash the
     // (pointer, score, on_band) triples into a local vector. We do NOT call
     // is_doable here: it touches the live Player and MUST NOT run while _mutex is
-    // held (the database is otherwise Player-free for AI-worker safety). QuestHub
+    // held (the database is otherwise Player-free for bot-worker safety). QuestHub
     // pointers remain valid after the lock drops — _questHubs is immutable
     // post-init (same lock-free guarantee GetQuestHubAtPosition documents).
     struct Cand { QuestHub const* hub; float score; bool on_band; };

@@ -63,7 +63,7 @@ constexpr uint8_t StopDamage = 16;  // the mob is immune for a while: hold the d
 
 namespace Disp { enum : uint8_t { None, Magic, Curse, Poison, Disease }; }
 namespace Tgt { enum : uint8_t { Self, Victim, Random, RandomNotTop, Invoker, Friendly, Position, Other }; }
-// When the AI casts it: in the fight on a timer, out of combat, when the fight starts, when it spawns, when it dies, when it evades,
+// When the bot logic casts it: in the fight on a timer, out of combat, when the fight starts, when it spawns, when it dies, when it evades,
 // or on an ally that lacks the buff.
 namespace When { enum : uint8_t { Combat, Ooc, Aggro, Spawn, Death, Evade, AllyUnbuffed }; }
 
@@ -160,7 +160,7 @@ MapTactics const* TacticsForMap(uint32_t map);
 // One creature of a map, nullptr when the table does not list it.
 MobTactic const* FindMob(uint32_t map, uint32_t entry);
 
-// The tactics as the lists the dungeon AI already reads (kill order, mandatory interrupts, crowd control targets, dispel priorities).
+// The tactics as the lists the dungeon bot logic already reads (kill order, mandatory interrupts, crowd control targets, dispel priorities).
 // Appends to `advice`; DungeonScriptMgr::GetAdvice removes the duplicates afterwards.
 void AppendAdvice(uint32_t map, DungeonAdvice& advice);
 

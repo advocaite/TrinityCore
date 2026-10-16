@@ -26,6 +26,8 @@
 #include <vector>
 #include <string>
 
+#include "AreaCap.h"
+#include "StrandedWatch.h"
 #include "WorldLoadFacts.h"
 #include "WorldFactionMix.h"
 #include "PoolBalance.h"
@@ -85,6 +87,12 @@ private:
         bool   seed_roster      = false;   // build the sleeping roster up to PoolMax without waiting for a player to arrive
         uint32 seed_in_flight   = 8;       // seeded bots set up at the same time
         uint32 pool_max         = 400;     // ambient characters allowed to exist (online or not)
+        bool   natural_moves    = true;    // bots arrive on foot from out of sight and leave toward an inn before they log out
+        bool   day_rhythm       = true;    // scale the bubble target by the hour of the day (Fleet/DayRhythm.h)
+        uint32 jump_grace_ms    = 20000;   // bots around the place a player jumped away from are kept this long (an instance trip: ZoneGraceSec)
+        uint32 area_cap_outdoors = 14;     // most world bots within area_radius of one another outdoors (0 = no cap; Fleet/AreaCap.h)
+        uint32 area_cap_town    = 40;      // the same in a capital
+        float  area_radius      = 45.0f;
         uint32 pool_horde_pct   = 50;      // share of the roster that should be Horde, in every level bracket (PoolBalance.h)
         uint32 skyborne_seed_pct = 5;      // share of the roster seeds that are level 1-9 Skyborne residents of Zephras Isle (Classic 1.60)
     };
@@ -129,11 +137,22 @@ private:
     void DriveGlobalSpawn(uint32 now_ms, std::vector<Anchor> const& anchors);
     // Classic 1.60: a Skyborne bot that reached level 10 on Zephras Isle is carried once to a leveling town (the isle has no exit).
     void DriveGraduation(uint32 now_ms);
+    // Residents standing in lava or on ground with no way out are placed again (Fleet/StrandedWatch.h).
+    void DriveStranded(uint32 now_ms, std::vector<Anchor> const& anchors);
+    void DriveStuckLedger(uint32 now_ms);   // bots the idle watch keeps finding standing: why they cannot move, and back onto the mesh if off it
+    // A bot the spawner no longer wants: out of every player's sight it logs out at once; in sight it first walks to the nearest inn
+    // (or away from the player) and logs out once it is out of view or after a minute. True when the bot was dealt with (logged out
+    // or sent walking).
+    bool RetireBot(Player* bot, uint32 now_ms, std::vector<Anchor> const& anchors);
+    void DriveLeaving(uint32 now_ms, std::vector<Anchor> const& anchors);
+    // A crowd over the area cap sends its extras to other spots next to the nearest player (Fleet/AreaCap.h).
+    void DriveCrowd(uint32 now_ms, std::vector<Anchor> const& anchors);
     // Level range of the bots around this anchor: its zone's, lifted to MinLevel, except on Zephras Isle (Fleet/SkyborneIsle.h).
     void WindowFor(Anchor const& a, uint8& lo, uint8& hi) const;
     bool PlaceNear(Player* bot, Player* anchor);
     void StepOffStack(Player* bot);
     uint32 CountAmbientNear(Anchor const& a) const;
+    std::unordered_map<uint32, uint32> AwakeByZone(Anchor const& a) const;
     uint32 SpawnRateFor(Anchor const& a) const;
     uint32 TargetFor(Anchor const& a) const;   // bubble size for this anchor: city_bots / zone_bots / bots_per_player
 
@@ -177,6 +196,20 @@ private:
     struct Seeding { uint32 started_ms = 0; uint32 setup_done_ms = 0; };
     std::unordered_map<uint64, Seeding> seeding_;
     uint32 last_grad_ms_ = 0;
+    uint32 last_stranded_ms_ = 0;
+    uint32 last_ledger_ms_ = 0;
+    std::unordered_map<uint64, uint32> ledger_ms_;   // per bot: when its last ledger line was written
+    uint32 last_crowd_ms_ = 0;
+    std::unordered_map<uint64, uint32> leaving_;   // bot guid low -> module ms when it was sent walking away
+    uint64 n_arrived_walking_ = 0;
+    uint64 n_left_walking_ = 0;
+    uint32 swap_burst_until_ms_ = 0;   // module ms until which a jump (teleport / hearth) swaps the bubble at a higher rate
+    uint32 owned_online_ = 0;          // companions and a player's own bots in the world (outside the world cap)
+    uint32 tied_online_ = 0;           // ambient bots in a group, instance or battleground (outside the world cap)
+    uint64 n_evicted_ = 0;             // bots recycled early, inside DespawnRadius, to make room at the world cap
+    uint64 n_crowd_moved_ = 0;
+    uint64 n_stranded_moved_ = 0;      // residents found in lava or with no way out and placed again
+    std::unordered_map<uint64, StrandedState> stranded_;
     uint64 n_graduated_ = 0;           // Skyborne bots moved off Zephras Isle at level 10
     uint64 n_seeded_ = 0;              // residents created by the seeding pass and put to sleep
     uint64 n_woken_ = 0;               // sleeping residents logged in at their saved position
@@ -189,6 +222,8 @@ private:
     uint32 all_online_ = 0;            // every bot in the world this tick (ambient, raid, BG, companions)
     uint32 global_online_ = 0;         // ambient bots farther than ActivityRadius from every player (this tick)
     // Why nothing was spawned, since start (also in the [world] line).
+    uint32 last_rules_ms_ = 0;
+    uint32 soak_anchors_ = 0;          // configured soak anchors (bots standing in for a player) found this tick
     uint32 anchors_in_instance_ = 0;   // real players skipped this tick: in an instance, raid, battleground or arena
     uint64 n_no_match_ = 0;            // slots with no offline pool bot of the wanted faction and level range
     uint64 n_pool_full_ = 0;           // slots that could not create a character: PoolMax reached

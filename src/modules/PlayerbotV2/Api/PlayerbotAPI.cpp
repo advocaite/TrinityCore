@@ -2,12 +2,14 @@
 // First real-bodies pass: cast_spell / move_to / hearth wired to TrinityCore.
 // Remaining commands listed in v2/API.md fill in incrementally.
 
+#include <mutex>
 #include <unordered_map>
 #include "PlayerbotAPI.h"
 #include "ClassicBotSkills.h"
 #include "ClassicSpec.h"
 #include "ClassicTalentBuilds.h"
 #include "ClassicSupplies.h"
+#include "Bot/ClassicUpkeep.h"
 #include "BotItemScorer.h"
 #include "Player.h"
 #include "Corpse.h"
@@ -40,6 +42,7 @@
 #include "DetourNavMeshQuery.h"
 #include "PlayerbotV2.h"     // path-outcome telemetry, bot-leader battleground queue
 #include "PlayerbotMovement.h"  // unified bot-movement helpers
+#include "Fleet/InstanceEntry.h"  // PrepareInstanceEntry: a stale raid lock must not keep a companion out of its owner's instance
 #include "PartialRouteStall.h"
 #include "NoMotionGuard.h"
 #include "TradeFlow.h"
@@ -452,7 +455,7 @@ static uint32 HighestKnownRank(Player const* p, uint32 spell_id)
 // Off = the previous path: SetFacingToObject whenever the target is not in front.
 static bool CastFacingEnabled()
 {
-    static bool const enabled = sConfigMgr->GetBoolDefault("Playerbot.Behavior.CastFacing", true);
+    static bool const enabled = sConfigMgr->GetBoolDefault("Playerbot.Behavior.CastFacing", true, true);
     return enabled;
 }
 
@@ -545,7 +548,7 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
     uint32 const requested_id = spell_id;
     if (!exact_rank || !p_->HasSpell(spell_id))
         spell_id = HighestKnownRank(p_, spell_id);
-    // [cast_rank] (Karrz, 2026-10-08: confirm every damage spell goes out at the top known rank): per bot and requested spell, at most one
+    // [cast_rank] (playtest, 2026-10-08: confirm every damage spell goes out at the top known rank): per bot and requested spell, at most one
     // line a minute, "requested -> cast".
     {
         static std::unordered_map<uint64, uint32> s_rank_log;
@@ -759,13 +762,13 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
         if (!FaceUnitForCast(p_, tu) && CastFacingEnabled())
             return last_cast_fail_ = 0, Result::Locked;
     // Spells that do not need the target in front (heals, buffs) still turn the caster to a target that is behind it when it
-    // can (Karrz, Deadmines 2026-10-10: the priest healed with her back to the target). Best effort: a caster that is moving
+    // can (playtest, Deadmines 2026-10-10: the priest healed with her back to the target). Best effort: a caster that is moving
     // keeps its heading and the cast goes out anyway.
     if (tu != p_ && CastFacingEnabled() && !(info->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT))
         FaceUnitForCast(p_, tu);
 
     // A bot that drank or sat and now casts stands up first, as a client does when its player casts (the drink aura ends on the
-    // cast, the sitting pose did not: Karrz saw the priest heal kneeling). Food / drink spells themselves sit the bot, so they are
+    // cast, the sitting pose did not: the owner saw the priest heal kneeling). Food / drink spells themselves sit the bot, so they are
     // left alone. [stand_state] logs each change, at most one line per bot per 5 s.
     if (p_->GetStandState() == UNIT_STAND_STATE_SIT || p_->GetStandState() == UNIT_STAND_STATE_KNEEL)
         if (!info->HasAura(SPELL_AURA_MOD_POWER_REGEN) && !info->HasAura(SPELL_AURA_MOD_REGEN))
@@ -805,7 +808,7 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
         // Throttled diagnostic: log the first failure per (spell, reason) combo
         // so the operator can see WHY a rule is firing but the cast never lands
         // (out of range, LOS, moving, etc). Without this the bot looks "stuck"
-        // in inspect: LastRule says e.g. "Frostbolt (filler)" because the AI
+        // in inspect: LastRule says e.g. "Frostbolt (filler)" because the bot logic
         // picked it, but Casting=0 because the world thread rejected it.
         // For BAD_TARGETS we additionally dump the relationship breakdown so
         // we can tell apart visibility failures, faction friendliness, At-War
@@ -1070,7 +1073,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop)
     // Active FlightPath guard. Bot is on a taxi spline (FLIGHT_MOTION_TYPE)
     // â issuing MovePoint while in flight queues under, not over, the
     // flight generator and the bot looks "stuck" until landing. Refuse so
-    // the AI re-evaluates next snapshot when the taxi arrives.
+    // the bot logic re-evaluates next snapshot when the taxi arrives.
     if (p_->GetMotionMaster()->GetCurrentMovementGeneratorType() ==
             FLIGHT_MOTION_TYPE)
         return Result::Locked;
@@ -1117,7 +1120,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop)
             return Result::Locked;
         // A free fall: the jump spline's parabola (height = g*T^2/8, MotionMaster::MoveJump) is exactly gravity over the drop
         // when T = sqrt(2*fall/g), so the leap takes that long. A fixed 8 y/s along the whole path took 3 s for a 15 y drop and
-        // looked like a slow fall (Karrz, WSG 2026-10-09). The walk off the edge is allowed 16 y/s at most.
+        // looked like a slow fall (playtest, WSG 2026-10-09). The walk off the edge is allowed 16 y/s at most.
         float const dist3 = std::sqrt(dxy * dxy + fall * fall);
         float const fall_s = std::max(std::sqrt(2.0f * fall / float(Movement::gravity)), dxy / 16.0f);
         float const speed = dist3 / fall_s;
@@ -1170,7 +1173,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop)
     // Battleground start room (STATUS_WAIT_JOIN): the gates are shut and the bots only mill about their start area, so a
     // destination whose ground is far above or below the bot is off the platform (a gate-wait spot spread over the edge of
     // the plateau, a slope under a cliff). Routing there ends in a straight-line spline over empty air or in the platform
-    // step-down relocation below, which is how bots ended up hanging in the air above the AB valley (Karrz, 2026-10-08).
+    // step-down relocation below, which is how bots ended up hanging in the air above the AB valley (playtest, 2026-10-08).
     // Refuse it; the idle rule picks another spot.
     if (Battleground const* prep_bg = p_->GetBattleground();
         prep_bg && prep_bg->GetStatus() == STATUS_WAIT_JOIN &&
@@ -1615,7 +1618,10 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop)
             }
             // 3D distance, NOT horizontal-only: a harbour dock / pier exit can sit
             // almost directly ABOVE the bot (small XY, large Z).
-            if (navpt && exd2 > 3.0f * 3.0f)
+            // One yard, not three: a bot in lava two or three yards off the bank is exactly the one that must step out. Ragnaros 2026-10-13
+            // 650994ea: a healer stood 85 s in the magma at the platform's edge, 2.8 y from the dry point its raid order named, hurt every
+            // second and healed back by the others, and did not move once.
+            if (navpt && exd2 > 1.0f * 1.0f)
             {
                 p_->GetMotionMaster()->MovePoint(
                     0, exit_pt.GetPositionX(), exit_pt.GetPositionY(),
@@ -2634,7 +2640,7 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
     }
 
     // A mounted player cannot attack (Unit::Attack returns false), so a bot riding past an enemy emitted start_attack every
-    // tick and nothing happened: bots ran past each other mounted in WSG (Karrz, 2026-10-08). Like a real player who clicks
+    // tick and nothing happened: bots ran past each other mounted in WSG (playtest, 2026-10-08). Like a real player who clicks
     // an enemy, the bot gets off its mount first.
     if (p_->IsMounted() && tu->IsHostileTo(p_))
         p_->Dismount();
@@ -2686,7 +2692,7 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
     // do not re-call Attack or re-init MoveChase. Both have visible side
     // effects every tick â MoveChase resets the chase generator, clearing
     // the spline and forcing a path recalc. Calling it every tick (which
-    // the AI does as long as the engage rule keeps firing on the same
+    // the bot logic does as long as the engage rule keeps firing on the same
     // victim) produces the visible "stutter": bot stops, plans, takes one
     // step, stops again. Detect the no-op case and return Ok.
     // Mirror what a player click does: keep the selection in sync with the
@@ -2709,7 +2715,7 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
     // do not re-call Attack or re-init MoveChase. Both have visible side
     // effects every tick â MoveChase resets the chase generator, clearing
     // the spline and forcing a path recalc. Calling it every tick (which
-    // the AI does as long as the engage rule keeps firing on the same
+    // the bot logic does as long as the engage rule keeps firing on the same
     // victim) produces the visible "stutter": bot stops, plans, takes one
     // step, stops again. Detect the no-op case and return Ok.
     // Ranged-spec hunters with a usable ranged weapon engage RANGED-only:
@@ -2769,7 +2775,7 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
     holdAvoidedAutoRepeat(tu);
     ensureAutoShot(tu);
 
-    // Real Players chase the target via client input; an AI-driven bot Player
+    // Real Players chase the target via client input; an bot logic-driven bot Player
     // has no client and Player::Attack alone doesn't move them. Without an
     // explicit MoveChase the bot just stands at whatever range the engage
     // rule spotted them â typically 30â40y â which breaks both melee
@@ -2994,7 +3000,7 @@ Result API::mount(uint32 mount_id)
     for (uint32 carry_aura : { 23333u, 23335u, 34976u, 121164u, 121175u, 121176u, 121177u })
         if (p_->HasAura(carry_aura)) return Result::Locked;
     // One rule for battlegrounds (Battleground::GetMountRefusal): closed start doors or an indoor area, no distance radius. Players
-    // are held to the same rule in Spell.cpp. One line per bot every 20 s says why a mount is refused (Karrz, WSG 70291).
+    // are held to the same rule in Spell.cpp. One line per bot every 20 s says why a mount is refused (playtest, WSG 70291).
     if (Battleground const* bg = p_->GetBattleground())
         if (char const* why = bg->GetMountRefusal(p_))
         {
@@ -3753,6 +3759,8 @@ Result API::enter_area_trigger(uint32 area_trigger_id)
     WorldSession* sess = p_->GetSession();
     if (!sess) return Result::Other;
     AreaTriggerTeleport const* dest = sObjectMgr->GetAreaTrigger(area_trigger_id);
+    if (dest && dest->Loc.GetMapId() != p_->GetMapId())
+        V2::Fleet::PrepareInstanceEntry(p_, dest->Loc.GetMapId());
     WorldPackets::AreaTrigger::AreaTrigger packet{ WorldPacket(CMSG_AREA_TRIGGER) };
     packet.AreaTriggerID = int32(area_trigger_id);
     packet.Entered = true;
@@ -3823,6 +3831,10 @@ Result API::teleport_to(uint32 map_id, float x, float y, float z, float orientat
     if (!p_->IsAlive()) return Result::Locked;
     if (p_->IsInCombat())  return Result::Locked;
     if (p_->IsNonMeleeSpellCast(false, false, true)) return Result::Locked;
+    // Into an instance (the owner's raid): the door checks run first so a refusal is logged with its reason, and a lock on
+    // another instance is dropped for a companion that follows its owner in.
+    if (map_id != p_->GetMapId() && V2::Fleet::PrepareInstanceEntry(p_, map_id) != TRANSFER_ABORT_NONE)
+        return Result::ServerRefused;
     // SafeTeleport probes the destination map (if loaded) for ground
     // height and snaps to ground+2 when the requested Z is >50y above
     // the queried floor (typical "stale POI / hand-curated coord" bug
@@ -3947,7 +3959,7 @@ Result API::decline_trade()
     return Result::Ok;
 }
 
-// `owner` is the trade partner the AI decided to trade with. gift_ok: the bot's owner or a real player in its own group or raid (Bot/TradeRule.h), who may
+// `owner` is the trade partner the bot logic decided to trade with. gift_ok: the bot's owner or a real player in its own group or raid (Bot/TradeRule.h), who may
 // hand over gear and gold as a gift; anyone else gets the fair-price bargain (BotTrade.h).
 Result API::accept_owner_trade(ObjectGuid owner)
 {
@@ -4308,7 +4320,7 @@ Result API::set_raid_difficulty(uint32 difficulty_id, bool legacy)
     return Result::Ok;
 }
 
-// A creature the bot mind-controls (priest Mind Control: Razuvious' understudies). It has no pet bar AI and is not
+// A creature the bot mind-controls (priest Mind Control: Razuvious' understudies). It has no pet bar bot logic and is not
 // moved by a client, so attack and chase are driven from here. nullptr when the bot controls nothing.
 static Creature* PossessedCreature(Player* p)
 {
@@ -4438,7 +4450,7 @@ Result API::dismiss_pet()
 // (PET_SAVE_NOT_IN_SLOT, kept around for re-summon by spell). The gossip /
 // stablemaster flow validates an interact range with the stable NPC. The
 // bot path here intentionally bypasses the NPC range check â when running
-// autonomously we want the AI to swap pets based on encounter (e.g. swap
+// autonomously we want the bot logic to swap pets based on encounter (e.g. swap
 // to a stabled tank pet for a tough pull) without first dragging the bot
 // to a stablemaster. All other invariants (HUNTER_PET-only, exotic-tame
 // gating, dead-active refusal, current-pet-not-deletable) match Player::
@@ -5085,7 +5097,7 @@ Result API::repair_all(ObjectGuid npc, bool from_guild_bank)
     // durability breaks mid-run (every death strips 10%) degrades into paper
     // (0% durability ~ halved armor/stats) and death-spirals (observed
     // 2026-06-28: Deadmines tank 38 deaths, durability 16264->12976 HP, never
-    // reached the boss). Bots are AI and the player-money branch below already
+    // reached the boss). Bots are bot logic and the player-money branch below already
     // grants the shortfall as a stipend, so a self-repair is effectively free â
     // exactly the intended "gold self-repair on dungeon staging/running".
     if (!npc.IsEmpty())
@@ -5143,7 +5155,7 @@ Result API::repair_all(ObjectGuid npc, bool from_guild_bank)
     // repair, so the affordable-partial loop below leaves its costliest slots at
     // 0% forever â the poverty death-spiral (broken gear -> can't fight -> can't
     // earn -> still can't repair). Grant the shortfall so a broke bot can always
-    // fully repair (bots are AI; a free repair is fine and far cheaper than the
+    // fully repair (bots are bot logic; a free repair is fine and far cheaper than the
     // leveling time lost to a bot stranded at 0% gear). Solvent bots are
     // unaffected â they already cover the bill, so no money is added.
     {
@@ -5197,10 +5209,10 @@ static Result UseItemImpl(Player* p, Item* item, ObjectGuid target)
             // Spellclick NPCs: when the quest target is a UNIT_NPC_FLAG_SPELLCLICK
             // creature, "using the item on it" is, on a real client, a CMSG_SPELL_CLICK â
             // Unit::HandleSpellClick both casts the click spell AND fires the creature's
-            // OnSpellClick AI. That AI is what credits this whole class of quests
+            // OnSpellClick bot logic. That bot logic is what credits this whole class of quests
             // (e.g. Q26118: spellclick Ambassador Slaghammer 42146 -> SmartAI
             // SMART_EVENT_ON_SPELLCLICK -> SMART_ACTION_COMPLETE_QUEST). A raw
-            // CastItemUseSpell never triggers the AI, so the quest never completes.
+            // CastItemUseSpell never triggers the bot logic, so the quest never completes.
             if (tu->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK))
             {
                 p->SetTarget(tu->GetGUID());
@@ -5273,7 +5285,7 @@ Result API::loot_corpse(ObjectGuid corpse)
     {
         p_->SendLoot(*loot, false);
         // SendLoot opens the loot window (LootGUID, UNIT_FLAG_LOOTING = the kneeling loot pose) and a bot has no client to close
-        // it: every bot in a group with party loot rules stayed in the loot pose through every fight and cast (Karrz, Deadmines
+        // it: every bot in a group with party loot rules stayed in the loot pose through every fight and cast (playtest, Deadmines
         // 2026-10-10: "they're always looting"). Close it as a player closing the window does - the rolls the open started stay.
         if (WorldSession* sess = p_->GetSession())
             sess->DoLootRelease(loot);
@@ -5711,7 +5723,7 @@ Result API::use_game_object(ObjectGuid go_guid)
     if (!obj)
     {
         // Not silent for the classic AB banners (entries 180058-180091): a bot standing at a pole that cannot click it was the
-        // "bots stand at the Stables, nothing is captured" report (Karrz, AB test 2026-10-08).
+        // "bots stand at the Stables, nothing is captured" report (playtest, AB test 2026-10-08).
         if (p_->InBattleground())
             if (Map* bmap = p_->GetMap())
                 if (GameObject* raw = bmap->GetGameObject(go_guid))
@@ -5734,7 +5746,7 @@ Result API::use_game_object(ObjectGuid go_guid)
         return Result::Locked;
 
     // A battleground flag or banner is not used in a shapeshift form (a bear-form druid stood at the Lumber Mill banner doing nothing,
-    // Karrz AB 2026-10-11): leave the form first, the next click (the rule re-emits) goes through as a caster.
+    // the owner AB 2026-10-11): leave the form first, the next click (the rule re-emits) goes through as a caster.
     if (p_->InBattleground() && p_->GetShapeshiftForm() != FORM_NONE &&
         (obj->GetGoType() == GAMEOBJECT_TYPE_BUTTON || obj->GetGoType() == GAMEOBJECT_TYPE_GOOBER || obj->GetGoType() == GAMEOBJECT_TYPE_FLAGSTAND ||
          obj->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP || obj->GetGoType() == GAMEOBJECT_TYPE_NEW_FLAG || obj->GetGoType() == GAMEOBJECT_TYPE_NEW_FLAG_DROP ||
@@ -5747,7 +5759,7 @@ Result API::use_game_object(ObjectGuid go_guid)
 
     // Battleground node banners (AB / AV / Gilneas style BUTTON and GOOBER objects) are not instant for a player: the capture is
     // a channel of several seconds that movement or damage breaks. Calling Use() straight away let a whole squad flip the
-    // Blacksmith and Lumber Mill Alliance/Horde/Alliance/Horde every second (Karrz, AB test 2026-10-08). The bot now "channels"
+    // Blacksmith and Lumber Mill Alliance/Horde/Alliance/Horde every second (playtest, AB test 2026-10-08). The bot now "channels"
     // too: the first call starts the capture, a later call (the rule re-emits every ~3 s) completes it once 5 s have passed and
     // the bot has neither moved more than 3 y nor lost health; after a completed capture it must wait 15 s before the next one.
     if (p_->InBattleground() &&
@@ -5758,7 +5770,7 @@ Result API::use_game_object(ObjectGuid go_guid)
         BannerCapture& cap = s_bannerCapture[p_->GetGUID()];
         uint32 const nowMs = GameTime::GetGameTimeMS();
         // A cast already running (the capture spell the object's Use() starts) must never be restarted by a second click: a
-        // new Use() while the bar is filling cancels it (Karrz, AB test: "she keeps casting and it stops").
+        // new Use() while the bar is filling cancels it (playtest, AB test: "she keeps casting and it stops").
         if (p_->IsNonMeleeSpellCast(false))
             return Result::Locked;
         if (cap.lastDoneMs && nowMs - cap.lastDoneMs < 15000u)
@@ -5795,7 +5807,7 @@ Result API::use_game_object(ObjectGuid go_guid)
     // Auto-loot for lootable GO types (CHEST, GOOBER with loot, etc.).
     // GameObject::Use opens the loot window server-side (m_loot is
     // populated, GO state transitions to ACTIVATED) but for headless
-    // bots â and for self-AI bots without auto-loot enabled â there's
+    // bots â and for self-bot logic bots without auto-loot enabled â there's
     // no client to send CMSG_LOOT_ITEM. The chest stays open with the
     // items inside untaken, the quest objective never progresses, and
     // the bot moves on or hearths after stuck-detection.
@@ -6194,7 +6206,7 @@ Result API::complete_quest(ObjectGuid quest_giver, uint32 quest_id, uint32 rewar
     // Same-NPC follow-up auto-accept. Scripted escort NPCs (Tarindrella for
     // quest chain 28725â28726â28727â28728 in Shadowthread Cave) often despawn
     // a few seconds after a turn-in via their SmartAI OOC timer. The
-    // post-RewardQuest world tick gives the AI ~1 snapshot to re-probe
+    // post-RewardQuest world tick gives the bot logic ~1 snapshot to re-probe
     // CanTakeQuest and emit accept_quest before the giver vanishes â that
     // window can close before the bot's accept intent dispatches, producing
     // the "giver_not_found" / "giver_lost_relation" reject pair observed for
@@ -6782,14 +6794,29 @@ std::vector<CuratedTraitEntry> ParseCuratedBuild(std::string const& text)
 // Empty string means no curated row found.
 std::string LookupCuratedBuildRow(uint32 classId, uint32 specId, uint8 context)
 {
+    // The curated table only changes by hand and a build is looked up for every
+    // bot setup and respec, so each (class, spec, context) is read from the DB
+    // once per process (misses cached too) instead of once per bot.
+    static std::mutex cacheMutex;
+    static std::unordered_map<uint32, std::string> cache;
     auto try_row = [&](uint8 ctx) -> std::string
     {
+        uint32 const key = (classId << 16) | ((specId & 0xFFu) << 8) | ctx;
+        {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            if (auto it = cache.find(key); it != cache.end())
+                return it->second;
+        }
+        std::string row;
         auto r = CharacterDatabase.PQuery(
             "SELECT entries_json FROM playerbot_v2_talent_build "
             "WHERE class_id={} AND spec_id={} AND context={}",
             classId, specId, ctx);
-        if (!r) return {};
-        return r->Fetch()[0].GetString();
+        if (r)
+            row = r->Fetch()[0].GetString();
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        cache.emplace(key, row);
+        return row;
     };
     if (auto s = try_row(context); !s.empty()) return s;
     if (context != 0)
@@ -7171,11 +7198,39 @@ Result API::restock_class_supplies()
     uint32 added = 0;
     bool full = false;
     uint8 const level = uint8(p_->GetLevel());
+    // The party versions of the class buffs, which no Forever trainer sells.
+    for (uint32 const spell : Classic::GroupBuffSpells(p_->GetClass()))
+    {
+        if (p_->HasSpell(spell))
+            continue;
+        if (!Classic::LearnableGroupBuff(spell, level))
+            continue;
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(spell, DIFFICULTY_NONE);
+        p_->LearnSpell(spell, false);
+        ++added;
+        TC_LOG_INFO("playerbot.v2", "[supplies] {} learns {} ({})", p_->GetName(), spell, si->SpellName ? (*si->SpellName)[sWorld->GetDefaultDbcLocale()] : "");
+    }
+    // Why a family left nothing in the bags, once per bot and reason ([supplies]; the Demonic Rune never reached the bags of the
+    // Ragnaros squad and nothing said why). World thread only, like the rest of this function.
+    static std::unordered_set<uint64> s_supplyReasonLogged;
+    auto const skipped = [&](Classic::SupplyFamily const& f, uint32 item, char const* why, uint32 detail)
+    {
+        uint64 const key = std::hash<std::string_view>{}(f.name) ^ (uint64(p_->GetGUID().GetCounter()) * 0x9E3779B97F4A7C15ull) ^ (uint64(detail) * 0xC2B2AE3D27D4EB4Full);
+        if (s_supplyReasonLogged.size() > 8192)
+            s_supplyReasonLogged.clear();
+        if (s_supplyReasonLogged.insert(key).second)
+            TC_LOG_INFO("playerbot.v2", "[supplies] {} gets no {} (item {}): {} ({})", p_->GetName(), f.name, item, why, detail);
+    };
     for (Classic::SupplyFamily const& f : Classic::GetSupplyFamilies())
     {
         if (!Classic::SupplyFamilyForClass(f, p_->GetClass())) continue;
+        if (Classic::MageConjuresFamily(p_->GetClass(), f.name, [this](uint32 id) { return p_->HasSpell(id); })) continue;
         uint32 const entry = Classic::BestSupplyRank(f, level);
-        if (!entry) continue;
+        if (!entry)
+        {
+            skipped(f, 0, "no rank for the level has an item template", level);
+            continue;
+        }
         // Bandages need First Aid: every bot knows it at the rank of its
         // level (ike3's factory gives bots the skill the same way).
         if (f.flags & Classic::SUPPLY_FIRST_AID)
@@ -7195,7 +7250,11 @@ Result API::restock_class_supplies()
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
         // Poisons need the Poisons skill (a level 20 rogue quest); hand out
         // only what the bot can actually use.
-        if (!proto || p_->CanUseItem(proto) != EQUIP_ERR_OK) continue;
+        if (!proto || p_->CanUseItem(proto) != EQUIP_ERR_OK)
+        {
+            skipped(f, entry, "the bot cannot use the item", proto ? uint32(p_->CanUseItem(proto)) : 0u);
+            continue;
+        }
         uint32 have = 0;
         if (f.flags & Classic::SUPPLY_ALL_RANKS)
         {
@@ -7207,13 +7266,16 @@ Result API::restock_class_supplies()
         uint32 const target = Classic::SupplyTarget(f, level);
         if (have >= target) continue;
         ItemPosCountVec dest;
-        if (p_->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, target - have) != EQUIP_ERR_OK)
+        if (InventoryResult const stored = p_->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, entry, target - have); stored != EQUIP_ERR_OK)
         {
             full = true;
+            skipped(f, entry, "no room in the bags", uint32(stored));
             continue;
         }
         if (p_->StoreNewItem(dest, entry, true))
             added += target - have;
+        else
+            skipped(f, entry, "StoreNewItem refused", 0);
     }
     // Ammo for the equipped bow / crossbow / gun (thrown needs none): the best arrows or
     // bullets the level allows, topped up in whole stacks to AMMO_TARGET once under 30%.
@@ -8361,7 +8423,7 @@ Result API::fly_to_node(ObjectGuid flight_master, uint32 to_node)
     // Bots are perpetually broke (a fresh L3 has ~67 copper), and
     // ActivateTaxiPathTo charges the taxi fare â so flights silently failed and
     // the bot ran back and forth at the FM forever. Cover the fare: top the bot
-    // up to a flight reserve so it can always afford the hop (bots are AI; a free
+    // up to a flight reserve so it can always afford the hop (bots are bot logic; a free
     // ride is fine, and this is far cheaper than the leveling time lost to a bot
     // stranded on the wrong continent). 5g covers any single multi-hop route.
     constexpr uint64 kFlightReserve = 50000;   // 5 gold in copper

@@ -12,12 +12,18 @@
 #include "Group.h"
 #include "Guild.h"
 #include "Item.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotMovement.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "Spell.h"
+#include "SpellAuras.h"
+#include "SpellInfo.h"
+#include "Bot/Raid/RaidIncoming.h"
+#include "Bot/Raid/RaidManaLedger.h"
 #include "WorldSession.h"
 
 void AddSC_playerbot_v2_commandscript();
@@ -61,7 +67,7 @@ public:
 
     void OnWorldInitialized() override
     {
-        auto value = [](char const* key) { return sConfigMgr->GetStringDefault(key, "(default)"); };
+        auto value = [](char const* key) { return sConfigMgr->GetStringDefault(key, "(default)", true); };
         TC_LOG_INFO("server.worldserver", "[startup] bots: Population.TotalTarget={} Gear.MaxTier={} World.Enable={} Raid.Enable={}",
             value("Playerbot.Population.TotalTarget"), value("Playerbot.Gear.MaxTier"), value("Playerbot.World.Enable"), value("Playerbot.Raid.Enable"));
 
@@ -99,6 +105,50 @@ public:
     void OnLogout(Player* player) override
     {
         Module::instance().OnPlayerLogout(player);
+    }
+
+    // Raid mana ledger: what a cast cost (the core's own figure, taken when the cast completes) and what a mana potion, rune or
+    // Innervate restored. Only a healer the raid brain watches in a pull is recorded.
+    void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
+    {
+        using namespace Playerbot::Raid;
+        if (!player || !spell || !ManaLedgerWatching(player->GetGUID().GetCounter()))
+            return;
+        SpellInfo const* si = spell->GetSpellInfo();
+        if (!si)
+            return;
+        uint64 const g = player->GetGUID().GetCounter();
+        int32 cost = 0;
+        for (SpellPowerCost const& c : spell->GetPowerCost())
+            if (c.Power == POWER_MANA)
+                cost += c.Amount;
+        ManaLedgerCast(g, si->Id, cost, GameTime::GetGameTimeMS());
+        // A spell with a mana cost in its data that was charged nothing: say why once per healer and pull (n31 mc_ragnaros: five priests cast
+        // 100+ heals at 100% mana). The caster's cheat flag and every aura on it are the candidates.
+        if (cost == 0 && !spell->IsTriggered() && ManaLedgerFirstFree(g))
+            for (SpellPowerEntry const* pe : si->PowerCosts)
+                if (pe && pe->PowerType == POWER_MANA && (pe->ManaCost > 0 || pe->PowerCostPct > 0.0f))
+                {
+                    std::string auras;
+                    // Each aura as id(charges, remaining ms or P for permanent, passive flag): an Inner Focus whose charge is never dropped
+                    // (n38 mc_ragnaros: 43 Renews at no cost) shows as 14751 with its charges and duration.
+                    for (auto const& [id, app] : player->GetAppliedAuras())
+                        if (app && app->GetBase())
+                        {
+                            Aura const* ab = app->GetBase();
+                            auras += (auras.empty() ? "" : ",") + std::to_string(id) + "(c" + std::to_string(ab->GetCharges()) + "," +
+                                     (ab->IsPermanent() ? std::string("P") : std::to_string(ab->GetDuration())) + (ab->IsPassive() ? ",pass" : "") + ")";
+                        }
+                    TC_LOG_INFO("playerbot.v2.raid", "[mana_free] {} cast {} (base cost {} / {}%) and paid nothing: cheat power {}, auras {}",
+                                player->GetName(), si->Id, pe->ManaCost, pe->PowerCostPct, player->GetCommandStatus(CHEAT_POWER) ? 1 : 0, auras);
+                    break;
+                }
+        constexpr uint32 kInnervate = 29166;
+        for (SpellEffectInfo const& eff : si->GetEffects())
+            if (eff.Effect == SPELL_EFFECT_ENERGIZE && eff.MiscValue == POWER_MANA)
+                ManaLedgerRestore(g, si->Id, int32(eff.BasePoints));
+        if (si->Id == kInnervate)
+            ManaLedgerRestore(g, si->Id, 0);
     }
 
     void OnLevelChanged(Player* player, uint8 oldLevel) override
@@ -170,6 +220,19 @@ public:
         Module::instance().OnAddonOrder(player, group, prefix, text);
     }
 
+    // Group pings (the retail ping wheel): an Attack ping on an enemy sends the bots in, an On my way ping on the ground moves them.
+    void OnPingUnit(Player* player, Group* group, Unit* target, uint8 type) override
+    {
+        if (IsHuman(player))
+            Module::instance().OnGroupPingUnit(player, group, target, type);
+    }
+
+    void OnPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type) override
+    {
+        if (IsHuman(player))
+            Module::instance().OnGroupPingPoint(player, group, point, type);
+    }
+
     void OnLootItem(Player* player, Item* item) override
     {
         Module::instance().OnItemLooted(player, item->GetEntry());
@@ -212,9 +275,28 @@ class playerbot_v2_unit : public UnitScript
 public:
     playerbot_v2_unit() : UnitScript("playerbot_v2_unit") { }
 
+    void OnDamageSpell(Unit* /*attacker*/, Unit* /*victim*/, uint32 /*damage*/, SpellInfo const* spellInfo) override
+    {
+        Module::instance().NoteDamageSpell(spellInfo ? spellInfo->Id : 0);
+    }
+
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         Module::instance().OnDamageTaken(attacker, victim, int32(damage), 0);
+        // Raid incoming-damage table: a creature hit a player the raid brain watches in a pull.
+        if (attacker && victim && victim->GetTypeId() == TYPEID_PLAYER && attacker->GetTypeId() == TYPEID_UNIT)
+            Playerbot::Raid::IncomingHit(attacker->GetEntry(), attacker->GetName().c_str(), victim->GetGUID().GetCounter(), damage);
+        // ... and what the raid hit: a raider (or its pet) dealt damage to a creature.
+        if (attacker && victim && victim->GetTypeId() == TYPEID_UNIT)
+            if (Player* dealer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+                Playerbot::Raid::DealtHit(victim->GetEntry(), victim->GetName().c_str(), dealer->GetGUID().GetCounter(), damage);
+    }
+
+    // Raid mana ledger: healing that landed (the core passes the effective gain, overheal already removed).
+    void OnHeal(Unit* healer, Unit* /*receiver*/, uint32& gain) override
+    {
+        if (healer && healer->GetTypeId() == TYPEID_PLAYER)
+            Playerbot::Raid::ManaLedgerHealLanded(healer->GetGUID().GetCounter(), gain);
     }
 
     // Auto-loot for bots on the tap list, and a bot's own death.

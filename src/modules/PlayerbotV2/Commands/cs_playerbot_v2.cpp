@@ -30,6 +30,7 @@
 #include "WorldSession.h"
 #include "TypeContainerVisitor.h"
 #include "PlayerbotAPI.h"
+#include "PlayerbotV2.h"
 #include "PlayerbotMovement.h"  // BotMovement::SafeTeleport for GM summonall
 #include "RBAC.h"
 #include "SpellHistory.h"
@@ -608,6 +609,7 @@ public:
         static ChatCommandTable botTable =
         {
             { "about",         HandleBotAbout,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "addon",         HandleBotAddonHello, rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
             { "add",           HandleBotAdd,        rbac::RBAC_PERM_COMMAND_GM, Console::No  },
             { "call",          HandleBotCall,       rbac::RBAC_PERM_COMMAND_GM, Console::No  },
             // Every player: brings the caller's own bots only (`.bot summon all|saved|<bot name>`).
@@ -705,6 +707,16 @@ public:
     {
         handler->SetSentErrorMessage(true);
         return false;
+    }
+
+    // .bot addon: sent silently by the ForeverBots add-on a few seconds after login, so the server knows this client has it and
+    // does not send the download hint (Playerbot.AddonHint.*). Says nothing.
+    static bool HandleBotAddonHello(ChatHandler* handler)
+    {
+        WorldSession* sess = handler ? handler->GetSession() : nullptr;
+        if (sess && sess->GetPlayer())
+            Playerbot::V2::Module::instance().NoteAddonHello(sess->GetPlayer());
+        return true;
     }
 
     // .bot about: the name of the bots, so it shows in the command list and `.bot` help
@@ -1126,7 +1138,7 @@ public:
         bool const with_me = ToLowerAscii(who) == "all";
         std::string names;
         uint32 saved = 0;
-        // Save group REPLACES the saved roster (chris, 2026-10-11: after a second save the call said 78 saved where the first said 39: the
+        // Save group REPLACES the saved roster (playtest, 2026-10-11: after a second save the call said 78 saved where the first said 39: the
         // bots of the earlier save stayed saved next to the new ones). A companion saved earlier that is not in the group now is unsaved.
         if (with_me)
         {
@@ -1511,10 +1523,10 @@ public:
             (void)gm;
         }
         // Already-online characters get the registry entry without a re-login,
-        // so the AI ticks can start at the next world update. Offline characters
+        // so the bot ticks can start at the next world update. Offline characters
         // get the marker only â the next time someone logs them in (manually or
         // via .playerbot login), OnPlayerLogin will see is_bot()==true and
-        // attach the AI.
+        // attach the bot logic.
         if (Player const* p = ObjectAccessor::FindConnectedPlayerByName(target_name))
         {
             if (!Playerbot::Services::Registry().has(id))
@@ -1529,12 +1541,12 @@ public:
                 Playerbot::Services::Scheduler().register_bot(
                     id, Playerbot::ActivityTier::Idle);
             }
-            handler->PSendSysMessage("Marked %s (online) as a V2 bot â AI active.",
+            handler->PSendSysMessage("Marked %s (online) as a V2 bot â bot logic active.",
                                      p->GetName().c_str());
         }
         else
         {
-            handler->PSendSysMessage("Marked '%s' as a V2 bot. AI activates on next login.",
+            handler->PSendSysMessage("Marked '%s' as a V2 bot. Bot logic activates on next login.",
                                      target_name.c_str());
         }
         return true;
@@ -1555,14 +1567,14 @@ public:
         }
         Playerbot::Services::Lifecycle().unmark_as_bot(id);
         // If the character is online and currently registered, drop the
-        // registry entry too so the AI stops driving them this session.
+        // registry entry too so the bot logic stops driving them this session.
         if (Playerbot::Services::Registry().has(id))
         {
             Playerbot::Services::Scheduler().unregister_bot(id);
             Playerbot::Services::Snapshots().remove(id);
             Playerbot::Services::Registry().unregister_bot(id);
         }
-        handler->PSendSysMessage("Unmarked '%s'. AI detached.", target_name.c_str());
+        handler->PSendSysMessage("Unmarked '%s'. Bot logic detached.", target_name.c_str());
         // Owner binding becomes meaningless without the bot â clear it so
         // a future re-mark of the same character starts clean.
         Playerbot::Services::Owners().ClearOwner(id);
@@ -1760,7 +1772,7 @@ public:
         const size_t registered = Playerbot::Services::Registry().size();
         // Walk marked ids and count how many resolve to a connected Player â
         // gives the actual "in-world right now" number, distinct from
-        // registered (registered counts every bot whose AI exists, including
+        // registered (registered counts every bot whose bot logic exists, including
         // ones whose Player* may have despawned mid-tick).
         const auto ids = Playerbot::Services::Lifecycle().snapshot_ids();
         size_t online = 0;
@@ -1822,7 +1834,7 @@ public:
             CharacterCacheEntry const* ce = sCharacterCache->GetCharacterCacheByGuid(g);
             const bool online = ObjectAccessor::FindConnectedPlayer(g) != nullptr;
             const bool registered = Playerbot::Services::Registry().has(id);
-            char const* state = online ? (registered ? "ON+AI" : "ON   ")
+            char const* state = online ? (registered ? "ON+OK" : "ON   ")
                                        : (registered ? "REG  " : "off  ");
             if (ce)
             {
@@ -2336,7 +2348,7 @@ public:
             return false;
         }
 
-        // Unregister AI + unmark before deleting the character row so the
+        // Unregister bot logic + unmark before deleting the character row so the
         // registry has no dangling reference if delete fails midway.
         if (Playerbot::Services::Registry().has(id))
         {
@@ -2699,7 +2711,7 @@ public:
             return true;
         }
         // Pure-bot groups never block formation: the BotGroupBuilder /
-        // social-invite AI constantly re-groups idle bots, so any test
+        // social-invite bot logic constantly re-groups idle bots, so any test
         // group has to be able to YANK its members out of those. Groups
         // containing a human are left untouched (skip with a message).
         auto detach_if_bot_group = [&](Player* p) -> bool
@@ -2834,7 +2846,7 @@ public:
     // harnesses) can activate committed route/road changes instantly:
     //  * dungeon route waypoints ({SharedDb}.playerbot_dungeon_routes) â
     //    DungeonScriptMgr::LoadGeneratedRoutes builds a fresh table and
-    //    atomically swaps it under the routes mutex (AI-worker readers keep a
+    //    atomically swaps it under the routes mutex (bot-worker readers keep a
     //    coherent snapshot); the next GetAdvice tick serves the new routes.
     //  * handcrafted roads ({SharedDb}.handcrafted_road) â storage reload bumps
     //    the generation counter and the road GRAPH cache is invalidated, so the
@@ -3018,7 +3030,7 @@ public:
         }
 
         // Detach a bot from any pure-bot group so it can solo-queue LFG (the
-        // social-invite AI constantly re-groups idle bots). Humans untouched.
+        // social-invite bot logic constantly re-groups idle bots). Humans untouched.
         auto detach_if_bot_group = [&](Player* p)
         {
             Group* g = p->GetGroup();
@@ -4104,7 +4116,7 @@ public:
     //      same account as the issuing player. Without this gate any GM
     //      could conscript anyone's character on the realm.
     //   3) Auto-marks + auto-adopts on success: a single command end-to-end
-    //      from "I want to play with my alt" to "AI-controlled bot is
+    //      from "I want to play with my alt" to "bot-controlled bot is
     //      following me." No separate mark/adopt/login dance.
     //
     // Account-wide-progress is the design intent: a player levels their
@@ -4145,12 +4157,12 @@ public:
         }
         if (id == me->GetGUID().GetCounter())
         {
-            // Summoning yourself collapses into the Wave-F bot-AI-on-self
+            // Summoning yourself collapses into the Wave-F bot-bot logic-on-self
             // toggle, which is a different command. Refuse explicitly so
-            // the user doesn't accidentally hand their main to the AI.
+            // the user doesn't accidentally hand their main to the bot logic.
             handler->SendSysMessage(
                 "That's your current character. Use `.playerbot self on` "
-                "to drive your own character with the AI instead.");
+                "to drive your own character with the bot logic instead.");
             return false;
         }
 
@@ -4233,7 +4245,7 @@ public:
         }
 
         handler->PSendSysMessage(
-            "Summoning your alt '%s' â AI-controlled bot enters world on "
+            "Summoning your alt '%s' â bot-controlled bot enters world on "
             "the next DB callback. You (and any other char on your account) "
             "can whisper `follow`, `stop`, `engage`, `squad`, `role` to it.",
             target_name.c_str());
@@ -4242,8 +4254,8 @@ public:
 
     // .playerbot self on | off | status
     //
-    // First-person testing toggle: attach (or detach) the V2 AI to the
-    // issuing player's OWN character. Lets the player observe AI decisions
+    // First-person testing toggle: attach (or detach) the V2 bot logic to the
+    // issuing player's OWN character. Lets the player observe bot logic decisions
     // from inside the bot â vastly deeper insight than reading logs after
     // the fact ("why did it stop?", "why didn't it kick?", "where was the
     // pull heuristic going to send me?").
@@ -4252,11 +4264,11 @@ public:
     // scoped to "myself" so the user doesn't have to type their own name.
     // The player's client input still flows through the network normally
     // â IntentExecutor and the client compete on movement and ability use,
-    // and the player wins when they actively press a key (the AI's movement
+    // and the player wins when they actively press a key (the bot logic's movement
     // intents will arrive late and overwrite, but only when the client is
     // idle). For pure observation, the player can simply not move and watch.
     //
-    // Status sub-form prints whether AI is currently attached to self
+    // Status sub-form prints whether bot logic is currently attached to self
     // without changing anything, useful for verifying the toggle.
     static bool HandleSelf(ChatHandler* handler, std::string const& arg)
     {
@@ -4279,7 +4291,7 @@ public:
         if (mode.empty() || mode == "status")
         {
             handler->PSendSysMessage(
-                "Self-AI: marked=%s attached=%s (use `on`/`off` to toggle).",
+                "Self-bot: marked=%s attached=%s (use `on`/`off` to toggle).",
                 is_bot ? "yes" : "no",
                 is_attached ? "yes" : "no");
             return true;
@@ -4288,11 +4300,11 @@ public:
         {
             if (is_attached)
             {
-                handler->SendSysMessage("Self-AI is already attached.");
+                handler->SendSysMessage("Self-bot is already attached.");
                 return true;
             }
             // Mark + adopt to self (account-bound). On-mark code path
-            // already registers + schedules the AI for the online player,
+            // already registers + schedules the bot logic for the online player,
             // so a single call wires everything.
             if (!is_bot)
                 Playerbot::Services::Lifecycle().mark_as_bot(id);
@@ -4311,16 +4323,16 @@ public:
                     id, Playerbot::ActivityTier::Idle);
             }
             handler->SendSysMessage(
-                "Self-AI: ON. AI now drives your character. Your client "
+                "Self-bot: ON. Bot logic now drives your character. Your client "
                 "input still works â pressing movement keys interrupts the "
-                "AI's move intents. Use `.playerbot self off` to detach.");
+                "Bot logic's move intents. Use `.playerbot self off` to detach.");
             return true;
         }
         if (mode == "off")
         {
             if (!is_bot && !is_attached)
             {
-                handler->SendSysMessage("Self-AI is not attached.");
+                handler->SendSysMessage("Self-bot is not attached.");
                 return true;
             }
             if (Playerbot::Services::Registry().has(id))
@@ -4333,7 +4345,7 @@ public:
                 Playerbot::Services::Lifecycle().unmark_as_bot(id);
             Playerbot::Services::Owners().ClearOwner(id);
             handler->SendSysMessage(
-                "Self-AI: OFF. AI detached. You are back to manual control.");
+                "Self-bot: OFF. Bot logic detached. You are back to manual control.");
             return true;
         }
         handler->PSendSysMessage("Usage: .playerbot self on | off | status");

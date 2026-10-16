@@ -248,7 +248,7 @@ bool CharterDriveFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
             const uint32 sigs = Services::Guilds()
                 .ActiveFounderSignatureCount(kFaction);
             const uint32 required = sConfigMgr->GetIntDefault(
-                "MinPetitionSigns", 4);
+                "MinPetitionSigns", 4, true);
             if (sigs >= required)
             {
                 ai.advance_guild_charter_phase(4);

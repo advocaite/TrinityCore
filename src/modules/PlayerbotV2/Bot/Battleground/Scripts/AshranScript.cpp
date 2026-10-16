@@ -3,7 +3,7 @@
 // Glory control points + 8 side events + faction commanders.
 //
 // Authoritative coords from V1
-//   src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Epic/
+//   src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Epic/
 //     AshranData.h:118 (event interval), :138-149 (Volrath/Tremblade),
 //     :156-160 (control points), :171-173 (faction spawns).
 //

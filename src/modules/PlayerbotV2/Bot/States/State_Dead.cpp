@@ -159,7 +159,7 @@ void DispatchDead(BotAI& ai,
                 { group_can_rez = true; break; }
             }
     }
-    // --- Owner orders and wipes (ike3 ReleaseSpiritAction, Karrz's raid rules) ---
+    // --- Owner orders and wipes (ike3 ReleaseSpiritAction, the owner's raid rules) ---
     // release_ordered: the owner said "release" (BotCommandParser::OrderRelease).
     // owner_released: the companion's owner (a group member on our map) is a
     // ghost on a corpse run; we release and run back with them instead of
@@ -208,7 +208,7 @@ void DispatchDead(BotAI& ai,
     // promptly. The watchdog and the rez-accept wait both key off this cap.
     constexpr uint32 kGroupRezWaitMs = 90000u;
     // A raid does not wait the full 90 s: its bots hold the death screen a
-    // per-bot random 10-40 s for a living healer's resurrect (Karrz's
+    // per-bot random 10-40 s for a living healer's resurrect (the owner's
     // ReleaseSpiritAction), then release (Playerbot.Behavior.WipeReleaseWait).
     const bool raid_wait = group_can_rez && snapshot.is_in_raid() && Services::Config().behavior_wipe_release_wait();
     const uint32 raid_wait_ms = 10000u + (uint32(snapshot.bot_id()) * 2246822519u) % 30001u;
@@ -221,7 +221,7 @@ void DispatchDead(BotAI& ai,
     const uint32 release_cap = encounter_wait ? kEncounterWaitMs
         : raid_wait ? raid_wait_ms : (group_can_rez ? kGroupRezWaitMs : kPreReleaseStallMs);
     // Wipe chatter: once 80% of the raid on this map is dead, one corpse in
-    // four says so, at most once per 600 s across the fleet (Karrz: 1 in 4,
+    // four says so, at most once per 600 s across the fleet (the owner: 1 in 4,
     // 600 s). Party chat, the same helper as the rez thanks above.
     if (dead_clock_active && snapshot.is_in_raid() && group.exists() && group.members() &&
         Services::Config().behavior_wipe_release_wait() && !snapshot.is_ghost())

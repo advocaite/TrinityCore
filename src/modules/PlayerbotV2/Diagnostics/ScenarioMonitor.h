@@ -47,7 +47,7 @@ struct ScenarioSample
     float hp_pct = 100.f;
     float mana_pct = -1.f;                 // -1 = no mana bar (warrior, rogue)
     std::uint32_t group_size = 0;          // members of the group this bot is in; 0 = in none
-    std::string rule;                      // the rule the bot's AI fired last (BotAI::last_rule_fired); empty = none
+    std::string rule;                      // the rule the bot logic fired last (BotAI::last_rule_fired); empty = none
 };
 
 enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing };
@@ -138,6 +138,9 @@ struct ScenarioLimits
     std::uint32_t dps_hold_ms = 0;
     // Raid: every tank dead is a wipe, whoever else lives.
     bool tanks_dead_is_wipe = false;
+    // A boss kill passes the run however many die. The run then stops only on a full wipe, a boss reset, a stall, a timeout or a setup failure;
+    // every other finding (deaths, mana, holds, strays) is logged as a warning and no longer fails it.
+    bool kill_is_pass = false;
     // Support the encounter calls for, as the least number of casts a run that killed the boss must have seen (0 = not checked): hunters'
     // Tranquilizing Shots on an enrage, curse removals by mages / druids.
     std::uint32_t min_tranq_shots = 0;
@@ -189,6 +192,42 @@ public:
         {
             Fail(ScenarioFailKind::Wipe, "", "every member is dead", now_ms, wipe_reported_);
             return true;
+        }
+
+        // A raid whose pass bar is the kill ends on an effective wipe too, not only on the last bot dying: onyxia_full n24 sat to the 1200 s timeout with
+        // one raider alive after the pull had wiped. Two cases: nobody alive is in combat any more (the rest ran off or hide), and a tenth or less of
+        // the squad is left for 30 s.
+        if (limits_.kill_is_pass && entered && !samples.empty())
+        {
+            if (any_combat)
+            {
+                fight_seen_ = true;
+                no_combat_since_ = 0;
+                no_combat_active_ = false;
+            }
+            else if (fight_seen_)
+            {
+                if (!no_combat_active_) { no_combat_active_ = true; no_combat_since_ = now_ms; }
+                if (now_ms - no_combat_since_ >= kEffectiveWipeMs)
+                {
+                    Fail(ScenarioFailKind::Wipe, "", "the fight is over for the squad: no living member has been in combat for " + std::to_string(kEffectiveWipeMs / 1000u) + " s", now_ms, wipe_reported_);
+                    return true;
+                }
+            }
+            std::size_t alive = 0;
+            for (ScenarioSample const& s : samples)
+                if (s.alive) ++alive;
+            if (fight_seen_ && alive * 10 <= samples.size())
+            {
+                if (!few_alive_active_) { few_alive_active_ = true; few_alive_since_ = now_ms; }
+                if (now_ms - few_alive_since_ >= kFewAliveMs)
+                {
+                    Fail(ScenarioFailKind::Wipe, "", std::to_string(alive) + " of " + std::to_string(samples.size()) + " members alive for " + std::to_string(kFewAliveMs / 1000u) + " s", now_ms, wipe_reported_);
+                    return true;
+                }
+            }
+            else
+                few_alive_active_ = false;
         }
 
         ScenarioSample const* tank = nullptr;
@@ -367,7 +406,7 @@ public:
             }
             else if (!stall_reported_ && now_ms - stall_since_ms_ >= limits_.stall_ms)
             {
-                // Where everybody stands and what each AI last decided: the one line that says why a whole group waits.
+                // Where everybody stands and what each bot logic last decided: the one line that says why a whole group waits.
                 std::string who;
                 for (ScenarioSample const& s : samples)
                     who += (who.empty() ? "" : "; ") + s.name + (s.alive ? "" : " (dead)") + " at " + Trim(s.x) + "," + Trim(s.y) + "," + Trim(s.z) + " hp " + Trim(s.hp_pct) + "%" +
@@ -431,9 +470,15 @@ public:
     // A line for the result that is not a failure (counts the run measured).
     void NoteInfo(std::string const& line) { tolerated_.push_back(line); }
 
-    std::vector<ScenarioFailure> const& failures() const { return failures_; }
+    // The runner is holding the Attack on purpose (the healers' mana wait, itself bounded): the squad standing still is the plan, not a stall.
+    // MC Ragnaros 2026-10-13 4839bcf3: group_stalled at 121 s, inside the 120 s wait that ends at 140 s.
+    void NoteDeliberateWait(std::uint32_t now_ms) { stall_since_ms_ = now_ms; }
 
-    // What each bot's AI was doing: one line per rule change, the last `per_bot` of each bot, oldest first. A failure that says
+    std::vector<ScenarioFailure> const& failures() const { return failures_; }
+    // Findings that do not fail a run whose kill is the pass bar (ScenarioLimits::kill_is_pass).
+    std::vector<ScenarioFailure> const& warnings() const { return warnings_; }
+
+    // What each bot's bot logic was doing: one line per rule change, the last `per_bot` of each bot, oldest first. A failure that says
     // "the healer never healed" is answered by reading this (a movement rule that won every tick, a hold, the heal rules).
     std::vector<std::string> Trace(std::size_t per_bot = 25) const
     {
@@ -452,7 +497,8 @@ public:
     }
     bool passed(bool goal_reached) const { return goal_reached && failures_.empty(); }
     // The run cannot usefully go on: enough members have died.
-    bool terminal() const { return boss_reset_ || (limits_.max_deaths != 0 && deaths_ >= limits_.max_deaths); }
+    // A run whose pass bar is the kill is never ended by a death count, whatever max_deaths says.
+    bool terminal() const { return boss_reset_ || (!limits_.kill_is_pass && limits_.max_deaths != 0 && deaths_ >= limits_.max_deaths); }
     std::uint32_t deaths() const { return deaths_; }
     // Deaths inside the tolerance, as text lines (they are not failures).
     std::vector<std::string> const& tolerated() const { return tolerated_; }
@@ -528,10 +574,13 @@ private:
     };
 
     static constexpr std::uint32_t kBossResetMs = 5000;
+    static constexpr std::uint32_t kEffectiveWipeMs = 15000;
+    static constexpr std::uint32_t kFewAliveMs = 30000;
 
     static bool IsThreatHold(std::string const& rule)
     {
-        return rule == "combat:threat_hold" || rule == "combat:threat_wait_tank" || rule == "raid:threat_hold";
+        return rule == "combat:threat_hold" || rule == "combat:threat_wait_tank" || rule == "raid:threat_hold" ||
+               rule == "combat:shield_hold";
     }
 
     static float Dist2d(float ax, float ay, float bx, float by) { return std::hypot(ax - bx, ay - by); }
@@ -563,7 +612,7 @@ private:
 
     void Fail(ScenarioFailKind kind, std::string bot, std::string detail, std::uint32_t now_ms)
     {
-        // What the bot's AI did in the 90 s before it: the last-25 trace of a long run no longer reaches back to an early failure.
+        // What the bot's bot logic did in the 90 s before it: the last-25 trace of a long run no longer reaches back to an early failure.
         if (!bot.empty())
             for (auto const& kv : state_)
                 if (kv.second.name == bot)
@@ -584,7 +633,13 @@ private:
                         if (e.first + kContextWindowMs >= now_ms && e.first <= now_ms && n++ < kContextLines)
                             line(e);
                 }
-        failures_.push_back({ kind, std::move(bot), std::move(detail), now_ms });
+        // The ends of a run stay failures; the rest are what the bots did wrong on the way to a kill.
+        bool const ends_run = kind == ScenarioFailKind::Wipe || kind == ScenarioFailKind::Timeout || kind == ScenarioFailKind::SetupFailed ||
+                              kind == ScenarioFailKind::GroupBroken || kind == ScenarioFailKind::BossReset || kind == ScenarioFailKind::GroupStalled;
+        if (limits_.kill_is_pass && !ends_run)
+            warnings_.push_back({ kind, std::move(bot), std::move(detail), now_ms });
+        else
+            failures_.push_back({ kind, std::move(bot), std::move(detail), now_ms });
     }
     void Fail(ScenarioFailKind kind, std::string bot, std::string detail, std::uint32_t now_ms, bool& once)
     {
@@ -596,10 +651,14 @@ private:
     ScenarioLimits limits_;
     std::unordered_map<std::uint64_t, BotState> state_;
     std::vector<ScenarioFailure> failures_;
+    std::vector<ScenarioFailure> warnings_;
     std::unordered_map<std::uint64_t, std::pair<float, float>> stall_anchor_;
     std::uint32_t stall_since_ms_ = 0;
     bool stall_reported_ = false;
     bool wipe_reported_ = false;
+    bool fight_seen_ = false;
+    bool no_combat_active_ = false, few_alive_active_ = false;
+    std::uint32_t no_combat_since_ = 0, few_alive_since_ = 0;
     std::uint32_t deaths_ = 0;
     std::vector<std::string> tolerated_;
     std::vector<std::string> contexts_;

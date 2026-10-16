@@ -16,7 +16,7 @@
 // Everlook, Ratchet) is open to both, a faction capital to its own side only.
 //
 // THREADING: Initialize() runs once on the world thread at module init, before
-// any AI worker ticks, and publishes the immutable per-map grids with a release
+// any bot worker ticks, and publishes the immutable per-map grids with a release
 // store. Every query is a pure reader (acquire fence, no locks, no state).
 
 #pragma once
@@ -68,6 +68,10 @@ public:
     TownNpc const* Nearest(uint32 map, float x, float y, float z, uint32 flags,
                            bool alliance, float max_dist) const;
 
+    // Nearest mailbox object on `map` within `max_dist` (2D, same floor). Mailboxes are kept apart from the service NPCs so they never
+    // count as a town's NPCs.
+    TownNpc const* NearestMailbox(uint32 map, float x, float y, float z, float max_dist) const;
+
     // True when any auctioneer spawn (either side) stands within `radius`.
     // Cheap gate for the snapshot builder's auction-house scan.
     bool AuctioneerNear(uint32 map, float x, float y, float radius) const;
@@ -83,6 +87,7 @@ private:
     };
 
     std::unordered_map<uint32, MapGrid> _maps;
+    std::unordered_map<uint32, std::vector<TownNpc>> _mail;   // map -> mailbox object spawns
     size_t _count = 0;
     std::atomic<bool> _initialized{false};
 };

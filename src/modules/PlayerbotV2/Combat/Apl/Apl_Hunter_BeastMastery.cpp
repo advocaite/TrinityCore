@@ -52,7 +52,7 @@
 //   * Tranquilizing Shot (19801) - [M]-only class talent, dispel logic
 //     lives outside the DPS ladder.
 //   * Track Pets / Exotic Beasts / Eyes of the Beast - minimap utility,
-//     passive, pet-vision toy (breaks bot AI control).
+//     passive, pet-vision toy (breaks bot bot logic control).
 
 #include "../ApRegistry.h"
 #include "../ApRotation.h"

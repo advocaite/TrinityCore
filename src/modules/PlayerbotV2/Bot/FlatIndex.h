@@ -24,7 +24,7 @@
 // finalize(). finalize() stably sorts by key and (for the additive variant)
 // merges duplicate keys, so lookups are valid only after finalize().
 //
-// World-thread-only writes (the builder); read-only on AI workers after the
+// World-thread-only writes (the builder); read-only on bot workers after the
 // snapshot is published — the same access discipline the unordered_maps had.
 
 #pragma once

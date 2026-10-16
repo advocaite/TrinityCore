@@ -66,7 +66,8 @@ bool FleeDamagingLiquidGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView 
 bool FleeDamagingLiquidFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32)
 {
     float bx, by, bz; s.position(bx, by, bz);
-    const uint32 epoch = s.published_at_ms() / 1000u;
+    // One heading per 8 s window: a new random heading every second zig-zagged the bot inside the liquid.
+    const uint32 epoch = s.published_at_ms() / 8000u;
     const uint64 mixed = (uint64(s.bot_id()) * 0x9E3779B97F4A7C15ULL)
                        ^ (uint64(epoch) * 0xBF58476D1CE4E5B9ULL);
     const float angle = (float(mixed & 0xFFFFu) / 65536.0f) * 6.2831853f;

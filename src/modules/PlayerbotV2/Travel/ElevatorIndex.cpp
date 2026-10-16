@@ -317,7 +317,7 @@ void ElevatorIndex::EnsureLedges(uint64_t spawn_id, Player* p)
         }
 
         // Derive OUTSIDE the lock — the navmesh query (NearestNavPoint) can
-        // LoadGrid + findNearestPoly, and we must not stall an AI worker's
+        // LoadGrid + findNearestPoly, and we must not stall an bot worker's
         // LedgeFor read for that duration.
         LedgeRec rec;
         Position out;

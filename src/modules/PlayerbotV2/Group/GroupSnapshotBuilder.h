@@ -1,6 +1,6 @@
 // GroupSnapshotBuilder - Constructs a GroupSnapshot for a member's bot. Runs
 // on the world thread once per snapshot publish; the resulting object is
-// immutable and safe for AI worker consumption.
+// immutable and safe for bot worker consumption.
 
 #pragma once
 

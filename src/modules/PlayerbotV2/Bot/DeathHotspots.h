@@ -2,7 +2,7 @@
 // that saw DeathsNeeded deaths within WindowSec is a hotspot, and it is dangerous for a bot that is more than
 // LevelMargin levels below the strongest killer seen there. Quest pursuit uses it to give up objectives inside a
 // hotspot, so a bot stops walking into the camp that has just killed a dozen of its peers (Booty Bay Bloodsail camp,
-// 2026-10-07: 20 Fireball deaths). Written on the world thread (Module::OnDeath), read from the AI workers.
+// 2026-10-07: 20 Fireball deaths). Written on the world thread (Module::OnDeath), read from the bot workers.
 
 #pragma once
 

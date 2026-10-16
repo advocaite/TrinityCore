@@ -55,7 +55,7 @@ V2::BotAccountMgr& Accounts();
 V2::Travel::QuestHubDatabase& Hubs();
 // Nearest faction-appropriate repair-vendor spawn index. Built once at boot
 // right after Hubs(); lock-free reads after. Used by the broken-gear repair /
-// death-spiral-escape routing. World-thread init, AI-worker read.
+// death-spiral-escape routing. World-thread init, bot-worker read.
 V2::Travel::RepairVendorIndex& RepairVendors();
 V2::Travel::PortalIndex&      Portals();
 V2::Travel::UnifiedTravelGraph& TravelGraph();

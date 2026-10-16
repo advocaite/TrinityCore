@@ -275,6 +275,7 @@ void SetOwnerFollowOrder(Player const* bot, bool on, bool autopilot_window = tru
         {
             ai->end_fallback();
             ai->end_pull_back();
+            ai->end_owner_use();
             ai->set_owner_follow_order(true);
         }
         else
@@ -447,6 +448,7 @@ void OrderFallback(Player* sender, Player* bot)
     ai->exit_manual();
     ai->set_owner_follow_order(false);
     ai->end_pull_back();
+    ai->end_owner_use();
     ai->start_fallback(plan);
     ai->set_last_owner_name(sender->GetName());
     TC_LOG_INFO("playerbot.v2",
@@ -477,7 +479,7 @@ bool RaidPullGateAllows(Player const* bot_c, Unit const* target)
         return vp && BotCommandParser::BotRole(const_cast<Player*>(vp)) == Role::Tank;
     }
     Group const* grp = bot->GetGroup();
-    // A tank with an owner icon assignment pulls its own mob whatever the main-tank flag says (Karrz, MC Garr 2026-10-08: with a
+    // A tank with an owner icon assignment pulls its own mob whatever the main-tank flag says (playtest, MC Garr 2026-10-08: with a
     // flagged main tank only that tank went, and the adds killed it).
     if (grp && BotCommandParser::BotRole(bot) == Role::Tank)
         for (auto const& [tank_low, marker] : Services::Owners().TankMarks(grp->GetGUID().GetCounter()))
@@ -503,11 +505,13 @@ bool RaidPullGateAllows(Player const* bot_c, Unit const* target)
                 if (tank_low == bot->GetGUID().GetCounter()) return true;
             return false;
         }
+        // Only a LIVE lower-guid tank holds the pull: the group coordinator picks the first live tank, so a dead one must not
+        // leave the raid without a puller after a wipe.
         for (Group::MemberSlot const& slot : grp->GetMemberSlots())
         {
             if (slot.guid == bot->GetGUID() || slot.guid.GetCounter() >= bot->GetGUID().GetCounter()) continue;
             Player* other = ObjectAccessor::FindConnectedPlayer(slot.guid);
-            if (other && Services::Registry().has(BotId(slot.guid.GetCounter())) &&
+            if (other && other->IsAlive() && Services::Registry().has(BotId(slot.guid.GetCounter())) &&
                 BotCommandParser::BotRole(other) == Role::Tank)
                 return false;
         }
@@ -542,6 +546,47 @@ Unit* RtiPullTarget(Player* bot)
     return nullptr;
 }
 
+// "attack" with nothing selected: the mob the group is already fighting. The owner's own victim first, then a group member's victim
+// (the tank's before the others'), then the hostile nearest the owner that is attacking any group member. nullptr when the group fights nothing.
+Unit* AttackFallbackTarget(Player* sender, Player* bot)
+{
+    auto usable = [&](Unit* u) -> Unit*
+    {
+        return u && !u->IsPlayer() && u->IsAlive() && bot->IsValidAttackTarget(u) ? u : nullptr;
+    };
+    if (Unit* u = usable(sender->GetVictim()))
+        return u;
+    Group* grp = bot->GetGroup();
+    if (!grp)
+        return nullptr;
+    Unit* tank_victim = nullptr;
+    Unit* other_victim = nullptr;
+    Unit* nearest = nullptr;
+    float nearest_d = 0.f;
+    for (GroupReference const& itr : grp->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || !m->IsAlive() || m->GetMapId() != bot->GetMapId())
+            continue;
+        if (Unit* v = usable(m->GetVictim()))
+        {
+            if (!tank_victim && m != sender && Services::Registry().has(m->GetGUID().GetCounter()) && BotCommandParser::BotRole(m) == Role::Tank)
+                tank_victim = v;
+            else if (!other_victim)
+                other_victim = v;
+        }
+        for (Unit* at : m->getAttackers())
+            if (Unit* u = usable(at))
+            {
+                float const d = sender->GetDistance(u);
+                if (!nearest || d < nearest_d) { nearest = u; nearest_d = d; }
+            }
+    }
+    if (tank_victim) return tank_victim;
+    if (other_victim) return other_victim;
+    return nearest;
+}
+
 // Owner "pull back" (also "pullback", "pull and back"): the main tank opens on the owner's selected mob (else the
 // skull / own rti mark) from range, runs back to the rally point (set with "rally here") or, with none, to where it
 // stood, and tanks the mob there (BotAI::PullBackPlan, States::PullBackTick). Tank role only; in a raid map the
@@ -554,7 +599,7 @@ bool OrderPullBack(Player* sender, Player* bot)
     BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
     if (!ai || !bot->IsAlive() || bot->GetMapId() != sender->GetMapId())
         return true;
-    // Owner-assigned tank icons (assign <tank> <marker>, Karrz 2026-10-08): with any in the group only those tanks pull, each
+    // Owner-assigned tank icons (assign <tank> <marker>, playtest 2026-10-08): with any in the group only those tanks pull, each
     // on its own icon's mob; the other tanks, and everyone else, stand by until a mob is brought back.
     bool assigned_pull = false;
     Unit* target = nullptr;
@@ -1574,7 +1619,8 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
             return refuse("you are in a battleground");
         if (bm && bm->Instanceable() && bot->GetMapId() != sender->GetMapId())
             return refuse("I am inside an instance - walk out first");
-        if (sm && sm->Instanceable() && bot->GetMapId() != sender->GetMapId())
+        // Into the owner's instance only as a member of the owner's group (the door checks and their log are API::teleport_to's).
+        if (sm && sm->Instanceable() && bot->GetMapId() != sender->GetMapId() && !(bot->GetGroup() && bot->GetGroup() == sender->GetGroup()))
             return refuse("you are inside an instance - invite me and walk in with the group");
         Push(bot, TeleportToIntent{sender->GetMapId(), sender->GetPositionX(), sender->GetPositionY(),
                                    sender->GetPositionZ(), sender->GetOrientation()});
@@ -1596,6 +1642,10 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
         {
             if (ai->set_owner_stance(BotAI::OwnerStance::Passive))
                 TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: passive (starts no fights until attack / pull)", me, sender->GetName());
+            // Passive after an Attack / Pull ends that order's 15 s window and its Engage at once; a Stay / Hold is kept.
+            ai->close_owner_order_window();
+            if (ai->owner_command() == BotAI::OwnerCommand::Engage)
+                ai->exit_manual();
             ai->set_last_owner_name(sender->GetName());
         }
         say(me + ": passive, defending only until you say attack or pull");
@@ -1608,8 +1658,12 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
             if (ai->set_owner_stance(BotAI::OwnerStance::Aggressive))
                 TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: aggressive (attacks hostiles within {:.0f} yd of the owner)", me,
                             sender->GetName(), BotAI::kAggressiveRadiusYd);
-            ai->exit_manual();
-            ai->release_owner_lead(false);
+            // A Stay / Hold stays: aggressive changes the stance only (it used to cancel the Stay silently).
+            if (!ai->holding_position(GameTime::GetGameTimeMS()))
+            {
+                ai->exit_manual();
+                ai->release_owner_lead(false);
+            }
         }
         say(fmt::format("{}: aggressive, attacking anything hostile within {:.0f} yards of you", me, BotAI::kAggressiveRadiusYd));
         return true;
@@ -1620,6 +1674,9 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
         if (BotAI* ai = Services::Registry().ai(bid))
         {
             ai->enter_manual(BotAI::OwnerCommand::Hold, ObjectGuid::Empty, GameTime::GetGameTimeMS(), BotAI::kHoldPositionTtlMs);
+            // Defensive replaces an Aggressive stance (a Passive one already fights only what attacks); the Hold does the rest.
+            if (ai->owner_stance() == BotAI::OwnerStance::Aggressive)
+                ai->set_owner_stance(BotAI::OwnerStance::Auto);
             ai->set_last_owner_name(sender->GetName());
         }
         say(me + ": defensive, holding here and fighting only what attacks");
@@ -1643,7 +1700,7 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
 
 } // anonymous
 
-// Owner's "release" order (ike3's ReleaseSpiritAction / Karrz's "release"),
+// Owner's "release" order (ike3's ReleaseSpiritAction / the owner's "release"),
 // also taken when the owner releases their own spirit (Module::
 // OnSpiritReleased): a dead bot releases its spirit now and runs back to its
 // corpse as a ghost, or, dying inside a dungeon / raid, revives at the
@@ -1660,7 +1717,7 @@ bool BotCommandParser::OrderRelease(Player const* sender, Player const* bot, cha
     BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
     if (!ai)
         return false;
-    // An order latched before this death (a revival the AI never saw cleared
+    // An order latched before this death (a revival the bot logic never saw cleared
     // nothing) is stale: replace it rather than keep it.
     uint32 const held = ai->release_order_ms();
     if (held == 0 || (ai->died_at_ms() != 0 && held < ai->died_at_ms()))
@@ -1679,6 +1736,9 @@ void BotCommandParser::ReleaseOwnerFollowOrder(Player const* sender, Player cons
 {
     if (!bot) return;
     BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+    // A Pull / Pull back the bot does not carry out itself: it waits for the owner's Attack (party, EvaluateThreatHold).
+    if (ai && why && std::string_view(why).find("pull") != std::string_view::npos)
+        ai->note_owner_pull(GameTime::GetGameTimeMS());
     if (ai && ai->release_owner_lead(false))
         TC_LOG_INFO("playerbot.v2", "[owner_order] {} from {}: follow / fallback order released ({})",
             bot->GetName(), sender ? sender->GetName() : std::string("?"), why ? why : "?");
@@ -2587,6 +2647,8 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
             if (Services::Config().behavior_owner_follow_hold())
             {
                 ai->end_fallback();
+                ai->end_pull_back();
+                ai->end_owner_use();
                 ai->set_owner_follow_order(true);
             }
         }
@@ -2601,7 +2663,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         //                          relocation objective; the full travel
         //                          pipeline (walk/taxi/portal/ship/areatrigger)
         //                          drives the bot there organically — never a
-        //                          teleport. The bot resumes normal AI on
+        //                          teleport. The bot resumes normal bot logic on
         //                          arrival (it's a journey, not a parking).
         float a1 = 0.f, a2 = 0.f, a3 = 0.f;
         const int n_args = std::sscanf(parsed.tail.c_str(), "%f %f %f", &a1, &a2, &a3);
@@ -2997,6 +3059,11 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         {
             ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty,
                              GameTime::GetGameTimeMS(), BotAI::kHoldPositionTtlMs);
+            // Stay and Follow replace each other, and Stay ends a pull back / fallback that would walk the bot away.
+            ai->set_owner_follow_order(false);
+            ai->end_fallback();
+            ai->end_pull_back();
+            ai->end_owner_use();
             ai->set_last_owner_name(sender->GetName());
         }
         return true;
@@ -3011,6 +3078,10 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         {
             ai->enter_manual(BotAI::OwnerCommand::Hold, ObjectGuid::Empty,
                              GameTime::GetGameTimeMS(), BotAI::kHoldPositionTtlMs);
+            ai->set_owner_follow_order(false);
+            ai->end_fallback();
+            ai->end_pull_back();
+            ai->end_owner_use();
             ai->set_last_owner_name(sender->GetName());
         }
         Push(bot, WhisperIntent{sender->GetName(), "Hold: holding position."});
@@ -3023,7 +3094,9 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         if (BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter()))
         {
             ai->exit_manual();
-            ai->release_owner_lead();
+            // Resume ends the Stay / Follow / fallback / pull back; it does not start the dungeon autopilot (that is "go" or
+            // "run": the 15 s autopilot window made a resumed tank walk off to the next pack on its own).
+            ai->release_owner_lead(false);
             Push(bot, WhisperIntent{sender->GetName(), "Resume: autonomous."});
         }
         return true;
@@ -3095,7 +3168,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
         if (!ai)
         {
-            Push(bot, WhisperIntent{sender->GetName(), "Bgrun: no AI."});
+            Push(bot, WhisperIntent{sender->GetName(), "Bgrun: no bot logic."});
             return true;
         }
         if (parsed.tail == "pause")
@@ -3177,7 +3250,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     {
         // Diagnostic: walk all group bots and report their intent-queue depth.
         // Useful for spotting stalled bots — if the queue keeps growing, the
-        // AI worker can't keep up with the executor or vice versa.
+        // bot worker can't keep up with the executor or vice versa.
         const uint32 reported = ForEachGroupBot(bot, [&](Player const* p)
         {
             IntentQueue* q = Services::Registry().intents(p->GetGUID().GetCounter());
@@ -3281,76 +3354,12 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     }
     if (cmd == "pull")
     {
-        // Coordinated raid pull. Owner says "pull" with the next pull's
-        // target selected. Bot pauses N seconds (default 3) before engaging,
-        // matching the WoW pull-timer macro convention. Owners can call /pull
-        // 5 for a longer countdown when the puller needs to walk to position.
-        // When the bot is a raid leader/assistant, also broadcasts a raid
-        // warning ("Pulling <name> in Ns!") so the rest of the raid sees the
-        // standard pull-timer cue.
-        // "pull rti" (Playerbot.Behavior.Ike3Commands): the mob carrying the bot's own rti symbol, not the selection.
-        bool const by_rti = parsed.tail.rfind("rti", 0) == 0 && Services::Config().behavior_ike3_commands();
-        Unit const* target = by_rti ? RtiPullTarget(bot) : sender->GetSelectedUnit();
-        if (!target || target->GetGUID() == bot->GetGUID())
-        {
-            Push(bot, WhisperIntent{sender->GetName(),
-                                    by_rti ? "Pull: no marked mob for my rti symbol." : "Pull: select an enemy first."});
-            return true;
-        }
-        uint32 ms = args.size() >= 1 ? static_cast<uint32>(args[0] * 1000ULL) : 3000u;
-        if (ms > 60'000) ms = 60'000;
-        // Raid map: the pull goes to the main tank only; every other bot ignores it (it follows / assists).
-        if (!RaidPullGateAllows(bot, target))
-            return true;
-        const uint64 id = bot->GetGUID().GetCounter();
-        Services::Registry().for_each([&](BotId bid, BotRegistryEntry const& e)
-        {
-            if (bid != id) return;
-            const uint32_t until = GameTime::GetGameTimeMS() + ms;
-            const_cast<BotRegistryEntry&>(e).paused_until_ms.store(until, std::memory_order_relaxed);
-        });
-        // Broadcast a raid warning if the bot can. raid_warning() bails Locked
-        // when not allowed, which is fine — solo bots and non-officers just
-        // skip the broadcast and still fire the pull on their end.
-        Push(bot, RaidWarningIntent{
-            fmt::format("Pulling {} in {}s!", target->GetName(), ms / 1000)});
-        Push(bot, StartAttackIntent{target->GetGUID()});
-        SetOwnerFollowOrder(bot, false, false);
-
-        // Broadcast to all OTHER registered bots in the same group: pause
-        // them for the same window then engage the same target. Caller bots
-        // already had their pause set above. Healers/casters benefit from
-        // the synchronized pull window so they can pre-position; melee bots
-        // sync their burst CDs.
-        if (Group const* grp = bot->GetGroup())
-        {
-            const ObjectGuid target_guid = target->GetGUID();
-            const uint32_t until = GameTime::GetGameTimeMS() + ms;
-            uint32 broadcast_count = 0;
-            for (GroupReference const& itr : grp->GetMembers())
-            {
-                Player* member = itr.GetSource();
-                if (!member || member == bot) continue;
-                const BotId mid = member->GetGUID().GetCounter();
-                if (!Services::Registry().has(mid)) continue;
-                if (!RaidPullGateAllows(member, target)) continue;
-                Services::Registry().for_each([&](BotId bid, BotRegistryEntry const& e)
-                {
-                    if (bid != mid) return;
-                    const_cast<BotRegistryEntry&>(e).paused_until_ms
-                        .store(until, std::memory_order_relaxed);
-                });
-                Push(member, StartAttackIntent{target_guid});
-                SetOwnerFollowOrder(member, false, false);
-                ++broadcast_count;
-            }
-            if (broadcast_count > 0)
-                Push(bot, WhisperIntent{sender->GetName(),
-                    fmt::format("Pull: synced to {} group bot(s).", broadcast_count)});
-        }
-
-        Push(bot, WhisperIntent{sender->GetName(),
-            fmt::format("Pull: engaging {} in {}ms.", target->GetName(), ms)});
+        // One Pull, the same as the word in party chat and on the panel (Module::RouteGroupOrder): the tank takes the owner's
+        // selection, everyone else is handed the fight back and waits for the owner's Attack. The old countdown-and-everyone-attacks
+        // path (pause 3 s, StartAttack on the whole group) was a second Pull.
+        if (BotRole(bot) == Role::Tank)
+            return DispatchSingleImpl(sender, bot, "tank");
+        ReleaseOwnerFollowOrder(sender, bot, "pull");
         return true;
     }
     if (cmd == "trinkets")
@@ -3660,7 +3669,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     if (cmd == "queue")
     {
         // Per-bot intent-queue diagnostic. Reports queue size + capacity
-        // so the owner can see whether the AI worker is stalled (queue
+        // so the owner can see whether the bot worker is stalled (queue
         // grows) or healthy (queue empties between ticks).
         const uint64 id = bot->GetGUID().GetCounter();
         IntentQueue* q = Services::Registry().intents(id);
@@ -4061,6 +4070,10 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
                                     "Assist: anchor has no target."});
             return true;
         }
+        // The same raid pull gate as attack and assist_all: in a raid the main tank opens, so a whispered assist and the
+        // party-chat word (which is rewritten to attack) answer alike.
+        if (!RaidPullGateAllows(bot, ObjectAccessor::GetUnit(*sender, tgt)))
+            return true;
         Push(bot, StartAttackIntent{tgt});
         SetOwnerFollowOrder(bot, false, false);
         return true;
@@ -4108,6 +4121,8 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // detects empty victim and resets owner_command).
         Unit const* target = sender->GetSelectedUnit();
         if (!target)
+            target = AttackFallbackTarget(sender, bot);   // nothing selected: the mob the group is already fighting
+        if (!target)
         {
             Push(bot, WhisperIntent{sender->GetName(),
                                     "Attack: select a target first."});
@@ -4126,6 +4141,12 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
             cur && cur->is_manual_mode(GameTime::GetGameTimeMS()) &&
             cur->owner_command() == BotAI::OwnerCommand::Engage && cur->owner_target() == target->GetGUID() &&
             bot->GetVictim() == target)
+            return true;
+        // Attack is instant for the whole group (playtest, Deadmines 2026-10-15): every bot opens on the owner's target at once, tank
+        // or not. Only Pull and Pull back keep the tank first.
+        // A healer keeps healing on Attack and does not walk in to melee (playtest, Deadmines 2026-10-15): it takes no engage order. Its
+        // own fight logic heals first and casts or wands at the group's target only while nobody needs healing.
+        if (BotRole(bot) == Role::Healer)
             return true;
         Push(bot, StartAttackIntent{target->GetGUID()});
         if (BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter()))
@@ -4259,6 +4280,9 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         bool const by_icon = target != nullptr;
         if (!target)
             target = sender->GetSelectedUnit();
+        // Nothing selected: the owner's skull, else cross (the same pick as "pull back" and "pull rti").
+        if (!target)
+            target = RtiPullTarget(bot);
         if (!target)
         { Push(bot, WhisperIntent{sender->GetName(),
             "Tank: select a pull target first."});
@@ -4495,7 +4519,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // Broadcast AoE-preference toggle across all group bots. /aoe_all on /
         // off / (no arg → toggle each individually). Mutates BotAI state
         // directly via Services::Registry().ai(id), since AoE preference is a
-        // per-bot AI flag rather than an emitted intent.
+        // per-bot bot logic flag rather than an emitted intent.
         const std::string& want = parsed.tail;
         const int mode = (want == "on" || want == "1") ? 1
                        : (want == "off" || want == "0") ? 0
@@ -4628,7 +4652,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // Owner emergency unstuck. Clears in-flight movement, attack, and
         // pending cast. Does NOT touch the snapshot or intent queue (the
         // worker drains the queue as a normal-turn result of the next
-        // tick), so the bot picks up fresh AI decisions on the next loop.
+        // tick), so the bot picks up fresh bot logic decisions on the next loop.
         // Useful when the bot is wedged on a target it can't reach or
         // mid-rotation on a target the owner wants to disengage from.
         Push(bot, StopMovementIntent{/*clear_generators*/ true});
@@ -5802,7 +5826,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     if (cmd == "distance" || cmd == "dist")
     {
         // Report distance from bot to sender's selection (default sender).
-        // Whisper-only diagnostic; no AI side effect.
+        // Whisper-only diagnostic; no bot logic side effect.
         Unit const* tgt = sender->GetSelectedUnit();
         if (!tgt) tgt = sender;
         const float dist = bot->GetDistance(tgt);
@@ -5875,18 +5899,67 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     }
     if (cmd == "use")
     {
-        // Use the sender's selected target as a game object (chest, herb,
-        // ore, quest object). For NPC interaction use the "talk" command
-        // instead. The intent is rejected by the API if the selection is
-        // not a GameObject.
+        // "use <object name or entry>": the nearest matching game object within 30 y of the bot (an altar, brazier, lever, orb).
+        // The bot walks over, uses it once and stays there (idle:owner_use); "follow" releases it. A ritual such as the UBRS
+        // Blackrock Altar (3 users) completes once enough different players have used it: the owner plus ";Name:use altar" to two bots.
+        // A selected game object still works for clients that can select one.
         ObjectGuid selection = sender->GetTarget();
-        if (selection.IsEmpty() || !selection.IsGameObject())
+        std::string want = parsed.tail;   // lower case (Normalize)
+        size_t const b = want.find_first_not_of(' ');
+        want = b == std::string::npos ? std::string() : want.substr(b);
+        if (want.empty() && !selection.IsEmpty() && selection.IsGameObject())
         {
-            Push(bot, WhisperIntent{sender->GetName(),
-                                    "Use: select a game object first."});
+            Push(bot, UseObjectIntent{selection});
             return true;
         }
-        Push(bot, UseObjectIntent{selection});
+        if (want.empty())
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Use: say 'use <object name or entry>' near the object (for example 'use altar')."});
+            return true;
+        }
+        uint32 const want_entry = args.empty() ? 0u : uint32(args.front());
+        std::list<GameObject*> nearby;
+        Trinity::GameObjectInRangeCheck check(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), 30.0f);
+        Trinity::GameObjectListSearcher<Trinity::GameObjectInRangeCheck> searcher(bot, nearby, check);
+        Cell::VisitGridObjects(bot, searcher, 30.0f);
+        GameObject* best = nullptr;
+        float best_d = 1.0e9f;
+        for (GameObject* go : nearby)
+        {
+            if (!go || !go->isSpawned() || go->HasFlag(GO_FLAG_NOT_SELECTABLE))
+                continue;
+            bool const match = want_entry != 0 ? go->GetEntry() == want_entry
+                                               : Normalize(go->GetGOInfo()->name).find(want) != std::string::npos;
+            if (!match)
+                continue;
+            float const d = bot->GetDistance(go);
+            if (d < best_d) { best_d = d; best = go; }
+        }
+        if (!best)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Use: no '{}' within 30 yards of me.", want)});
+            return true;
+        }
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!ai)
+            return true;
+        uint32 const now = GameTime::GetGameTimeMS();
+        // Stay, so the follow does not walk the bot off the object (a ritual's channel breaks when the user moves).
+        ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty, now, BotAI::kHoldPositionTtlMs);
+        ai->set_owner_follow_order(false);
+        ai->end_fallback();
+        ai->end_pull_back();
+        ai->end_owner_use();
+        ai->set_last_owner_name(sender->GetName());
+        BotAI::OwnerUseOrder o;
+        o.map = bot->GetMapId();
+        o.go = best->GetGUID();
+        o.x = best->GetPositionX(); o.y = best->GetPositionY(); o.z = best->GetPositionZ();
+        o.set_ms = now ? now : 1u;
+        ai->start_owner_use(o);
+        Push(bot, WhisperIntent{sender->GetName(), fmt::format("Use: {} ({:.0f} yards), then I stay there.", best->GetGOInfo()->name, best_d)});
+        TC_LOG_INFO("playerbot.v2", "[owner_use] {} ordered to use {} (entry {}) at {:.0f}y", bot->GetName(),
+            best->GetGOInfo()->name, best->GetEntry(), best_d);
         return true;
     }
     if (cmd == "talents_all" || cmd == "talentsall")
@@ -6123,7 +6196,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         BotAI* ai = Services::Registry().ai(id);
         if (!ai)
         {
-            Push(bot, WhisperIntent{sender->GetName(), "WhyIdle: no AI handle."});
+            Push(bot, WhisperIntent{sender->GetName(), "WhyIdle: no bot logic handle."});
             return true;
         }
         const uint32 now_ms = GameTime::GetGameTimeMS();
@@ -6175,7 +6248,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     if (cmd == "stats" || cmd == "status")
     {
         // Whisper a one-line status report back to the requester. The data
-        // comes from the latest published snapshot — same fact base the AI
+        // comes from the latest published snapshot — same fact base the bot logic
         // workers see, so this is naturally consistent.
         const BotId id = bot->GetGUID().GetCounter();
         auto snap = Services::Snapshots().latest(id);
@@ -7254,7 +7327,7 @@ done_dispel:
     }
     if (cmd == "age")
     {
-        // Snapshot freshness — diagnostic for AI staleness investigation.
+        // Snapshot freshness — diagnostic for bot logic staleness investigation.
         const uint64 id = bot->GetGUID().GetCounter();
         auto snap = Services::Snapshots().latest(id);
         if (!snap)

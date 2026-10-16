@@ -61,8 +61,20 @@ void ElectRazorgoreOrb(Election& e, uint32_t now)
         for (Unit* enemy : plan.enemies)
             if (enemy->GetEntry() == kRazorgore)
                 raz = enemy->ToCreature();
-    if (!raz || !raz->IsInCombat())
+    if (!raz)
         return;
+    // The orb works from the start of the encounter: once the raid is fighting (the guards, or Razorgore himself), a click on the orb
+    // makes Razorgore engage the controller (go_orbe_domination). Until then nobody touches him, so waiting for him to be in combat
+    // would let a raid that pulls the guards first attack him with the eggs still standing.
+    if (!raz->IsInCombat())
+    {
+        bool fighting = false;
+        for (Member const& m : plan.members)
+            if (m.p->IsInCombat() && m.p->GetExactDist2d(raz) < 120.f)
+                fighting = true;
+        if (!fighting)
+            return;
+    }
 
     std::list<GameObject*> eggs;
     raz->GetGameObjectListWithEntryInGrid(eggs, kBlackDragonEgg, 250.0f);

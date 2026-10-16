@@ -34,12 +34,27 @@ struct HealClaim
 };
 using HealClaims = std::vector<std::pair<uint64, HealClaim>>;   // healer guid counter -> claim
 
+// One book for the whole process. The map and its mutex must not be function-local statics of a template: every lambda type is a
+// separate instantiation, and each would get a private map, so a claim written by EmitHeal would be invisible to PickPatient,
+// CopyHealClaims and ReleaseHealClaim.
+struct HealClaimBook
+{
+    std::mutex mu;
+    std::unordered_map<uint64, HealClaim> claims;
+};
+
+inline HealClaimBook& HealClaimBookInstance()
+{
+    static HealClaimBook book;
+    return book;
+}
+
 template <typename F>
 auto WithHealClaims(uint32 now, F&& f)
 {
-    static std::mutex mu;
-    static std::unordered_map<uint64, HealClaim> claims;
-    std::lock_guard<std::mutex> lock(mu);
+    HealClaimBook& book = HealClaimBookInstance();
+    std::lock_guard<std::mutex> lock(book.mu);
+    auto& claims = book.claims;
     if (claims.size() > 64)
         for (auto it = claims.begin(); it != claims.end();)
             it = int32(now - it->second.start_ms) > int32(kHealClaimMaxAgeMs) ? claims.erase(it) : std::next(it);

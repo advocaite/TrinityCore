@@ -24,9 +24,9 @@ namespace Playerbot {
 class BotSnapshotView;
 
 // Advice bundle returned by a DungeonScript per tick. Empty fields
-// mean "no opinion" — the AI uses generic logic. The advice struct
+// mean "no opinion" — the bot logic uses generic logic. The advice struct
 // is intentionally small and value-typed so the registry can hand
-// it out by-value to the AI worker without locking.
+// it out by-value to the bot worker without locking.
 struct DungeonAdvice
 {
     // Creature_template entries the bot should pull first / focus
@@ -96,7 +96,7 @@ struct DungeonAdvice
     std::vector<uint32_t> soak_spells;
 
     // Boss creature entries in encounter order. Order is encounter-
-    // progression so the dungeon AI can tell whether the run is complete
+    // progression so the dungeon bot logic can tell whether the run is complete
     // (all bosses dead) and which boss is "next". Used by tank-advance
     // and by diag commands. Live boss creature positions are read from
     // the map; if no waypoints are provided, advancement falls back to a
@@ -157,7 +157,7 @@ struct DungeonAdvice
     // platform, or descent reached after the main clear — where the group must
     // stay TIGHT and FOCUS-KILL casters instead of CCing/spreading, and the
     // tank must not out-range its healer. When the tank descends BELOW this
-    // world-Z the dungeon AI switches into "tight engagement" mode:
+    // world-Z the dungeon bot logic switches into "tight engagement" mode:
     //   * tighter advance-cohesion gate (healer ≤18y, every member ≤25y, ≥85% HP)
     //   * tighter follower regroup radius (14y vs the default 22y) so the group
     //     balls up INSIDE the advance gate — eliminates the 18-22y cohesion
@@ -245,7 +245,7 @@ public:
     DungeonScriptMgr() = default;
 
     // Takes ownership; called once per script at module init. The
-    // registry must be assembled before any AI ticks consult it.
+    // registry must be assembled before any bot ticks consult it.
     void Register(std::unique_ptr<DungeonScript> script);
 
     // Register an "always-on" script whose advice is merged with the
@@ -275,7 +275,7 @@ public:
     // again from `.playerbot reloadroutes` (SOAP) whenever the editor commits
     // route changes — builds the new table off to the side and atomically swaps
     // the shared_ptr under routes_mutex_, so concurrent GetAdvice readers on the
-    // AI worker threads keep a consistent (old or new) snapshot and no restart
+    // bot worker threads keep a consistent (old or new) snapshot and no restart
     // is needed. Returns the number of waypoints loaded.
     size_t LoadGeneratedRoutes();
 
@@ -322,7 +322,7 @@ private:
     // DB-sourced route waypoints keyed by (map_id<<8)|difficulty. The map is
     // IMMUTABLE once published; LoadGeneratedRoutes builds a fresh instance and
     // swaps the shared_ptr under routes_mutex_ (hot-reload). GetAdvice readers
-    // (AI worker threads, every tick) take a brief shared_lock only to copy the
+    // (bot worker threads, every tick) take a brief shared_lock only to copy the
     // shared_ptr, then read the immutable map lock-free — an in-flight reader
     // keeps the old table alive via its shared_ptr during a swap.
     using RouteTable =

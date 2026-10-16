@@ -21,7 +21,7 @@
 // are handled by the idle-state buff maintenance), Omen of Clarity, Cat
 // bail-out to heal.
 //
-// Priorities follow Karrz's ike3 vanilla strategies (the ike3-based playerbot code
+// Priorities follow Karrz's ike3 vanilla strategies (Karrz1/wow-1.12
 // raid10-revamp, playerbot/strategy/druid/*Strategy.cpp, MANGOSBOT_ZERO).
 
 #include "../ApRegistry.h"
@@ -87,7 +87,6 @@ constexpr uint32 SWIFTMEND          = 18562;   // Restoration talent
 constexpr uint32 NATURES_SWIFTNESS  = 17116;   // Restoration talent
 constexpr uint32 REBIRTH            = 20484;
 constexpr uint32 TRANQUILITY        = 740;
-constexpr uint32 REVIVE             = 50769;
 
 constexpr uint8 POWER_MANA   = 0;
 constexpr uint8 POWER_RAGE   = 1;
@@ -181,7 +180,7 @@ struct HealTarget
     int32      hp_pct = 100;
 };
 
-// Heal target picked by Karrz's scoring (ClassicHeal::PickPatient: tank
+// Heal target picked by the owner's scoring (ClassicHeal::PickPatient: tank
 // first, LOS, incoming-damage projection, healers spread); hp_pct is the
 // projected health. The bot itself at 100% when nobody needs a heal.
 HealTarget LowestFriendOrSelf(ApPredicateContext const& ctx)
@@ -452,7 +451,7 @@ bool ShouldFrenziedRegen(ApPredicateContext const& ctx)
 }
 void DoFrenziedRegen(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(FRENZIED_REGEN); }
 
-// ---- Threat: loose attackers (Karrz's LooseAttackersTrigger) ----
+// ---- Threat: loose attackers (the owner's LooseAttackersTrigger) ----
 // A "loose attacker" is a mob hitting a NON-TANK group member (snapshot
 // victim_kind == Member). Growl's reach is read from the spell data
 // (TankThreat::TauntReach, 10 yd when the data has none); the pick-up rule
@@ -473,7 +472,7 @@ bool BearVictimSecured(ApPredicateContext const& ctx)
     return v->hp <= 0 || k == ThreatVictim::Me || k == ThreatVictim::Tank;
 }
 
-// Challenging Roar when 3+ loose attackers are within 10 yd (Karrz) - only
+// Challenging Roar when 3+ loose attackers are within 10 yd (the owner) - only
 // those no other tank was given, and never with a crowd-controlled mob in
 // reach (TankThreat::AreaTauntWorth).
 bool ShouldChallengingRoar(ApPredicateContext const& ctx)
@@ -662,7 +661,11 @@ void DoSwiftmend(ApPredicateContext const& ctx, BotIntentEmitter& e)
 
 bool ShouldRebirth(ApPredicateContext const& ctx)
 {
-    return ctx.bot.in_combat() && CasterReady(ctx, REBIRTH) && !ClassicHeal::RebirthTarget(ctx.bot, ctx.group).IsEmpty();
+    // The core refuses a cast the bar cannot pay with NO_POWER (MC Rag 2026-10-12: Rebirth refused NO_POWER on every attempt, the druid
+    // at 1.4-1.8k of 8.6k mana against a 1057 rank-2 cost): wait for the mana instead of burning the claim and the cooldown tick.
+    uint32 const known = ctx.bot.resolve_rank(REBIRTH);
+    return ctx.bot.in_combat() && CasterReady(ctx, REBIRTH) && ctx.bot.power(0) >= ctx.bot.mana_cost(known ? known : REBIRTH)
+        && !ClassicHeal::RebirthTarget(ctx.bot, ctx.group).IsEmpty();
 }
 void DoRebirth(ApPredicateContext const& ctx, BotIntentEmitter& e)
 {
@@ -671,16 +674,6 @@ void DoRebirth(ApPredicateContext const& ctx, BotIntentEmitter& e)
     // druids spread over the corpses (ClassicHeal::RezTarget).
     if (ObjectGuid const t = ClassicHeal::RebirthTarget(ctx.bot, ctx.group); !t.IsEmpty())
         e.cast(REBIRTH, t);
-}
-
-bool ShouldRevive(ApPredicateContext const& ctx)
-{
-    return !ctx.bot.in_combat() && CasterReady(ctx, REVIVE) && ctx.group.dead_member(ctx.bot.map_id()) != nullptr;
-}
-void DoRevive(ApPredicateContext const& ctx, BotIntentEmitter& e)
-{
-    if (auto const* m = ctx.group.dead_member(ctx.bot.map_id()))
-        e.cast(REVIVE, m->guid);
 }
 
 bool ShouldFastHeal(ApPredicateContext const& ctx)
@@ -693,7 +686,12 @@ bool ShouldFastHeal(ApPredicateContext const& ctx)
 void DoFastHeal(ApPredicateContext const& ctx, BotIntentEmitter& e)
 {
     ClassicHeal::Patient const p = ClassicHeal::PickPatient(ctx);
-    ClassicHeal::EmitHeal(ctx.bot, ctx.group, e, ClassicHeal::RaidChoose(ctx.bot, p, FastHeal(ctx), HEALING_TOUCH), p);
+    // Raid: Regrowth (880 mana for ~1.2k and a HoT, 31 % of a druid's mana in n31 mc_geddon) only for someone about to die; a tank under
+    // half health gets Healing Touch, which is twice as efficient per mana and lands within the same window with a downranked cast.
+    uint32 fast = FastHeal(ctx);
+    if (ClassicHeal::RaidHealing(ctx.bot) && p.actual_pct >= ClassicHeal::kEmergencyPct && p.hp_pct >= ClassicHeal::kEmergencyPct)
+        fast = HEALING_TOUCH;
+    ClassicHeal::EmitHeal(ctx.bot, ctx.group, e, ClassicHeal::RaidChoose(ctx.bot, p, fast, HEALING_TOUCH), p);
 }
 
 bool ShouldHealingTouch(ApPredicateContext const& ctx)
@@ -716,7 +714,7 @@ void DoRejuvenation(ApPredicateContext const& ctx, BotIntentEmitter& e)
         ClassicHeal::NoteHotCast(ctx.bot, t, REJUVENATION);
 }
 
-// Innervate (Karrz's fixed trigger: mana below AiPlayerbot.LowMana): the
+// Innervate (the owner's fixed trigger: mana below AiPlayerbot.LowMana): the
 // druid itself first, otherwise another healer within 30 yd who is
 // running dry and isn't under any druid's Innervate yet (tracked buff), so
 // the raid's druids don't spend two Innervates on one priest.
@@ -758,7 +756,7 @@ void DoHealerInnervate(ApPredicateContext const& ctx, BotIntentEmitter& e)
     Classic::NoteCooldownUse(ctx.bot, INNERVATE, "Innervate");
 }
 
-// Tranquility: 3 injured party members around the druid (Karrz's "medium
+// Tranquility: 3 injured party members around the druid (the owner's "medium
 // aoe heal"); a 10 s channel on a 5 min cooldown, so only with the mana for it.
 bool ShouldTranquility(ApPredicateContext const& ctx)
 {
@@ -820,7 +818,6 @@ ApRule const kHealerRules[] = {
     { ShouldHealingTouch,         DoHealingTouch,      "classic_resto:healing_touch" },
     { ShouldDispel,               DoDispel,            "classic_resto:dispel" },
     { ShouldRejuvenation,         DoRejuvenation,      "classic_resto:rejuvenation" },
-    { ShouldRevive,               DoRevive,            "classic_resto:revive" },
     { ShouldHealerSchoolNuke,     DoHealerSchoolNuke,  "classic_resto:school_nuke" },
     { ShouldHealerMoonfire,       DoMoonfire,          "classic_resto:moonfire" },
     { ShouldHealerWrath,          DoWrath,             "classic_resto:wrath" },

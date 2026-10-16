@@ -159,7 +159,7 @@ public:
     // Only the leader / raid assistants can set icons, and bots set them only
     // on an owner's command or as the leader's in-combat auto-skull
     // (State_InGroup), so a mark is the leader's / owner's call. Read by the
-    // DPS threat hold (opens on a marked unpulled mob after 4s) and the raid
+    // DPS threat hold (opens on a marked unpulled mob after 8 s, kMaxUnpulledOwnerWaitMs; a party's DPS open 6 s after the tank's first hit) and the raid
     // kill focus (PveGroupCoordinator).
     ObjectGuid explicit_kill_mark() const
     {

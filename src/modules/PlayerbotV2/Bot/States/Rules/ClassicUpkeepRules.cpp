@@ -17,6 +17,8 @@
 //   idle:classic_healthstone warlocks keep a healthstone in the bags inside
 //                          dungeons / raids (the dungeon hold swallows the
 //                          world idle:conjured_item there)
+//   idle:classic_mana_gem  mages keep a conjured mana gem in the bags inside
+//                          dungeons / raids
 //   idle:classic_fear_ward dwarf priests keep Fear Ward on their raid tank
 //
 // The decisions live in Bot/ClassicUpkeep.cpp, shared with the vanilla
@@ -51,6 +53,9 @@ bool UpkeepWindow(BotSnapshotView const& s, GroupSnapshotView const& g)
 {
     if (!s.is_alive() || s.in_combat() || s.is_casting() || s.is_mounted() || s.on_transport()
         || s.raw().vehicle.on_vehicle || !s.victim().IsEmpty() || s.attackers_count() > 0)
+        return false;
+    // The 992 band sits above the lava / drowning rules (900-865): get out of the hazard before any buff.
+    if (s.is_in_damaging_liquid() || s.is_swimming())
         return false;
     if (auto const* members = g.members())
         for (GroupMemberSummary const& m : *members)
@@ -218,6 +223,7 @@ bool RaidBuffsFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
     {
         ai.note_action_retry(BotAI::ActionKind::ClassUpkeep, b.key, now_ms);
         ai.note_buff_cast(b.key, now_ms);
+        Classic::NoteAreaBuffCast(s.guid(), b.key, b.area_needy, now_ms);
     }
     // [raid_support] why this class buff goes out (MC Garr 2026-10-10: the druids cast Mark of the Wild over and over): the target's
     // tracked buffs as the group snapshot sees them, once per caster and key per minute.
@@ -412,6 +418,115 @@ bool HealthstoneFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
     return true;
 }
 
+// ---------- idle:classic_mana_gem ----------
+// A mage keeps a conjured mana gem in the bags inside dungeons / raids (the gem is the first mana item of the fight, and nothing
+// conjured one: the mage branch of idle:conjured_item makes retail Refreshment).
+
+// A conjure that leaves no gem the bag scan recognises must not repeat for ever: after kGemAttemptCap casts without a gem the
+// bot pauses kGemPauseMs, then gets a fresh set of attempts.
+constexpr uint32 kGemAttemptCap = 3;
+constexpr uint32 kGemPauseMs = 10 * 60 * 1000;
+
+struct GemTries { uint32 count = 0; uint32 pause_until = 0; };
+
+std::mutex& GemTriesMutex() { static std::mutex m; return m; }
+std::unordered_map<uint64, GemTries>& GemTriesTable() { static std::unordered_map<uint64, GemTries> t; return t; }
+
+bool GemMayTry(uint64 bot, uint32 now_ms)
+{
+    std::lock_guard lk(GemTriesMutex());
+    auto it = GemTriesTable().find(bot);
+    if (it == GemTriesTable().end() || !it->second.pause_until)
+        return true;
+    if (static_cast<int32>(now_ms - it->second.pause_until) < 0)
+        return false;
+    GemTriesTable().erase(it);   // pause over: fresh attempts
+    return true;
+}
+
+void GemForget(uint64 bot)
+{
+    std::lock_guard lk(GemTriesMutex());
+    GemTriesTable().erase(bot);
+}
+
+// Counts a cast; returns true when it was the last attempt before the pause.
+bool GemNoteCast(uint64 bot, uint32 now_ms)
+{
+    std::lock_guard lk(GemTriesMutex());
+    GemTries& t = GemTriesTable()[bot];
+    if (++t.count < kGemAttemptCap)
+        return false;
+    t.pause_until = now_ms + kGemPauseMs;
+    return true;
+}
+
+bool ManaGemGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    if (!s.is_in_instance() || !UpkeepWindow(s, g) || s.is_moving() || s.is_casting() || s.recently_in_combat(5000))
+        return false;
+    uint32 const create = Classic::CreateManaGemSpell(s);
+    if (!create)
+        return false;
+    if (Classic::HasManaGem(s))
+    {
+        GemForget(s.guid().GetCounter());   // the conjure worked: forget earlier misses
+        return false;
+    }
+    return s.is_ready(create)
+        && V2::MayConjure(s.in_combat(), s.recently_in_combat(5000), s.power(POWER_MANA), s.mana_cost(create))
+        && !ai.action_recently_tried(BotAI::ActionKind::ClassUpkeep, create, now_ms)
+        && GemMayTry(s.guid().GetCounter(), now_ms);
+}
+bool ManaGemFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    uint32 const create = Classic::CreateManaGemSpell(s);
+    if (!create || !emit.cast(create))
+        return false;
+    ai.note_action_retry(BotAI::ActionKind::ClassUpkeep, create, now_ms);
+    if (GemNoteCast(s.guid().GetCounter(), now_ms))
+        TC_LOG_INFO("playerbot.v2", "[supplies] {} cast mana gem spell {} {} times without a gem reaching the bags; pausing {} min",
+            s.name(), create, kGemAttemptCap, kGemPauseMs / 60000);
+    ai.set_last_rule_fired("idle:classic_mana_gem");
+    return true;
+}
+
+// ---------- idle:classic_conjure ----------
+// Mages: Conjure Water and Conjure Food when the conjured stock runs low, in instances (out in the world
+// idle:conjured_item does it). The conjured items are drunk / eaten like any other (consumables are
+// classified by their on-use spell).
+
+constexpr uint32 kConjureWaterBelow = 20;
+constexpr uint32 kConjureFoodBelow = 10;
+
+uint32 PickConjure(BotSnapshotView const& s, BotAI& ai, uint32 now_ms)
+{
+    for (auto kind : { Classic::ConsumableKind::Drink, Classic::ConsumableKind::Food })
+    {
+        uint32 const create = Classic::MageConjureSpell(s, kind, kind == Classic::ConsumableKind::Drink ? kConjureWaterBelow : kConjureFoodBelow);
+        if (create && s.is_ready(create)
+            && V2::MayConjure(s.in_combat(), s.recently_in_combat(5000), s.power(POWER_MANA), s.mana_cost(create))
+            && !ai.action_recently_tried(BotAI::ActionKind::ClassUpkeep, create, now_ms))
+            return create;
+    }
+    return 0;
+}
+bool ConjureGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    if (s.cls() != CLASS_MAGE || !s.is_in_instance() || !UpkeepWindow(s, g) || s.is_moving() || s.recently_in_combat(5000))
+        return false;
+    return PickConjure(s, ai, now_ms) != 0;
+}
+bool ConjureFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    uint32 const create = PickConjure(s, ai, now_ms);
+    if (!create || !emit.cast(create))
+        return false;
+    ai.note_action_retry(BotAI::ActionKind::ClassUpkeep, create, now_ms);
+    ai.set_last_rule_fired("idle:classic_conjure");
+    return true;
+}
+
 // ---------- idle:classic_fear_ward ----------
 // The raid plan (PveGroupCoordinator) gives each dwarf priest one tank that
 // lacks Fear Ward; between pulls the priest puts it back up (in combat the
@@ -494,6 +609,8 @@ void RegisterClassicUpkeepRules(IdleRuleRegistry& r)
     add("idle:classic_dispel",    992, &DispelGate,    &DispelFire);
     add("idle:classic_soulstone", 992, &SoulstoneGate, &SoulstoneFire);
     add("idle:classic_healthstone", 992, &HealthstoneGate, &HealthstoneFire);
+    add("idle:classic_mana_gem",  992, &ManaGemGate,   &ManaGemFire);
+    add("idle:classic_conjure", 992, &ConjureGate, &ConjureFire);
     add("idle:classic_fear_ward", 992, &FearWardGate, &FearWardFire);
     add("idle:classic_raid_consumables", 991, &RaidConsumablesGate, &RaidConsumablesFire);
 }

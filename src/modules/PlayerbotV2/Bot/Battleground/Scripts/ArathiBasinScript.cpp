@@ -4,7 +4,7 @@
 // 4-cap: defend 4, soft-attack the 5th (typically the contested mid).
 //
 // Authoritative coords + strategic weights from V1
-// src/modules/Playerbot/AI/Coordination/Battleground/Scripts/Domination/
+// src/modules/Playerbot/bot logic/Coordination/Battleground/Scripts/Domination/
 // ArathiBasinData.h:54-81 (positions), :110-121 (GetNodeStrategicValue),
 // :159, :168 (faction spawns).
 

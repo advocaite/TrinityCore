@@ -95,13 +95,19 @@ public:
     bool   tactic_save_mana() const { return s_->tactic_save_mana; }   // owner "save mana"
     // A companion may sit down to eat or drink only when its owner has stopped next to it: otherwise the group follow
     // stands it up again at the next step and the next stop costs another item.
+    // In a raid the group stands spread over 30-40 y round the owner (formation, spacing), so "next to it" is the raid's own reach
+    // (playtest, live MC 2026-10-12: raid bots stood waiting on mana regen and never sat; a 10 y mark kept every bot past the first
+    // rank from ever drinking).
     bool   companion_may_sit() const
     {
         if (!s_->owner_in_group) return true;
         float x, y, z; position(x, y, z);
+        float const reach = is_in_raid() ? 45.0f : 10.0f;
+        if (s_->owner_dist >= 0.0f)
+            return s_->owner_dist <= reach;
         for (auto const& u : s_->combat.nearby_friends)
             if (u.guid == s_->owner_guid)
-                return (u.x - x) * (u.x - x) + (u.y - y) * (u.y - y) <= 10.0f * 10.0f;
+                return (u.x - x) * (u.x - x) + (u.y - y) * (u.y - y) <= reach * reach;
         return false;
     }
     bool   has_duel_request()      const { return s_->social_events.has_duel_request; }
@@ -143,6 +149,7 @@ public:
     // Classic ammo: 0 = nothing to shoot ammo with, 1 = arrows, 2 = bullets; count of usable ones in bags.
     uint8  ammo_kind()             const { return s_->consumables.ammo_kind; }
     uint32 ammo_count()            const { return s_->consumables.ammo_count; }
+    uint8  ranged_subclass()       const { return s_->consumables.ranged_subclass; }
     int32  hp()           const { return s_->vitals.hp; }
     int32  max_hp()       const { return s_->vitals.max_hp; }
     // int64 intermediate prevents overflow at high HP pools — modern raid
@@ -203,7 +210,7 @@ public:
     // True if `spell_id` can be cast while moving (instant cast OR no
     // Movement interrupt flag). Looked up from SpellInfo via the global
     // SpellMgr — that data is read-only after init, so the call is safe
-    // from AI worker threads. APL rules pair this with `is_moving()` to
+    // from bot worker threads. APL rules pair this with `is_moving()` to
     // gate hard-cast spells: `if (s.is_moving() && !s.can_cast_while_moving(SP)) return false;`.
     // Returns true when the spell is unknown (no filtering — let the cast
     // attempt and its server-side gates decide).
@@ -369,7 +376,7 @@ public:
     // threat-grab behavior. Returns nullptr if every nearby enemy is on us.
     NearbyUnit const* untaunted_enemy(float range = 30.f) const;
 
-    // ---- Threat discipline (port of Karrz's ike3-based bots group threat rules) ----
+    // ---- Threat discipline (port of Karrz's wow-1.12 group threat rules) ----
     // The attacker / nearby-enemy record for `guid` (attackers first), or null.
     NearbyUnit const* hostile_unit(ObjectGuid guid) const;
     // Group's tank as resolved by the builder (may be this bot). Empty when
@@ -385,11 +392,11 @@ public:
     // this bot or another non-tank member (self-defence) or someone outside
     // the group. Role, map-type and config gating are the CALLER's job, as
     // is the opening-wait timeout.
-    enum class ThreatHold : uint8 { None, TankOpening, OverThreat };
+    enum class ThreatHold : uint8 { None, TankOpening, OverThreat, ShieldUp };
     ThreatHold threat_hold(ObjectGuid target, float opening_lead, float max_ratio) const;
     // Tank helper (LooseAttackersTrigger): nearest live enemy within `range`
     // whose victim is a NON-TANK group member - the mobs a tank must taunt
-    // or pick up. loose_attackers_within counts them (Karrz: Challenging
+    // or pick up. loose_attackers_within counts them (the owner: Challenging
     // Shout / Roar at 3+ within 10y).
     NearbyUnit const* loose_attacker(float range = 30.f) const;
     size_t loose_attackers_within(float range) const;
@@ -403,6 +410,12 @@ public:
     NearbyUnit const* assigned_tank_mob() const;
     NearbyUnit const* taunt_candidate(float range) const;
     NearbyUnit const* pickup_candidate() const;
+    // 5-man only: (x, y) lies further than 30 y from every healer in the friend sweep (false with no healer in it). A tank does not
+    // walk after a mob there.
+    bool beyond_healer_leash(float x, float y) const;
+    // The raid plan gave this mob to another tank AND that claim still holds: a claimed mob that has stood on a group member for a few
+    // seconds is not being picked up by its owner, so any tank may take it.
+    bool claim_blocks(NearbyUnit const& u) const;
 
     // Directional look-ahead. Returns the closest threatening hostile
     // creature inside a `half_width`-yard corridor from the bot's
@@ -693,7 +706,7 @@ public:
     bool              has_drainable_mail() const;
     MailEntry const*  next_drainable_mail() const;
 
-    // Taxi — has the bot visited / been granted node `node_id`? Lets AI
+    // Taxi — has the bot visited / been granted node `node_id`? Lets bot logic
     // gate fly_to_node intents on pre-known endpoints rather than
     // catching the Result::Locked rebound. node_id is a TaxiNodes.dbc id.
     bool              is_taxi_node_known(uint32 node_id) const
@@ -706,7 +719,7 @@ public:
     // Recommended taxi route accessors — populated by the snapshot builder
     // when the bot has a long-distance same-map goal and a viable known-FM
     // → known-FM route exists. has_recommended_taxi_route() reflects "≥2
-    // hops, both endpoints known"; the AI rule walks to the start FM and
+    // hops, both endpoints known"; the bot logic rule walks to the start FM and
     // emits fly_to_node(start_fm, dest_node) on arrival.
     ObjectGuid recommended_taxi_start_fm() const { return s_->travel.recommended_taxi_start_fm; }
     uint32     recommended_taxi_dest_node() const { return s_->travel.recommended_taxi_dest_node; }
@@ -729,7 +742,7 @@ public:
 
     // Nearest known cross-map travel anchor. Builder fills from the
     // global PortalIndex when the bot has a cross-map goal; empty
-    // otherwise. AI uses these to walk toward the portal/dock from
+    // otherwise. bot logic uses these to walk toward the portal/dock from
     // anywhere on the source map (the GO itself is invisible past 30 y
     // so we can't rely on nearby_objects for the long-distance leg).
     bool   has_nearest_portal_anchor() const
@@ -802,7 +815,7 @@ public:
     // destination map (Mage Teleport: City, DK Death Gate, Druid
     // Teleport: Moonglade, etc). Builder pre-resolves each spell's
     // dest map via spell_target_position so this is a cheap snapshot
-    // scan with no DB lookups on the AI worker.
+    // scan with no DB lookups on the bot worker.
     std::vector<BotSnapshot::SelfTeleportSpell> const& self_teleport_spells() const
     { return s_->travel.self_teleport_spells; }
 
@@ -886,7 +899,7 @@ public:
     std::vector<ObjectGuid> const& bg_all_enemy_carriers() const
     { return s_->bg.all_enemy_carriers; }
 
-    // Bank capacity. AI uses bank_free_slots() == 0 to skip deposit attempts;
+    // Bank capacity. bot logic uses bank_free_slots() == 0 to skip deposit attempts;
     // bank_tab_count() lets the "buy a bank tab" rule fire when the bot
     // has gold and < 4 tabs.
     uint8  bank_tab_count()  const { return s_->bank.bank_tab_count; }
@@ -998,6 +1011,7 @@ public:
     std::string const& pet_name() const { return s_->pet.pet_name; }
     bool       pet_can_bloodlust() const { return s_->pet.pet_can_bloodlust; }
     ObjectGuid pet_victim() const { return s_->pet.pet_victim; }
+    uint8      pet_react() const { return s_->pet.pet_react; }
     std::vector<ObjectGuid> const& pet_attackers() const { return s_->pet.pet_attackers; }
     AuraEntry const* find_pet_aura(uint32 spell_id) const;
     std::vector<BotSnapshot::StablePet> const& stable_pets() const { return s_->pet.stable_pets; }
@@ -1096,7 +1110,7 @@ private:
     // builder stores outbound auras as compact OutboundAura rows, but
     // find_aura must return an AuraEntry const*. Materialising the matched
     // row here — instead of a reused thread_local — keeps every returned
-    // pointer valid for the whole lifetime of this view (one AI tick), so a
+    // pointer valid for the whole lifetime of this view (one bot tick), so a
     // caller holding two find_aura results (or calling again before using
     // the first) never sees aliased/overwritten data. std::deque is chosen
     // because it never invalidates existing element pointers on push_back,

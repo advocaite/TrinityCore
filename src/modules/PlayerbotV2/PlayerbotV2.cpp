@@ -48,6 +48,7 @@
 #include "Bot/BotCommandParser.h"
 #include "Bot/BotChatReactor.h"
 #include "Bot/GroupOrderText.h"
+#include "Bot/AddonHint.h"
 #include "Bot/BotTextMgr.h"
 #include "Chat.h"
 #include "Bot/BotIntent.h"
@@ -64,6 +65,9 @@
 #include "GroupReference.h"
 #include "GroupMgr.h"
 #include "ObjectAccessor.h"
+#include "PathGenerator.h"
+#include "Pet.h"
+#include "Fleet/PetSnap.h"
 #include "WorldSession.h"
 #include "Bot/BotCommandParser.h"
 #include "Threading/SnapshotPublisher.h"
@@ -128,6 +132,9 @@ bool VerifyResetClearsAll();
 }
 
 namespace Playerbot::V2 {
+
+// Players still to be told about the add-on (world thread only: the login hook, the add-on's hello and the world update all run there).
+static AddonHintTracker g_addon_hints;
 
 namespace {
 
@@ -212,7 +219,7 @@ void DriveTeleportAck(Player* p)
 // 1-2y drift. Snapping aggressively (small threshold, both
 // directions) caused visible twitching: a moving bot finishes its
 // spline â†’ Idle generator â†’ we pull Z down a fraction â†’ next tick
-// the AI emits move_to and the spline starts again, repeat. Real
+// the bot logic emits move_to and the spline starts again, repeat. Real
 // players get small Z corrections via client-side ground snap and
 // MSG_MOVE_HEARTBEAT updates; we approximate the catastrophic case
 // only.
@@ -646,7 +653,7 @@ void GlobalStuckRescue(Player* p, BotAI* ai)
     g_global_stuck[key] = st;
 }
 
-// Companion tank threat (Karrz's AiPlayerbot.TankThreatMultiplier on his
+// Companion tank threat (the owner's AiPlayerbot.TankThreatMultiplier on his
 // VMaNGOS bots): a grouped bot owned by a human whose current duty is tank
 // generates Playerbot.TankThreatMultiplier x threat, so the owner and the DPS
 // bots rarely pull aggro off it. Duty = the PvE coordinator's order when one
@@ -717,9 +724,9 @@ void UpdateCastSpeed(Player* p, BotSnapshot const& snap, ConfigReader::CastPacin
                 cfg.enabled ? CastSkillOffsetPct(snap.guid, cfg.variance_pct) : 0);
 }
 
-// PvP reaction floor (Playerbot.Pacing.PvpReactionDelayMs, Karrz's AiPlayerbot.PvpReactionDelay):
+// PvP reaction floor (Playerbot.Pacing.PvpReactionDelayMs, the owner's AiPlayerbot.PvpReactionDelay):
 // while the bot is in PvP - a battleground/arena, an active duel, or in combat with players
-// (ClassifyCastContext BG/WorldPvp) - its AI tick and snapshot period is at least the floor,
+// (ClassifyCastContext BG/WorldPvp) - its bot tick and snapshot period is at least the floor,
 // so a fleet does not out-react real players. PvE (raid/dungeon/world) never gets it. Survival
 // bypass: a dead/ghost bot (release, resurrection) or one below 35% HP is ticked at its normal
 // tier period, so healing, defensives and ress are not starved. World thread (publish pass).
@@ -766,7 +773,7 @@ void Module::Init()
     }
 
     // The bots' speech lines (shared DB, migration 0019). Loaded before any bot can tick; read-only
-    // afterwards, so AI workers and the world thread read it without a lock.
+    // afterwards, so bot workers and the world thread read it without a lock.
     BotTextMgr::instance().Load();
 
     // Bring up Services (SnapshotPublisher, IntentQueue, AiWorkerPool,
@@ -790,7 +797,7 @@ void Module::Init()
             Services::Owners().GetOwner(p->GetGUID().GetCounter()).account_id != 0);
     };
 
-    // Register class/spec rotations (single-threaded; runs before AI workers
+    // Register class/spec rotations (single-threaded; runs before bot workers
     // dispatch ticks). Read-only afterwards; safe for concurrent lookup.
     Combat::RegisterAllRotations();
 
@@ -1030,28 +1037,77 @@ void Module::Shutdown()
     initialized_ = false;
 }
 
+// Pets of playerbots that cannot walk to their owner are set down next to them (Fleet/PetSnap.h), the way a player's pet ends up beside
+// its owner when it falls behind. Each pet is looked at every kPetSnapCheckMs; runs on the world thread, before the maps update.
+static void DrivePetSnap(uint32 now_ms)
+{
+    static std::unordered_map<uint64, Fleet::PetSnapState> state;
+    Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
+    {
+        Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
+        if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !owner->GetMap() || owner->IsBeingTeleported() || owner->IsInFlight())
+            return;
+        Pet* pet = owner->GetPet();
+        if (!pet || !pet->IsInWorld() || !pet->IsAlive() || pet->GetMap() != owner->GetMap() || pet->IsInCombat())
+            return;
+        Fleet::PetSnapState& st = state[uint64(id)];
+        if (!Fleet::PetSnapDue(st, now_ms))
+            return;
+        if (pet->GetExactDist(owner) <= Fleet::kPetSnapMinGap)
+        {
+            Fleet::PetSnapUpdate(st, false, now_ms);
+            return;
+        }
+        PathGenerator pg(pet);
+        ::Playerbot::BotMovement::SehSafeCalculatePath(pg, owner->GetPositionX(), owner->GetPositionY(), owner->GetPositionZ());
+        PathType const type = pg.GetPathType();
+        G3D::Vector3 const& end = pg.GetActualEndPosition();
+        float const dx = end.x - owner->GetPositionX(), dy = end.y - owner->GetPositionY(), dz = end.z - owner->GetPositionZ();
+        float const end_gap = std::sqrt(dx * dx + dy * dy + dz * dz);
+        bool const unreachable = (type & (PATHFIND_NOPATH | PATHFIND_SHORTCUT)) || ((type & PATHFIND_INCOMPLETE) && end_gap > 4.0f);
+        if (!Fleet::PetSnapUpdate(st, unreachable, now_ms))
+            return;
+        pet->StopMoving();
+        pet->NearTeleportTo(Position(owner->GetPositionX(), owner->GetPositionY(), owner->GetPositionZ(), owner->GetOrientation()));
+        TC_LOG_INFO("playerbot.v2", "[pet_snap] {}'s pet {} had no way to its owner at ({:.0f},{:.0f},{:.0f}), set down next to {}",
+                    owner->GetName(), pet->GetName(), owner->GetPositionX(), owner->GetPositionY(), owner->GetPositionZ(), owner->GetName());
+    });
+    if (state.size() > 2048u)
+        for (auto it = state.begin(); it != state.end();)
+            it = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(it->first)) ? std::next(it) : state.erase(it);
+}
+
 void Module::OnWorldUpdate(std::chrono::milliseconds diff)
 {
     if (!initialized_) return;
     static std::chrono::milliseconds total{0};
     // #5 Phase 4: next_version is read-modify-write per built snapshot. Under
     // parallel-by-Map* Build a plain ++ is a torn counter (duplicate/garbage
-    // versions break the AI worker's staleness/version checks). Versions need
+    // versions break the bot worker's staleness/version checks). Versions need
     // only be UNIQUE + monotonic, not contiguous, so an atomic fetch_add is
     // the race-free fix. Pre-assigned per bot before the parallel region, so
     // the parallel tasks never touch this counter themselves.
     static std::atomic<SnapshotVer> next_version{1};
     static TickId      next_tick    = 1;
     total += diff;
+    {
+        static std::chrono::milliseconds last_hint_check{0};
+        if (total - last_hint_check >= std::chrono::milliseconds(2000))
+        {
+            last_hint_check = total;
+            SendDueAddonHints();
+        }
+    }
     ::Playerbot::Diagnostics::Scenario::Tick(std::uint32_t(diff.count()));   // bot scenario tests (.playerbot scenario)
 
-    // [cast_state] (Karrz, WSG start room 2026-10-11: a healer stood with the casting animation on while casting nothing). Twice a
+    // [cast_state] (playtest, WSG start room 2026-10-11: a healer stood with the casting animation on while casting nothing). Twice a
     // second, every bot in a battleground: a line when the spell it is casting changes (spell id, generic or channel, 0 = none), and a
     // [cast_stale] line when the server holds no cast at all but the unit data still names a channel spell: what a client draws as a
     // cast that never ends. The log answers which of the two it was; nothing is cleared here.
     {
         static std::chrono::milliseconds last_cast_check{0};
         static std::unordered_map<BotId, uint32> cast_seen;
+        static std::unordered_map<BotId, uint32> cast_since;
         static std::unordered_map<BotId, uint32> stale_logged_ms;
         static uint32 cast_lines = 0;
         if (total - last_cast_check >= std::chrono::milliseconds(500))
@@ -1062,17 +1118,31 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
             {
                 if (!e.ai) return;
                 Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
-                if (!p || !p->IsInWorld() || !p->GetMap() || !p->GetMap()->IsBattleground()) { cast_seen.erase(id); return; }
+                if (!p || !p->IsInWorld() || !p->GetMap() || !(p->GetMap()->IsBattleground() || p->GetMap()->IsRaid())) { cast_seen.erase(id); cast_since.erase(id); return; }
                 Spell const* gen = p->GetCurrentSpell(CURRENT_GENERIC_SPELL);
                 Spell const* chan = p->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
                 uint32 const now_spell = chan ? chan->GetSpellInfo()->Id : gen ? gen->GetSpellInfo()->Id : 0u;
                 uint32& seen = cast_seen[id];
-                if (seen != now_spell && cast_lines < 1500)
+                if (seen != now_spell)
                 {
-                    ++cast_lines;
-                    TC_LOG_INFO("playerbot.v2", "[cast_state] {} spell {} -> {} ({}) casting_state={} mounted={}", p->GetName(), seen, now_spell,
-                                chan ? "channel" : gen ? "generic" : "none", p->HasUnitState(UNIT_STATE_CASTING), p->IsMounted());
+                    cast_since[id] = now_ms;
+                    if (cast_lines < 1500)
+                    {
+                        ++cast_lines;
+                        TC_LOG_INFO("playerbot.v2", "[cast_state] {} spell {} -> {} ({}) casting_state={} mounted={} combat={}", p->GetName(), seen, now_spell,
+                                    chan ? "channel" : gen ? "generic" : "none", p->HasUnitState(UNIT_STATE_CASTING), p->IsMounted(), p->IsInCombat());
+                    }
                     seen = now_spell;
+                }
+                else if (now_spell && cast_since[id] && now_ms - cast_since[id] >= 8000u && cast_lines < 1500)
+                {
+                    // One cast that has been the current spell for 8 s or more: a cast bar that is not filling.
+                    ++cast_lines;
+                    cast_since[id] = now_ms;
+                    Spell const* cur = chan ? chan : gen;
+                    TC_LOG_INFO("playerbot.v2", "[cast_long] {} still on spell {} ({}) state={} timer={} ms target={} casting_state={} combat={}", p->GetName(), now_spell,
+                                chan ? "channel" : "generic", uint32(cur->getState()), cur->GetTimer(), cur->m_targets.GetUnitTargetGUID().GetCounter(),
+                                p->HasUnitState(UNIT_STATE_CASTING), p->IsInCombat());
                 }
                 if (!gen && !chan && !p->HasUnitState(UNIT_STATE_CASTING) && p->GetChannelSpellId() != 0)
                 {
@@ -1091,7 +1161,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     // Bots hovering over the floor in a battleground: the start points (AB Trollbane Hall z=-9.0 over a courtyard at -15) sit a few
     // yards above the ground. A player falls client-side; a bot never does, so it stood in the air until it walked. Once a second,
     // a quarter of the bots (by id) that stand still in a battleground and are 2..30 y above the floor drop to it with a falling
-    // spline (Karrz, AB test 2026-10-08, "bots flying in the air").
+    // spline (playtest, AB test 2026-10-08, "bots flying in the air").
     {
         static std::chrono::milliseconds last_settle{0};
         static uint32 settle_phase = 0;
@@ -1497,7 +1567,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
                 // a no-op for bots not in an orphaned BG map.
                 RescueOrphanedBgBot(p);
                 SnapToGroundIfDrifted(p);
-                // Resolve the bot's AI ONCE here on the world thread (registry
+                // Resolve the bot's bot logic ONCE here on the world thread (registry
                 // quiescent under for_each's shared_lock) and thread it through
                 // the BuiltSlot. Build workers MUST NOT call Registry().ai()
                 // (unlocked map lookup races a concurrent rehash → garbage
@@ -1653,9 +1723,9 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
         const uint32 group_ms_before = t_group_build_ms;
         // Companion tank threat multiplier (UpdateTankThreatMultiplier); 1.0 disables.
         const float tank_threat_mult = std::clamp(
-            float(sConfigMgr->GetFloatDefault("Playerbot.TankThreatMultiplier", 3.0f)), 1.0f, 10.0f);
+            float(sConfigMgr->GetFloatDefault("Playerbot.TankThreatMultiplier", 3.0f, true)), 1.0f, 10.0f);
         const float dps_threat_mult = std::clamp(
-            float(sConfigMgr->GetFloatDefault("Playerbot.DpsThreatMultiplier", 1.0f)), 0.3f, 1.5f);
+            float(sConfigMgr->GetFloatDefault("Playerbot.DpsThreatMultiplier", 1.0f, true)), 0.3f, 1.5f);
         ConfigReader::CastPacing const cast_pacing_cfg = Services::Config().cast_pacing();
         uint32 const pvp_floor_ms = Services::Config().pacing().pvp_reaction_delay_ms;
         for (BuiltSlot& bs : build_order)
@@ -1797,7 +1867,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
                     // CRUISE (300 ms) — the dominant long-haul population: a
                     // solo, non-human-facing bot that is merely travelling or
                     // questing in the open world. Its movement spline runs
-                    // server-side; the AI only needs to issue the next waypoint
+                    // server-side; the bot logic only needs to issue the next waypoint
                     // a touch less often, so half-rate snapshot builds are
                     // tolerable. NOT path_blocked and NOT casting (those are
                     // Active above), so no unstick/cast starvation. Cruise never
@@ -1912,6 +1982,9 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
         Services::Population().OnWorldTick(static_cast<uint32>(total.count()));
         t_population_ms = getMSTimeDiff(t0, getMSTime());
     }
+
+    // 2.7. Pets that cannot walk to their bot owner are set down next to it.
+    DrivePetSnap(getMSTime());
 
     // 2b. Bot guild manager tick (GUILD_PLAN.md Phase A.2). Internally
     //     60s rate-limited; cheap to call every frame. Elects founders
@@ -2029,7 +2102,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
             : 0u;
         SampleFleetVitals(total, now_ms, in_world, alive, in_combat, avg_level_x100);
 
-        if (sConfigMgr->GetBoolDefault("Playerbot.LoadTest.Enable", false))
+        if (sConfigMgr->GetBoolDefault("Playerbot.LoadTest.Enable", false, true))
         {
             uint32 raid = 0, bg = 0;
             Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
@@ -2230,7 +2303,7 @@ void V2::Module::EmitLoadTestRow(uint32 in_world, uint32 raid, uint32 bg)
     Diagnostics::LoadRow row;
     row.unix_time = uint64(GameTime::GetGameTime());
     row.build = GitRevision::GetHash();
-    row.label = sConfigMgr->GetStringDefault("Playerbot.LoadTest.Label", "");
+    row.label = sConfigMgr->GetStringDefault("Playerbot.LoadTest.Label", "", true);
     row.bots_awake = in_world;
     row.bots_raid = raid;
     row.bots_bg = bg;
@@ -2249,12 +2322,12 @@ void V2::Module::EmitLoadTestRow(uint32 in_world, uint32 raid, uint32 bg)
     row.cpu_pct = wf.cpu_pct;
 
     Diagnostics::LoadLimits limits;
-    limits.max_p99_ms = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxP99Ms", int(limits.max_p99_ms)));
-    limits.max_avg_ms = double(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxAvgMs", int(limits.max_avg_ms)));
-    limits.max_rss_mb = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxRssMb", int(limits.max_rss_mb)));
-    limits.max_slow_call_ms = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxSlowCallMs", int(limits.max_slow_call_ms)));
+    limits.max_p99_ms = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxP99Ms", int(limits.max_p99_ms), true));
+    limits.max_avg_ms = double(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxAvgMs", int(limits.max_avg_ms), true));
+    limits.max_rss_mb = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxRssMb", int(limits.max_rss_mb), true));
+    limits.max_slow_call_ms = uint32(sConfigMgr->GetIntDefault("Playerbot.LoadTest.MaxSlowCallMs", int(limits.max_slow_call_ms), true));
 
-    std::string const path = sConfigMgr->GetStringDefault("Playerbot.LoadTest.CsvPath", "playerbot_loadtest.csv");
+    std::string const path = sConfigMgr->GetStringDefault("Playerbot.LoadTest.CsvPath", "playerbot_loadtest.csv", true);
     bool const fresh = !std::filesystem::exists(path);
     std::ofstream out(path, std::ios::app);
     if (!out)
@@ -2451,6 +2524,8 @@ void Module::OnPlayerLogin(Player* p)
             const uint32 owner_account = sess->GetAccountId();
             // Bots bound to the whole account treat this character as their owner while it is online.
             Services::Owners().NoteOwnerCharacterOnline(owner_account, id);
+            if (Services::Config().addon_hint_enabled())
+                g_addon_hints.Login(id, GameTime::GetGameTimeMS(), Services::Config().addon_hint_delay_sec() * 1000);
             auto owned = Services::Owners().BotsOwnedBy(owner_account);
             std::string const& owner_name = p->GetName();
             for (BotId bot_id : owned)
@@ -2627,7 +2702,7 @@ void Module::OnPlayerLogin(Player* p)
         ai->set_follow_distance(s.follow_distance);
         ai->set_verbose_logging(s.owner_verbose);
 
-        // The role the owner gave a companion lives in the AI and the Classic virtual spec, both memory only: pin it
+        // The role the owner gave a companion lives in the bot logic and the Classic virtual spec, both memory only: pin it
         // again so a relog (or a restart) does not hand the bot's role back to a talent inference.
         // A companion with no stored role (added before roles were stored, or never asked) is pinned to the role it
         // plays now and stored: left unset, the raid quota fill treated it as free and moved paladins and druids from
@@ -2684,10 +2759,10 @@ void Module::OnPlayerLogin(Player* p)
     // Bots taught by an earlier build can carry other classes' trainer spells (a rogue with Judgement): drop them at login.
     if (uint32 const removed = ::Playerbot::API(p).purge_foreign_class_spells())
         TC_LOG_INFO("playerbot.v2", "[levelup] {} lost {} spells of other classes at login", p->GetName(), removed);
-    // INFO-level so the operator can see which bots actually attached AI
+    // INFO-level so the operator can see which bots actually attached bot logic
     // when bringing up a fresh worldserver / spawning via .playerbot login.
     // The DEBUG history can be inspected via /history or /inspect later.
-    TC_LOG_INFO("playerbot.v2", "[PlayerbotV2] Bot AI attached: {} (id {}, class {} race {} level {})",
+    TC_LOG_INFO("playerbot.v2", "[PlayerbotV2] Bot logic attached: {} (id {}, class {} race {} level {})",
                 p->GetName(), id, uint32(p->GetClass()), uint32(p->GetRace()), uint32(p->GetLevel()));
 }
 
@@ -2696,7 +2771,10 @@ void Module::OnPlayerLogout(Player* p)
     if (!initialized_ || !p) return;
     const BotId id = p->GetGUID().GetCounter();
     if (WorldSession const* sess = p->GetSession(); sess && !sess->IsBot())
+    {
         Services::Owners().NoteOwnerCharacterOffline(sess->GetAccountId(), id);
+        g_addon_hints.Logout(id);
+    }
     if (!Services::Registry().has(id)) return;     // not one of ours
     // Speak queued chat (the `.bot dismiss` goodbye) while the bot is still in the world.
     BotChatter::FlushPendingChat(p);
@@ -2711,7 +2789,7 @@ void Module::OnPlayerLogout(Player* p)
     // entries are dead data (guid_low is unique per character).
     g_last_snap_z_ms.erase(id);
     g_global_stuck.erase(id);
-    TC_LOG_INFO("playerbot.v2", "[PlayerbotV2] Bot AI detached: {} (id {})", p->GetName(), id);
+    TC_LOG_INFO("playerbot.v2", "[PlayerbotV2] Bot logic detached: {} (id {})", p->GetName(), id);
 }
 
 void Module::OnLevelUp(Player* p, uint8 new_level)
@@ -2864,7 +2942,7 @@ void Module::OnDeath(Unit* victim, Unit* killer)
     // their rotation. The queue persists until State_Idle drains it.
     Creature* c = victim->ToCreature();
     if (c)
-        Diagnostics::Scenario::NoteCreatureKilled(c->GetMapId(), c->GetEntry());
+        Diagnostics::Scenario::NoteCreatureKilled(c->GetMapId(), c->GetEntry(), c->hasLootRecipient());
     // Boss kill line for tools/Fight-Report.ps1: dungeon and raid bosses, with how many of the tapping group survived.
     if (c && c->GetMap() && c->GetMap()->IsDungeon() && (c->IsDungeonBoss() || c->isWorldBoss()))
     {
@@ -2895,7 +2973,7 @@ void Module::OnDeath(Unit* victim, Unit* killer)
         // Queue the corpse onto the bot's pending-loot list. State_Idle
         // walks the bot to the closest entry and emits a LootIntent each
         // tick; the entry is popped on success. The push helper is mutex-
-        // protected since the AI worker drains concurrently.
+        // protected since the bot worker drains concurrently.
         reg.push_loot(id, corpse_guid);
     }
 }
@@ -2926,8 +3004,18 @@ void Module::OnDamageDealt(Unit* /*attacker*/, Unit* /*victim*/, int32 /*amount*
     // freshly built snapshot's `in_combat` flag.
 }
 
+namespace { thread_local uint32 tl_damage_spell = 0; }
+
+void Module::NoteDamageSpell(uint32 spell_id)
+{
+    tl_damage_spell = spell_id;
+}
+
 void Module::OnDamageTaken(Unit* attacker, Unit* victim, int32 amount, uint32 spell_id)
 {
+    // The hook that precedes OnDamage names the spell; consumed here so a later melee swing is not labelled with it.
+    uint32 const lethal_spell = spell_id ? spell_id : tl_damage_spell;
+    tl_damage_spell = 0;
     if (!initialized_) return;
     Diagnostics::Scenario::NoteDamage(attacker, victim, amount);   // a scenario's boss-pull statistics; one atomic load when none runs
     Diagnostics::Parity::NoteDamage(attacker, victim, amount, spell_id);   // the damage_parity tally; one atomic load when none runs
@@ -2936,13 +3024,13 @@ void Module::OnDamageTaken(Unit* attacker, Unit* victim, int32 amount, uint32 sp
     {
         std::lock_guard lk(g_lethal_hits_mtx);
         g_lethal_hits[victim->GetGUID().GetCounter()] =
-            LethalHit{ spell_id, amount, int32(uint64(amount) - victim->GetHealth()) };
+            LethalHit{ lethal_spell, amount, int32(uint64(amount) - victim->GetHealth()) };
     }
     // Intentionally a no-op. The BotEventInbox was retired 2026-05-21
     // after audit found zero consumers + the snapshot's in_combat /
     // hp / attackers vector already covers every actual rule need.
     // V1 had an event bus with real subscribers (174 publishers, 210
-    // subscribers across 7 domains); V2's snapshot-then-AI-worker
+    // subscribers across 7 domains); V2's snapshot-then-bot-worker
     // distribution model fills that role differently. If event-driven
     // dispatch becomes needed for a specific feature (e.g. kick-then-
     // pause), introduce a focused per-event hook then.
@@ -3072,7 +3160,7 @@ void Module::OnRaidSubgroupChanged(Group* group, ObjectGuid member, uint8 subgro
 
 void Module::OnSpiritReleased(Player* p)
 {
-    // The owner pressed Release Spirit (ike3 / Karrz: companions release with
+    // The owner pressed Release Spirit (ike3 / the owner: companions release with
     // their master). Inside a dungeon or raid RepopAtGraveyard revives the
     // owner at the graveyard, so the owner is never a ghost there and
     // State_Dead's owner-released check (owner->is_ghost) cannot fire; this
@@ -3134,10 +3222,32 @@ void Module::RouteGroupOrder(Player* sender, Group* group, std::string order)
     // Raid pull: the main tank (raid-frame flag) pulls alone; with none set, every tank as before.
     ObjectGuid pull_main_tank;
     char const* pull_why = "every tank (no main tank set)";
+    // A tank that can pull: one of the sender's own bots, alive, in the tank role.
+    auto const usable_tank = [&](Player* m)
+    {
+        if (!m || m == sender || !m->IsAlive())
+            return false;
+        BotId const mid = m->GetGUID().GetCounter();
+        return Services::Registry().has(mid) && Services::Owners().IsOwner(mid, account, sender->GetGUID().GetCounter()) &&
+               BotCommandParser::BotRole(m) == Role::Tank;
+    };
+    std::string main_tank_skipped;
     if ((order == "pull" || order == "pull back") && group->isRaidGroup())
         for (Group::MemberSlot const& slot : group->GetMemberSlots())
-            if (slot.flags & MEMBER_FLAG_MAINTANK) { pull_main_tank = slot.guid; pull_why = "the main tank"; break; }
-    if (order == "pull back")
+        {
+            if (!(slot.flags & MEMBER_FLAG_MAINTANK))
+                continue;
+            // The flagged main tank pulls only if it can: a dead one, a player, someone else's bot or a bot that is not
+            // a tank would leave nobody pulling, so the next flagged one or the closest tank takes over.
+            Player* flagged = ObjectAccessor::FindConnectedPlayer(slot.guid);
+            if (usable_tank(flagged)) { pull_main_tank = slot.guid; pull_why = "the main tank"; break; }
+            main_tank_skipped += (main_tank_skipped.empty() ? "" : ", ") + slot.name;
+        }
+    if (!main_tank_skipped.empty() && pull_main_tank.IsEmpty())
+        TC_LOG_INFO("playerbot.v2", "[pull_back] flagged main tank {} cannot pull (dead, not your bot or not a tank): next best tank pulls",
+                    main_tank_skipped);
+    // A 5-man's Pull sends one tank like Pull back does (two tank-role bots would both run at the pack); a raid's Pull keeps every tank.
+    if (order == "pull back" || (order == "pull" && !group->isRaidGroup()))
     {
         // Exactly ONE bot pulls: the tank assigned to the selected mob's raid icon, else the main tank, else the
         // owned tank closest to the mob. Every other bot (other tanks included) holds where it stands.
@@ -3191,7 +3301,7 @@ void Module::RouteGroupOrder(Player* sender, Group* group, std::string order)
             if (BotCommandParser::BotRole(member) != Role::Tank ||
                 (!pull_main_tank.IsEmpty() && member->GetGUID() != pull_main_tank))
             {
-                // The other tanks come and stand beside the owner, where the mob is brought to (Karrz 2026-10-08: "all the
+                // The other tanks come and stand beside the owner, where the mob is brought to (playtest 2026-10-08: "all the
                 // warriors should be standing beside me when I say pull back"); everyone else holds where they stand
                 // (like "pull"); "fall back" is the whole-raid version.
                 if (BotCommandParser::BotRole(member) == Role::Tank && member->IsAlive())
@@ -3229,7 +3339,26 @@ void Module::RouteGroupOrder(Player* sender, Group* group, std::string order)
         BotCommandParser::DispatchSingle(sender, member, order, "party");
     }
     if ((order == "pull" || order == "pull back") && !tanks)
-        ChatHandler(sender->GetSession()).SendSysMessage("No tank among your bots to pull; use attack instead.");
+    {
+        // Say why: the flagged main tank could not pull, or none of the sender's bots in this group is a living tank.
+        uint32 owned_tanks = 0, dead_tanks = 0;
+        for (GroupReference const& itr : group->GetMembers())
+        {
+            Player* m = itr.GetSource();
+            if (!m || m == sender) continue;
+            BotId const mid = m->GetGUID().GetCounter();
+            if (!Services::Registry().has(mid) || !Services::Owners().IsOwner(mid, account, sender->GetGUID().GetCounter()) ||
+                BotCommandParser::BotRole(m) != Role::Tank)
+                continue;
+            ++owned_tanks;
+            if (!m->IsAlive()) ++dead_tanks;
+        }
+        ChatHandler(sender->GetSession()).PSendSysMessage(owned_tanks && dead_tanks == owned_tanks ?
+            "Your tank bots are all dead; use attack instead." :
+            "No tank among your bots to pull; use attack instead.");
+        TC_LOG_INFO("playerbot.v2", "[pull_back] {} '{}': no tank pulled (your tank bots in the group: {}, dead {}; flagged main tank skipped: {})",
+                    sender->GetName(), order, owned_tanks, dead_tanks, main_tank_skipped.empty() ? "none" : main_tank_skipped);
+    }
     return;
 }
 
@@ -3242,8 +3371,71 @@ void Module::OnAddonOrder(Player* sender, Group* group, std::string const& prefi
     RouteGroupOrder(sender, group, *order);
 }
 
+void Module::OnGroupPingUnit(Player* sender, Group* group, Unit* target, uint8 type)
+{
+    if (!initialized_ || !sender || !group || !target || type != 0) return;   // 0 = PingSubjectType::Attack
+    if (target->IsPlayer() || !target->IsAlive() || !sender->IsValidAttackTarget(target)) return;
+    TC_LOG_INFO("playerbot.v2", "[ping] {} pings attack on {}", sender->GetName(), target->GetName());
+    // "attack" acts on the sender's selection: the ping picks the mob.
+    sender->SetSelection(target->GetGUID());
+    RouteGroupOrder(sender, group, "attack");
+}
+
+void Module::OnGroupPingPoint(Player* sender, Group* group, Position const& point, uint8 type)
+{
+    if (!initialized_ || !sender || !group || type != 3) return;   // 3 = PingSubjectType::OnMyWay
+    uint32 const account = sender->GetSession() ? sender->GetSession()->GetAccountId() : 0;
+    if (account == 0) return;
+    uint32 set = 0;
+    for (GroupReference const& itr : group->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || m == sender || !m->IsAlive() || m->GetMapId() != sender->GetMapId()) continue;
+        BotId const mid = m->GetGUID().GetCounter();
+        if (!Services::Registry().has(mid) || !Services::Owners().IsOwner(mid, account, sender->GetGUID().GetCounter())) continue;
+        if (BotAI* ai = Services::Registry().ai(mid))
+        {
+            ai->set_rally_point(sender->GetMapId(), point.GetPositionX(), point.GetPositionY(), point.GetPositionZ());
+            ++set;
+        }
+    }
+    if (!set) return;
+    TC_LOG_INFO("playerbot.v2", "[ping] {} pings on my way to ({:.1f},{:.1f}): {} bots fall back there", sender->GetName(),
+                point.GetPositionX(), point.GetPositionY(), set);
+    RouteGroupOrder(sender, group, "fallback");
+}
+
+void Module::NoteAddonHello(Player* p)
+{
+    if (!initialized_ || !p) return;
+    if (g_addon_hints.Pending(p->GetGUID().GetCounter()))
+        TC_LOG_INFO("playerbot.v2", "[addon_hello] {} has the ForeverBots add-on", p->GetName());
+    g_addon_hints.Hello(p->GetGUID().GetCounter());
+}
+
+void Module::SendDueAddonHints()
+{
+    if (!Services::Config().addon_hint_enabled())
+        return;
+    for (uint64 guid : g_addon_hints.TakeDue(GameTime::GetGameTimeMS()))
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
+        if (!p || !p->IsInWorld() || !p->GetSession() || p->GetSession()->IsBot())
+            continue;
+        ChatHandler(p->GetSession()).PSendSysMessage("WoW Forever Bots add-on (buttons for your bots, Raid ready): %s - unzip it into Interface\\AddOns and type /reload.",
+            Services::Config().addon_hint_url().c_str());
+        TC_LOG_INFO("playerbot.v2", "[addon_hint] {} has no ForeverBots add-on: link sent", p->GetName());
+    }
+}
+
 void Module::OnAddonWhisper(Player* sender, Player* receiver, std::string const& prefix, std::string const& text)
 {
+    // The add-on's greeting to itself on login: this client has it, so no hint.
+    if (initialized_ && sender && sender == receiver && prefix == kAddonOrderPrefix && text == kAddonHelloText)
+    {
+        NoteAddonHello(sender);
+        return;
+    }
     if (!initialized_ || !sender || !receiver || text.empty() || prefix != kAddonOrderPrefix) return;
     TC_LOG_INFO("playerbot.v2", "[addon_whisper] {} -> {}", sender->GetName(), receiver->GetName());
     OnWhisperReceived(sender, receiver, text);
@@ -3319,7 +3511,21 @@ void Module::OnPartyChat(Player* sender, Group* group, std::string const& msg)
     if (!primary)
         primary = any_group_bot;
     if (!primary) return;
-    BotCommandParser::Dispatch(sender, primary, body, "party;");
+    if (!BotCommandParser::Dispatch(sender, primary, body, "party;"))
+    {
+        // A ";" line is meant as an order: an unknown or refused one answers instead of vanishing. (A plain whisper falls
+        // through to the social reactor and a bare party word is chatter, so only this explicit route replies.)
+        BotId const pid = primary->GetGUID().GetCounter();
+        if (Services::HasIntents(pid))
+        {
+            Intent it{};
+            it.bot_id = pid;
+            it.body = ChatIntent{WhisperIntent{
+                sender->GetName(),
+                fmt::format("{}: no order '{}' (unknown, or not yours to give)", primary->GetName(), body.substr(0, 40))}};
+            Services::Intents(pid).push(std::move(it));
+        }
+    }
 }
 
 void Module::OnPlayerJoinedBgQueue(Player* player, uint32 bg_type_id, uint8 bracket)

@@ -374,7 +374,7 @@ bool RejoinInstanceGate(BotSnapshotView const& s, BotAI&,
 // Instance-entrance area triggers: areatrigger_teleport rows whose trigger
 // volume lies on one map and whose destination is an instanceable map. Built
 // once from load-time stores (AreaTrigger.db2, ObjectMgr's trigger map), both
-// read-only after load, so the AI thread may read them. The same set the
+// read-only after load, so the bot logic thread may read them. The same set the
 // snapshot builder resolves for a ghost's portal run.
 struct InstanceEntranceTrigger { uint32 at_id; uint32 src_map; uint32 dst_map; float x, y, z; };
 std::vector<InstanceEntranceTrigger> const& InstanceEntranceTriggers()
@@ -817,6 +817,26 @@ bool RejoinInstanceFire(BotSnapshotView const& s, BotAI& ai,
     constexpr float kWalkRange      = 500.0f;
     constexpr float kWalkRangeEnter = 400.0f;
     constexpr float kWalkRangeLeave = 600.0f;
+    // The owner is inside and this is the owner's own companion: it goes in to the owner's spot at once. The door checks (a refusal
+    // is logged with its reason, a stale lock on another instance is dropped) are API::teleport_to's. After a few refusals the
+    // entrance trigger below takes over again (walk in, or be summoned to the entrance).
+    if (owner == anchor && rr.direct_tries < BotAI::RejoinRun::kDirectTries && (rr.summon_ms == 0 || now_ms - rr.summon_ms >= 3000u))
+    {
+        rr.summon_ms = now_ms ? now_ms : 1u;
+        ++rr.direct_tries;
+        TC_LOG_INFO("playerbot.v2", "[rejoin] {} is ported into map {} to {} at ({:.0f},{:.0f},{:.0f}) (try {}/{})", s.name(),
+            anchor->map_id, anchor->name, anchor->x, anchor->y, anchor->z, rr.direct_tries, BotAI::RejoinRun::kDirectTries);
+        if (s.is_mounted())
+            emit.dismount();
+        emit.teleport_to(anchor->map_id, anchor->x, anchor->y, anchor->z, anchor->o);
+        ai.set_last_rule_fired("idle:rejoin_enter_owner");
+        return true;
+    }
+    if (owner == anchor && rr.direct_tries < BotAI::RejoinRun::kDirectTries)
+    {
+        ai.set_last_rule_fired("idle:rejoin_enter_owner");
+        return true;
+    }
     InstanceEntranceTrigger const* t = ResolveEntranceTrigger(s.map_id(), bx, by, anchor->map_id);
     if (!t)
     {

@@ -25,7 +25,7 @@ inline std::vector<BossWarning> const& MoltenCoreBossWarnings()
         { 12264, 19712, "Arcane Explosion - casters move out!",                     true,      0,     0,    0, 0 },       // Shazzrah
         { 12264, 23138, "Gate of Shazzrah - he blinks into the raid",               false, 25000, 25000, 4000, 0 },
         { 12056, 19695, "Inferno - run out of range!",                              false, 18000, 18000, 4000, 0 },       // Baron Geddon
-        { 12056, 20475, "Living Bomb - spread out",                                 false, 15000, 12000, 3000, 20475 },
+        { 12056, 20475, "Living Bomb - spread out",                                 false, 15000, 12000, 3000, 20475, "has the Living Bomb - move away from the raid!" },
         { 12056, 19659, "Ignite Mana - dump your mana",                             false, 10000, 20000, 3000, 19659 },
         { 11988, 20228, "Pyroblast - interrupt or heal through",                    true,      0,     0,    0, 0 },       // Golemagg
         { 11988, 19798, "Earthquake - get out of the melee",                        true,      0,     0,    0, 0 },

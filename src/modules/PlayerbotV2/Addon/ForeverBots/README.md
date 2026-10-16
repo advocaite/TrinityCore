@@ -6,6 +6,10 @@ does not depend on the addon-message protocol PlayerbotControl uses.
 Install: copy this folder to `<client>\_classic_beta_\Interface\AddOns\ForeverBots` (the folder name must stay
 `ForeverBots`). If the character screen's AddOns list marks it out of date, tick "Load out of date AddOns".
 
+In game: `/fb` opens the window. The Raid ready button (or `/fb raidready`) calls your saved bots (`.bot summon saved`), makes the group a raid if needed, sets formation and spacing, and starts a ready check once the bots have buffed.
+
+On login the add-on greets the server once (a self-whisper under the `FBOTS` prefix). A player whose client does not greet within 30 seconds gets one chat line with the download link (`Playerbot.AddonHint.*` in the module config).
+
 In game: `/fb` opens the window. The window is grouped under headings: Orders to the group (move and fight, wipe and
 regroup, formation and spacing, tanks and markers), Assign a bot to an icon, Your bots. Hover any button for what it does.
 - "Add bots >" at the top opens a separate drop-down beside the window: "Select gear" (Match my gear, Best for their level,
@@ -94,3 +98,6 @@ The window stays where you put it and stays open (it is not closed by Escape, cl
 
 `/fb fallback`, `/fb pullback`, `/fb rally`, `/fb formation circle|arrow|line|none`, `/fb spacing tight|close|spread`, `/fb distance <1-20>` and `/fb maintank [name]` and `/fb tank <name> <marker>|clear` work without the window.
 The `.bot` commands need a GM account (gm level 3 on the realm).
+
+Key bindings (0.2.2): Esc > Options > Key Bindings > AddOns > "WoW Forever Bots". Unbound by default; one entry each for Attack, Pull, Pull back, Follow, Stay, Resume, Stop attacking, Flee, Come, Fall back, Toggle stance and Show / hide the bot window. The order keys send the same line as the window buttons and work in combat.
+Attack (mouseover) key: hover a mob and press it; the mob becomes your target and the bots attack it. Group pings (the ping wheel, if your client has one): an Attack ping on an enemy sends the bots in, an On my way ping on the ground sends them there. Needs a server with the ping hooks.

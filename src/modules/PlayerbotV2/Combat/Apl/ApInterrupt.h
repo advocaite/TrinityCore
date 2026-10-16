@@ -258,7 +258,7 @@ inline void Cast(ApPredicateContext const& ctx, BotIntentEmitter& e, uint32 spel
         a.spell, a.pet ? " (pet)" : "", uint32(c.rank), int64(c.unit->cast_remaining.count()));
 }
 
-// ---- Purge duty (Karrz: ike3 DecideRaidCast purge election) ----
+// ---- Purge duty (the owner: ike3 DecideRaidCast purge election) ----
 // Strips Magic buffs from an elite / boss engaged with a dungeon / raid
 // group. One bot at a time: every bot computes the same election from the
 // group snapshot - bot shamans with Purge first, then bot priests with
@@ -399,6 +399,7 @@ inline void Cast(ApPredicateContext const& ctx, BotIntentEmitter& e)
 constexpr uint32 SUMMON_IMP        = 688;
 constexpr uint32 SUMMON_VOIDWALKER = 697;
 constexpr uint32 SUMMON_FELHUNTER  = 691;
+constexpr uint32 SUMMON_SUCCUBUS   = 712;
 constexpr uint8  kMaxRaidFelhunters = 2;
 
 // What this warlock's snapshot says about fielding a Spell Lock Felhunter
@@ -454,6 +455,28 @@ inline uint32 ClassicWarlockPet(BotSnapshotView const& s, GroupSnapshotView cons
         if (!s.is_in_raid() && s.knows_spell(SUMMON_FELHUNTER) && FelhunterDuty(s, *g)) return SUMMON_FELHUNTER;
         if (s.knows_spell(SUMMON_IMP)) return SUMMON_IMP;
     }
+    // An ambient (world / pool) warlock has its own demon out, stable per bot: a street full of voidwalkers looked uniform (the owner,
+    // Ironforge 2026-10-12). One of the demons it has learned, picked by its guid (Imp L1, Voidwalker L10, Succubus L20, Felhunter L30).
+    // Without the soul shard the Succubus / Felhunter / Voidwalker cost, and with no demon out, the Imp comes out instead; a demon already
+    // out is kept. Owned companions keep the rule above and below.
+    if (!s.has_owner_character())
+    {
+        uint32 known[4];
+        uint32 n = 0;
+        for (uint32 sp : { SUMMON_IMP, SUMMON_VOIDWALKER, SUMMON_SUCCUBUS, SUMMON_FELHUNTER })
+            if (s.knows_spell(sp))
+                known[n++] = sp;
+        if (n)
+        {
+            uint64 const guid = s.guid().GetCounter();
+            uint32 const h = uint32((guid * 0x9E3779B97F4A7C15ull) >> 40);
+            uint32 const pick = known[h % n];
+            if (pick == SUMMON_IMP || s.has_pet() || s.has_reagents(pick))
+                return pick;
+            return SUMMON_IMP;
+        }
+        return 0;
+    }
     if (s.knows_spell(SUMMON_VOIDWALKER)) return SUMMON_VOIDWALKER;
     if (s.knows_spell(SUMMON_IMP)) return SUMMON_IMP;
     return 0;
@@ -467,6 +490,7 @@ inline uint32 SummonPetFamily(uint32 summon)
         case SUMMON_IMP:        return CREATURE_FAMILY_IMP;
         case SUMMON_VOIDWALKER: return CREATURE_FAMILY_VOIDWALKER;
         case SUMMON_FELHUNTER:  return CREATURE_FAMILY_FELHUNTER;
+        case SUMMON_SUCCUBUS:   return CREATURE_FAMILY_SUCCUBUS;
         default:                return 0;
     }
 }

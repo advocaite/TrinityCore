@@ -71,8 +71,7 @@ inline bool InFront(BotSnapshotView const& s, NearbyUnit const& u)
 inline bool OtherTanksMob(BotSnapshotView const& s, NearbyUnit const& u)
 {
     if (ThreatVictim(u.victim_kind) == ThreatVictim::Tank) return true;
-    PveOrder const& po = s.raw().pve_order;
-    return po.active && po.claimed_by_other_tank(u.guid);
+    return s.claim_blocks(u);
 }
 
 // The tank's own victim is safe to leave for a GCD: dead / none, held by
@@ -167,13 +166,12 @@ inline bool AoeRipsOtherTank(BotSnapshotView const& s, float radius, char const*
 inline size_t UnclaimedLooseWithin(BotSnapshotView const& s, float range)
 {
     const float r2 = range * range;
-    PveOrder const& po = s.raw().pve_order;
     size_t n = 0;
     for (NearbyUnit const& u : s.nearby_enemies())
     {
         if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified) continue;
         if (ThreatVictim(u.victim_kind) != ThreatVictim::Member) continue;
-        if (po.active && po.claimed_by_other_tank(u.guid)) continue;
+        if (s.claim_blocks(u)) continue;
         if (Dist2(s, u) <= r2) ++n;
     }
     return n;
@@ -190,7 +188,7 @@ inline NearbyUnit const* CcLockedWithin(BotSnapshotView const& s, float range)
     return nullptr;
 }
 
-// Area taunt gate (Challenging Shout / Roar, Karrz: 3+ loose within 10 yd):
+// Area taunt gate (Challenging Shout / Roar, the owner: 3+ loose within 10 yd):
 // the loose mobs nobody else was given, and no crowd-controlled mob in reach.
 inline bool AreaTauntWorth(BotSnapshotView const& s, float range, char const* what)
 {

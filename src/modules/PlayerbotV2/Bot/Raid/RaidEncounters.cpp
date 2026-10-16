@@ -30,12 +30,10 @@ std::map<uint32_t, std::unique_ptr<RaidRules>>& Registry()
         auto onyxia = std::make_unique<RaidRules>();
         onyxia->name = "Onyxia's Lair";
         RegisterOnyxia(*onyxia);
-        // Onyxia's breath comes out of the front on the ground phases.
-        onyxia->avoidFrontal.push_back({ 10184, 40.0f, 45.0f, Who::NonTank });
-        // Tail Sweep 15847 behind her (classic_boss_onyxia.cpp): melee stand at her sides.
-        onyxia->avoidFrontal.push_back({ 10184, 20.0f, 45.0f, Who::NonTank, 180.0f });
-        // Phase 3 Bellowing Roar 18431: AoE fear, dispelled off whoever a dispeller can reach.
-        onyxia->dispel.push_back({ 18431, DispelKind::Magic });
+        // Her frontal cones (Flame Breath, Tail Sweep) are in RegisterOnyxia; a second copy here made the tank turn her again.
+        // Phase 3 Bellowing Roar: AoE fear, dispelled off whoever a dispeller can reach. This core casts 22686 (classic_boss_onyxia.cpp:53;
+        // vanilla 18431 is not in the 1.60 client), so the old 18431 rule never matched. No order when the data gives it no dispel type.
+        onyxia->dispel.push_back({ 22686, DispelKind::Magic });
         rules[249] = std::move(onyxia);
 
         auto aq40 = std::make_unique<RaidRules>();
@@ -86,10 +84,45 @@ bool NoTank(uint32_t mapId, uint32_t entry)
     return rules && std::find(rules->noTank.begin(), rules->noTank.end(), entry) != rules->noTank.end();
 }
 
+uint32_t TankOrder(uint32_t mapId, uint32_t entry)
+{
+    RaidRules const* rules = RulesForMap(mapId);
+    if (!rules)
+        return UINT32_MAX;
+    auto const it = std::find(rules->tankOrder.begin(), rules->tankOrder.end(), entry);
+    return it == rules->tankOrder.end() ? UINT32_MAX : uint32_t(it - rules->tankOrder.begin());
+}
+
+bool TankLast(uint32_t mapId, uint32_t entry)
+{
+    RaidRules const* rules = RulesForMap(mapId);
+    return rules && std::find(rules->tankLast.begin(), rules->tankLast.end(), entry) != rules->tankLast.end();
+}
+
+bool Retaunts(uint32_t mapId, uint32_t entry)
+{
+    RaidRules const* rules = RulesForMap(mapId);
+    return rules && std::find(rules->retaunt.begin(), rules->retaunt.end(), entry) != rules->retaunt.end();
+}
+
+float ThreatShareAfterDrop(RaidRules const& rules, uint32_t entry)
+{
+    for (ThreatDrop const& rule : rules.threatDrop)
+        if (rule.enemy == entry)
+            return std::clamp(1.0f - rule.percent / 100.0f, 0.1f, 1.0f);
+    return 1.0f;
+}
+
+float ThreatShareAfterDrop(uint32_t mapId, uint32_t entry)
+{
+    RaidRules const* rules = RulesForMap(mapId);
+    return rules ? ThreatShareAfterDrop(*rules, entry) : 1.0f;
+}
+
 int PriorityFor(RaidRules const& rules, uint32_t entry)
 {
     for (Priority const& rule : rules.priority)
-        if (rule.enemy == entry)
+        if (rule.enemy == entry && rule.who == Who::Anyone && !rule.gateEnemy)
             return rule.value;
     return 1;
 }
@@ -102,7 +135,7 @@ std::vector<uint32_t> KillOrder(uint32_t mapId)
         return order;
     std::vector<Priority> ranked;
     for (Priority const& rule : rules->priority)
-        if (rule.value >= 2)
+        if (rule.value >= 2 && rule.who == Who::Anyone && !rule.gateEnemy)
             ranked.push_back(rule);
     std::stable_sort(ranked.begin(), ranked.end(), [](Priority const& a, Priority const& b) { return a.value > b.value; });
     for (Priority const& rule : ranked)

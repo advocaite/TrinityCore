@@ -127,6 +127,19 @@ inline void LogRefusal(uint64 bot_low, uint32 now_ms, char const* name, char con
     TC_LOG_INFO("playerbot.v2", "[mark_cc] {} does not cast: {} (entry {} type {} dist {:.0f})", name, why, entry, ctype, dist);
 }
 
+// The bot's own crowd control still holds a mob other than `except`. Vanilla Polymorph / Shackle / Banish / Hibernate hold one target per
+// caster, so a second cast breaks the first: every crowd-control decider (the group CC pick and the marked CC) asks this one check.
+template <class View>
+bool CasterHoldsAnother(View const& s, ObjectGuid except)
+{
+    if (s.cls() == CLASS_ROGUE)
+        return false;   // a rogue's Sap holds any number of mobs
+    for (NearbyUnit const& n : s.raw().combat.nearby_enemies)
+        if (n.is_cc_locked && n.cc_caster == s.guid() && n.guid != except)
+            return true;
+    return false;
+}
+
 // Cast the bot's crowd control on `target` (the PveOrder::cc_target mob) when it is not held yet. True when it emitted.
 template <class View, class Emit>
 bool TryCast(View const& s, Emit& emit, ObjectGuid target)
@@ -146,6 +159,8 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         return false;
     if (u->is_cc_locked)
         return false;   // held (by us or another): the goal
+    if (CasterHoldsAnother(s, target))
+        return LogRefusal(low, now, s.name().c_str(), "this caster's crowd control already holds another mob", u->entry, TypeOf(*u), 0.f), false;
     // The raid's current kill target, or a mob already under half health, is being killed: a broken hold is not re-applied
     // (Garr 2026-10-08: the warlocks re-banished the add the raid was finishing and Garr enraged).
     if (s.raw().pve_order.kill_focus == target)
@@ -168,8 +183,8 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         return false;
     }
     uint32 const spell = SpellFor(s, *o);
-    if (!s.is_ready(spell))
-        return LogRefusal(low, now, s.name().c_str(), "spell not ready", u->entry, TypeOf(*u), dist), false;
+    // Range and standing still come before the ready check, which refuses a hard cast while the bot walks: a caster held in its
+    // raid formation slot 26-35 y from the mob was "not ready" for 26 s and never walked in (Majordomo n78: Gorham and Elladu).
     // Out of reach: walk into it instead of standing out of range (Garr 2026-10-09: the banishers kept their formation slot 38-57 yd
     // from the Firesworn, 103 refusals, and the adds ran loose later). The stop point is a few yards inside the range on the line
     // from the mob.
@@ -181,11 +196,13 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         return emit.move_to(u->x + (p.x - u->x) * f, u->y + (p.y - u->y) * f, u->z + (p.z - u->z) * f, /*run=*/true);
     }
     // In range but walking (a formation step): stop, the cast goes out next tick (a hard cast is refused while moving).
-    if (s.is_moving())
+    if (s.is_moving() && s.knows_spell(spell))
     {
         emit.stop_movement();
         return true;
     }
+    if (!s.is_ready(spell))
+        return LogRefusal(low, now, s.name().c_str(), "spell not ready", u->entry, TypeOf(*u), dist), false;
     bool const ok = o->self_cast ? emit.cast(spell) : emit.cast(spell, target);
     if (ok)
         TC_LOG_INFO("playerbot.v2", "[mark_cc] cast {} spell={} on entry={} ({}) type={} dist={:.0f}",

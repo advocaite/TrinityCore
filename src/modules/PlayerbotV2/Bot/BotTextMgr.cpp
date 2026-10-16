@@ -51,16 +51,16 @@ BotTextMgr& BotTextMgr::instance()
 
 void BotTextMgr::Load()
 {
-    enabled_           = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Enabled", true);
-    chance_scale_      = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Chatter.ChanceScale", 1.0f));
-    group_cooldown_ms_ = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Chatter.GroupCooldownMs", 20000)));
-    bot_cooldown_ms_   = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Chatter.BotCooldownMs", 60000)));
+    enabled_           = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Enabled", true, true);
+    chance_scale_      = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.Chatter.ChanceScale", 1.0f, true));
+    group_cooldown_ms_ = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Chatter.GroupCooldownMs", 20000, true)));
+    bot_cooldown_ms_   = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbot.Chatter.BotCooldownMs", 60000, true)));
 
-    auto ms = [](char const* key, int32 def) { return uint32(std::max(0, sConfigMgr->GetIntDefault(key, def))); };
-    speech_.callouts_enabled            = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Callouts.Enabled", true);
+    auto ms = [](char const* key, int32 def) { return uint32(std::max(0, sConfigMgr->GetIntDefault(key, def, true))); };
+    speech_.callouts_enabled            = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Callouts.Enabled", true, true);
     speech_.callout_key_cooldown_ms     = ms("Playerbot.Chatter.Callouts.KeyCooldownMs", 60000);
     speech_.callout_group_cooldown_ms   = ms("Playerbot.Chatter.Callouts.GroupCooldownMs", 8000);
-    speech_.suggest_enabled             = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Suggest.Enabled", true);
+    speech_.suggest_enabled             = sConfigMgr->GetBoolDefault("Playerbot.Chatter.Suggest.Enabled", true, true);
     speech_.suggest_bot_cooldown_ms     = std::max<uint32>(60000, ms("Playerbot.Chatter.Suggest.BotCooldownMs", 1800000));
     speech_.suggest_channel_cooldown_ms = ms("Playerbot.Chatter.Suggest.ChannelCooldownMs", 180000);
     speech_.suggest_global_cooldown_ms  = ms("Playerbot.Chatter.Suggest.GlobalCooldownMs", 10000);
@@ -72,7 +72,7 @@ void BotTextMgr::Load()
 
     // Realm-independent content: lives in the shared playerbot schema (migration 0019), reached over
     // the character connection by qualifying with the configured schema name, as BotNamePool does.
-    std::string const shared = sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot");
+    std::string const shared = sConfigMgr->GetStringDefault("Playerbot.SharedDatabase", "playerbot", true);
 
     if (QueryResult res = CharacterDatabase.Query(Trinity::StringFormat(
             "SELECT name, text, say_type, reply_type, weight FROM `{}`.playerbot_v2_bot_text ORDER BY id", shared).c_str()))
@@ -576,7 +576,7 @@ void SayGoodbye(Player* bot, Player* owner)
 
 namespace {
 
-// ---- limiter state (AI workers tick bots concurrently: everything below is behind a lock) ----
+// ---- limiter state (bot workers tick bots concurrently: everything below is behind a lock) ----
 
 // One companion's callout memory: the band each watched value was last seen in (so a line is said
 // when the value CROSSES into a worse band, not on every tick it stays there), whether the fight's

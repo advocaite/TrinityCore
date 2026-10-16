@@ -1,12 +1,10 @@
 #pragma once
-// Pure positioning decisions for melee-behind stepping, flee-angle memory and dungeon disperse / kite steps.
+// Pure positioning decision for the melee-behind step.
 //
-// Ideas from the generic layers of two other bot projects, rewritten against our snapshot (no code copied):
-//   * Karrz's VMaNGOS bots (the ike3-based playerbot code, playerbot/values/StanceReposition.cpp, Stances.cpp): the melee "behind" step
-//     fires only for a mob a tank holds, inside a 135 degree front arc, never on the mob's own victim, never on Onyxia.
-//   * AzerothCore mod-playerbots (MovementActions.cpp CheckLastFlee / CombatFormationMoveAction): a flee step that reverses a
-//     recent flee is rejected, and ranged / melee keep 5 / 2 yards from the nearest member.
-// State_Idle.cpp calls these; keeping them here keeps that file's diff small.
+// Idea from Karrz's VMaNGOS bots (Karrz1/wow-1.12, playerbot/values/StanceReposition.cpp, Stances.cpp), rewritten against our
+// snapshot (no code copied): the melee "behind" step fires only for a mob a tank holds, inside a 135 degree front arc, never on
+// the mob's own victim, never on Onyxia.
+// State_Idle.cpp calls it; keeping it here keeps that file's diff small.
 
 #include "Bot/BotSnapshot.h"
 #include <cmath>
@@ -33,48 +31,5 @@ inline bool MeleeBehindWanted(NearbyUnit const& mob, ObjectGuid me, float bot_x,
     const float dot = (dx * std::cos(mob.o) + dy * std::sin(mob.o)) / std::sqrt(d2);
     return dot > std::cos(kBehindFrontHalfAngle);
 }
-
-// Recent flee bearings per bot, newest last. A step whose bearing reverses a recent one (within 45 degrees of the opposite)
-// is the oscillation between two overlapping step-out rules.
-class FleeMemory
-{
-public:
-    static constexpr uint32 kWindowMs = 5000;
-    static constexpr size_t kMax = 10;
-
-    static void Note(uint64 bot, float angle, uint32 now_ms)
-    {
-        std::lock_guard<std::mutex> lk(Mu());
-        auto& q = Map()[bot];
-        q.push_back({ angle, now_ms });
-        while (q.size() > kMax) q.pop_front();
-    }
-
-    static bool Reverses(uint64 bot, float angle, uint32 now_ms)
-    {
-        std::lock_guard<std::mutex> lk(Mu());
-        auto it = Map().find(bot);
-        if (it == Map().end()) return false;
-        for (auto const& e : it->second)
-        {
-            if (now_ms - e.second > kWindowMs) continue;
-            float d = std::fabs(std::remainder(angle - (e.first + 3.14159265f), 6.28318531f));
-            if (d < 0.785398f) return true;
-        }
-        return false;
-    }
-
-private:
-    using Q = std::deque<std::pair<float, uint32>>;
-    static std::mutex& Mu() { static std::mutex m; return m; }
-    static std::unordered_map<uint64, Q>& Map() { static std::unordered_map<uint64, Q> m; return m; }
-};
-
-// Distance to keep from the nearest group member in a dungeon fight (AzerothCore disperse: ranged 5, melee 2), scaled by the
-// owner's formation spacing.
-constexpr float kRangedDisperse = 5.0f;
-constexpr float kMeleeDisperse  = 2.0f;
-// A mob already fighting the group closer than this to a ranged bot or healer (AzerothCore "enemy too close").
-constexpr float kRangedTooCloseToMob = 5.0f;
 
 } // namespace Playerbot::Positioning

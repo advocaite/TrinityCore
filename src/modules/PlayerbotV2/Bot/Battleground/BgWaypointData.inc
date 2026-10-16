@@ -1,4 +1,4 @@
-// Generated from ike3 BattleGroundTactics (the ike3-based playerbot code raid10-revamp, vmangos hand-recorded paths). Do not edit by hand.
+// Generated from ike3 BattleGroundTactics (Karrz1/wow-1.12 raid10-revamp, vmangos hand-recorded paths). Do not edit by hand.
 // Each path: name, first/last = junctions; points are x,y,z on the classic maps (AV 30, WSG 489, AB 529).
 inline const RoutePath kPathsWsg[] = {
     { "HordeFlagRoom_to_HordeGraveyard", {{933.331f,1433.72f,345.536f}, {944.859f,1423.05f,345.437f}, {966.691f,1422.53f,345.223f}, {979.588f,1422.84f,345.46f}, {997.806f,1422.52f,344.623f}, {1008.53f,1417.02f,343.206f}, {1016.42f,1402.33f,341.352f}, {1029.14f,1387.49f,340.836f}} },
@@ -87,7 +87,7 @@ inline const RoutePath kPathsAv[] = {
     { "Alliance_Base_Bunker_Third_Crossroad_to_Alliance_Base_Flag", {{648.593f,-33.8686f,47.1592f}, {640.404f,-32.0183f,46.2328f}} },
     { "Alliance_Base_Bunker_Third_Crossroad_to_Alliance_Base_Vanndar_Stormpike", {{648.593f,-33.8686f,47.1592f}, {664.325f,-28.0147f,50.6198f}, {690.605f,-20.6846f,50.6198f}, {696.331f,-27.5629f,50.6198f}, {699.006f,-31.7397f,50.6198f}, {704.958f,-34.5659f,50.6198f}, {717.709f,-16.6861f,50.1354f}} },
     { "Stormpike_Crossroad_to_Stormpike_Flag", {{638.087f,-287.84f,30.1471f}, {667.173f,-295.225f,30.29f}} },
-    // Added 2026-10-09 from the ike3-based playerbot code BattleBotWaypoints.cpp (it was missing from the first import)
+    // Added 2026-10-09 from Karrz1/wow-1.12 raid10-revamp bcc8b9f BattleBotWaypoints.cpp (it was missing from the first import)
     { "Stormpike_Graveyard_to_Stormpike_Flag", {{676.0f,-374.0f,29.782f}, {665.922f,-347.777f,29.493f}, {667.173f,-295.225f,30.29f}} },
     { "Stormpike_Crossroad_to_Irontooth_Mine_Entrance", {{638.087f,-287.84f,30.1471f}, {665.708f,-283.570f,29.187f}, {685.958f,-274.358f,23.618f}, {701.911f,-271.504f,28.409f}, {715.155f,-276.190f,36.108f}, {727.653f,-288.440f,43.433f}, {742.260f,-305.039f,51.649f}, {753.219f,-314.030f,56.008f}} },
     { "Irontooth_Mine_Entrance_to_Irontooth_Mine_Boss", {{753.219f,-314.030f,56.008f}, {772.425f,-310.607f,54.891f}, {789.429f,-308.122f,54.883f}, {803.955f,-324.896f,52.259f}, {820.946f,-341.782f,49.227f}, {831.603f,-351.672f,47.041f}, {836.755f,-369.026f,48.233f}, {827.558f,-386.418f,47.731f}, {827.334f,-407.188f,48.293f}, {842.166f,-413.971f,47.832f}, {861.532f,-422.612f,51.013f}, {870.832f,-436.016f,51.130f}, {881.273f,-442.002f,54.664f}} },

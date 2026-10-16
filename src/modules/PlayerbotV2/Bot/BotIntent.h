@@ -1,4 +1,4 @@
-// BotIntent - Typed messages from AI workers to world thread.
+// BotIntent - Typed messages from bot workers to world thread.
 // First iteration carries the load-bearing intent variants; the full set per
 // CONTRACTS.md §2.3 lands as subsystems implement the corresponding paths.
 
@@ -135,7 +135,7 @@ struct VendorSellTrashIntent { ObjectGuid npc; };
 struct MakeBagRoomIntent     { uint8 min_free = 4; };
 struct RepairAllIntent       { ObjectGuid npc; bool from_guild_bank; };
 // Buy first vendor item matching item_class/item_subclass that the bot meets
-// the level requirement for. Used by auto-restock rules where the AI doesn't
+// the level requirement for. Used by auto-restock rules where the bot logic doesn't
 // know the vendor's exact slot layout. `total_count` is the desired quantity;
 // the API stops once that many units have been purchased (multiple buy_slot
 // calls if the vendor sells the item in stacks <total_count).
@@ -204,7 +204,7 @@ struct AuctionSellCommodityIntent { ObjectGuid auctioneer; ObjectGuid item_guid;
 // whisper command for now).
 struct AuctionCancelIntent   { ObjectGuid auctioneer; uint32 auction_id; };
 // Bulk-cancel every owned auction in `auctioneer`'s faction house. Cheaper
-// for the AI than enumerating ids and emitting per-cancel intents — driven
+// for the bot logic than enumerating ids and emitting per-cancel intents — driven
 // from the `/cancelall` whisper for owners who want to wipe their listings.
 struct AuctionCancelAllIntent { ObjectGuid auctioneer; };
 

@@ -196,12 +196,12 @@ struct RouteRequest
     // only route that can never be executed and masking the real bridge
     // route (elevator / teleport) out of the pocket. Used by the snapshot
     // builder's wedged-objective probe. WORLD THREAD ONLY (PathGenerator
-    // queries the live navmesh); requires `bot`. Default off: AI-worker
+    // queries the live navmesh); requires `bot`. Default off: bot-worker
     // callers must not set this.
     bool          validate_source_walk = false;
     // Skip the trivial same-map direct-walk branch and force graph A*.
     // Set by callers whose previously-planted direct walk WEDGED (the
-    // AI thread can't navmesh-validate, and geometry alone can't tell a
+    // Bot logic thread can't navmesh-validate, and geometry alone can't tell a
     // 540y/95z ramp from an elevator-only interior — Somi's UC→Brill
     // "trivial" walk was mesh-impossible).
     bool          skip_trivial = false;
@@ -250,6 +250,9 @@ public:
     // Thread-safe (shared lock).
     GraphNode const* FindNearestNodeOnMap(uint32 map_id, float x, float y,
                                           float max_range = 400.f) const;
+    // Same, measured in 3D (a floor above or below counts, see NearestNode3D.h) and skipping the nodes `skip` rejects.
+    GraphNode const* FindNearestNodeOnMap3D(uint32 map_id, float x, float y, float z, float max_range,
+                                            std::function<bool(GraphNode const&)> const& skip) const;
 
     // Vanilla realm (IsVanillaRealm): true when a flight master creature is
     // spawned at this TaxiNodes entry in the world DB, i.e. a bot that walks

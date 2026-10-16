@@ -138,7 +138,7 @@ bool BotSession::Update(uint32 /*diff*/, PacketFilter& /*updater*/)
     {
         if (_player && !m_playerLogout)
         {
-            // A bot that leaves the world must not stay on a battleground group's member list as an "Offline" ghost (Karrz,
+            // A bot that leaves the world must not stay on a battleground group's member list as an "Offline" ghost (the owner,
             // 2026-10-08: five logged-out BG bots shown Offline in his frames). Leave the BG group first.
             if (Group* group = _player->GetGroup(); group && group->isBGGroup())
             {
