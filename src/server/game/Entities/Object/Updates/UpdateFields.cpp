@@ -1206,9 +1206,9 @@ void UnitData::WriteCreate(EnumFlag<UpdateFieldFlag> fieldVisibilityFlags, ByteB
     data << int32(LookAtControllerID);
     data << int32(PerksVendorItemID);
     data << int32(TaxiNodesID);
-    // client 70425: three int32 after TaxiNodesID, for every viewer (client UnitData +0x280/+0x284/+0x288, create reader rva 0x37CD0ED;
-    // GuildGUID moved from +0x280 to +0x290)
-    if (ClassicOpcodes::IsBuild70425OrLater())
+    // client 70425: three int32 after TaxiNodesID, owner only (client UnitData +0x280/+0x284/+0x288, create reader rva 0x37CD0ED;
+    // GuildGUID moved from +0x280 to +0x290). Sent to other viewers they misalign the PlayerData that follows in the create of a player.
+    if (ClassicOpcodes::IsBuild70425OrLater() && fieldVisibilityFlags.HasFlag(UpdateFieldFlag::Owner))
     {
         data << int32(0);
         data << int32(0);
