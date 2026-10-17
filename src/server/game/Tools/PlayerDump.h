@@ -103,7 +103,7 @@ class TC_GAME_API PlayerDumpWriter final : public PlayerDump
         void PopulateGuids(ObjectGuid::LowType guid);
 
         std::set<uint32> _pets;
-        std::set<uint32> _mails;
+        std::set<uint64> _mails;
         std::set<ObjectGuid::LowType> _items;
 
         std::set<uint64> _itemSets;
