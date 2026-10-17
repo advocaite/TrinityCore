@@ -677,6 +677,11 @@ bool SpellEffectInfo::UsesClassicFlatBasePoints(WorldObject const* caster) const
     if (caster && caster->GetAffectingPlayer())
         return true;
 
+    // Some legacy creature spells were re-tuned to percentages in the Forever data: Vile Familiar Fireball 11921 carries
+    // 327.43 (~7 damage at level 4) and hit level 3 players for 300+ as a flat value. Vanilla flat values are whole numbers.
+    if (BasePoints != std::trunc(BasePoints))
+        return false;
+
     return _spellInfo->Id < CLASSIC_FIRST_SCALED_SPELL_ID;
 }
 
