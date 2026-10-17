@@ -1,0 +1,41 @@
+# WoW Classic beta 1.60.1.70450 (preliminary)
+
+Status: **preliminary**. Login and entering the world with a 70450 client were tested successfully on realm 70
+(2026-10-17). Full protocol compatibility is **not verified**.
+
+## What changed in 70450
+
+70450 (built 2026-10-15) is a rebuild of 70425 (built 2026-10-14):
+
+- CASC root: 17 files changed, all DLLs (exception handlers, `WowB_loader.dll`). No DB2, model, map or interface data
+  changed, nothing was added or removed, so the 70425 client data (and `data/dbc` extracted from it) still applies.
+- macOS client string table: byte-identical except the build number and dates.
+- `WowB.exe`: the same set of RTTI types as 70425.
+
+The server picks the Classic opcode group shift and update field layouts with `realmlist.gamebuild >= 70291` and
+`>= 70425`, so a realm on 70450 uses the 70425 protocol. No code change was needed.
+
+## Deployment
+
+1. Start worldserver once (or apply `sql/custom/auth/2026_10_17_00_auth_classic_beta_70450.sql`) to add build 70450 to
+   `build_info`. The script does **not** move any realm to 70450.
+2. Restart bnetserver: it reads `build_info` only at startup.
+3. Move the realm to 70450 by hand:
+   ```sql
+   UPDATE `realmlist` SET `gamebuild`=70450 WHERE `id`=70;
+   ```
+   A realm only lists for and accepts clients of its exact `gamebuild`. After this, 70425 clients no longer see the
+   realm; one realm cannot serve 70425 and 70450 at the same time.
+4. Keep `Network.SkipBuildAuthKeyCheck = 1` in `worldserver.conf`: no auth key is known for 70450.
+
+To go back, set `gamebuild` to 70425 again (bnetserver re-reads the realm list every `RealmsStateUpdateDelay` seconds,
+no restart needed) and start a 70425 client.
+
+## Known limitations
+
+- The client code is encrypted on disk, so the 70450 packet readers could not be compared with 70425, and there is no
+  official 70450 sniff yet. Opcodes, packet layouts and update fields are assumed unchanged from 70425 based on the
+  evidence above and the successful login, not on a full check.
+- The client has to be started with a launcher that supports 70450; launcher support is outside this repository.
+- Known 70425 issues apply to 70450 too, e.g. #63 (Auto Shot arrows drawn as a checkered cube) and the other-player
+  crash fixed by #62.
