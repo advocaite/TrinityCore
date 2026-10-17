@@ -13,7 +13,15 @@ Status: **preliminary**. Login and entering the world with a 70450 client were t
 - `WowB.exe`: the same set of RTTI types as 70425.
 
 The server picks the Classic opcode group shift and update field layouts with `realmlist.gamebuild >= 70291` and
-`>= 70425`, so a realm on 70450 uses the 70425 protocol. No code change was needed.
+`>= 70425`, so a realm on 70450 uses the 70425 protocol. No code change was needed for 70450 itself.
+
+## Included: crash fix from #62
+
+This branch includes the fix from #62 unchanged (commit `f50de2d773`, merged so it keeps its SHA): the three UnitData
+int32 that client 70425 added after `TaxiNodesID` are written only in the owner's own create. Sent to every viewer they
+shifted the PlayerData that follows in the create of another player, and clients seeing other players ran out of memory
+and crashed. The fix applies to every realm with `gamebuild >= 70425`, so to 70425 and 70450 alike. Once #62 is merged
+upstream this commit drops out of the branch's diff.
 
 ## Deployment
 
@@ -37,5 +45,4 @@ no restart needed) and start a 70425 client.
   official 70450 sniff yet. Opcodes, packet layouts and update fields are assumed unchanged from 70425 based on the
   evidence above and the successful login, not on a full check.
 - The client has to be started with a launcher that supports 70450; launcher support is outside this repository.
-- Known 70425 issues apply to 70450 too, e.g. #63 (Auto Shot arrows drawn as a checkered cube) and the other-player
-  crash fixed by #62.
+- Known 70425 issues apply to 70450 too, e.g. #63 (Auto Shot arrows drawn as a checkered cube; not fixed here).
