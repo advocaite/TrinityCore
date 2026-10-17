@@ -4,6 +4,7 @@
 
 Branch `forever` runs TrinityCore master against the **WoW Classic beta client 1.60.1.70338** (`_classic_beta_\WowB.exe`)
 with a vanilla world (converted from VMaNGOS) and the Skyborne / Zephras Isle content.
+Preliminary support for client 1.60.1.70450: see [doc/Classic70450.md](doc/Classic70450.md).
 
 **Just want to play?** Use the Windows repack from the releases: extract, run `Setup.bat`, start the servers in the
 Forever Launcher, press Play. No MySQL or compiling needed.
