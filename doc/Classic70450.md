@@ -23,21 +23,23 @@ shifted the PlayerData that follows in the create of another player, and clients
 and crashed. The fix applies to every realm with `gamebuild >= 70425`, so to 70425 and 70450 alike. Once #62 is merged
 upstream this commit drops out of the branch's diff.
 
-## Deployment
+## Installation
 
-1. Start worldserver once (or apply `sql/custom/auth/2026_10_17_00_auth_classic_beta_70450.sql`) to add build 70450 to
-   `build_info`. The script does **not** move any realm to 70450.
-2. Restart bnetserver: it reads `build_info` only at startup.
-3. Move the realm to 70450 by hand:
-   ```sql
-   UPDATE `realmlist` SET `gamebuild`=70450 WHERE `id`=70;
-   ```
-   A realm only lists for and accepts clients of its exact `gamebuild`. After this, 70425 clients no longer see the
-   realm; one realm cannot serve 70425 and 70450 at the same time.
-4. Keep `Network.SkipBuildAuthKeyCheck = 1` in `worldserver.conf`: no auth key is known for 70450.
+`sql/custom/auth/2026_10_17_00_auth_classic_beta_70450.sql` is applied by worldserver's database updater on its next
+start, like every other `sql/custom` file (fresh and existing installations alike). It adds build 70450 to `build_info`
+and moves the Forever realms 70-73 from 70425 to 70450, like every earlier client build did. Realms with other ids or on
+other builds are not touched.
 
-To go back, set `gamebuild` to 70425 again (bnetserver re-reads the realm list every `RealmsStateUpdateDelay` seconds,
-no restart needed) and start a 70425 client.
+**After the update the realms 70-73 only accept the 70450 client.** A realm only lists for and accepts clients of its
+exact `gamebuild`, and one realm cannot serve 70425 and 70450 at the same time, so every player has to use 70450.
+
+- Fresh installation: nothing to do by hand.
+- Existing installation: restart bnetserver once after worldserver applied the update; it reads `build_info` only at
+  startup, and until then it does not know 70450.
+- To keep a realm on 70425 (or go back), set its `gamebuild` to 70425 again; bnetserver re-reads the realm list every
+  `RealmsStateUpdateDelay` seconds, no restart needed. The update is not applied a second time.
+
+Keep `Network.SkipBuildAuthKeyCheck = 1` in `worldserver.conf`: no auth key is known for 70450.
 
 ## Known limitations
 
