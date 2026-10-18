@@ -26677,14 +26677,24 @@ Player* Player::GetTrader() const
     return m_trade ? m_trade->GetTrader() : nullptr;
 }
 
-bool Player::IsSpellFitByClassAndRace(uint32 spell_id) const
+bool Player::IsSpellFitByClassAndRace(uint32 spell_id, uint32 learnSpellDepth /*= 0*/) const
 {
     uint8 race  = GetRace();
     uint32 classmask = GetClassMask();
 
     SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spell_id);
     if (bounds.first == bounds.second)
+    {
+        // spells without skill line abilities of their own (trainer spells that only teach other spells) fit when every spell they teach fits
+        // the depth limit stops learn spell loops
+        if (learnSpellDepth < 5)
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE))
+                for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
+                    if (spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && !IsSpellFitByClassAndRace(spellEffectInfo.TriggerSpell, learnSpellDepth + 1))
+                        return false;
+
         return true;
+    }
 
     for (SkillLineAbilityMap::const_iterator _spell_idx = bounds.first; _spell_idx != bounds.second; ++_spell_idx)
     {

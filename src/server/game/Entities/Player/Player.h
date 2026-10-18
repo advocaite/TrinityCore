@@ -1983,7 +1983,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool HasActiveSpell(uint32 spell) const;            // show in spellbook
         uint32 ResolveSupersededRank(uint32 spellId) const; // Classic 1.60: the active higher rank of a known but superseded rank, else spellId
         SpellInfo const* GetCastSpellInfo(SpellInfo const* spellInfo, TriggerCastFlags& triggerFlag, GetCastSpellInfoContext* context) const override;
-        bool IsSpellFitByClassAndRace(uint32 spell_id) const;
+        bool IsSpellFitByClassAndRace(uint32 spell_id, uint32 learnSpellDepth = 0) const;
         bool HandlePassiveSpellLearn(SpellInfo const* spellInfo);
 
         void SendProficiency(ItemClass itemClass, uint32 itemSubclassMask) const;
