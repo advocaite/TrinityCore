@@ -6,7 +6,7 @@
 // so the creature entries and spell ids carry over unchanged.
 //
 // A rule set is registered per MAP ID (409 Molten Core, 469 Blackwing Lair,
-// 249 Onyxia's Lair, 531 Temple of Ahn'Qiraj, 533 Naxxramas). RaidBrain.cpp reads these tables on the
+// 249 Onyxia's Lair, 309 Zul'Gurub, 509 Ruins of Ahn'Qiraj, 531 Temple of Ahn'Qiraj, 533 Naxxramas). RaidBrain.cpp reads these tables on the
 // world thread and turns them into per-bot raid orders (move out of hazards,
 // spread, stand at role positions, taunt swaps, dispels, purges, crowd
 // control, forbidden targets). The data files (RaidEncounterData_*.cpp)
@@ -408,5 +408,7 @@ void RegisterBlackwingMovement(RaidRules& rules);
 void RegisterOnyxia(RaidRules& rules);
 void RegisterNaxxramas(RaidRules& rules);
 void RegisterTempleOfAhnQiraj(RaidRules& rules);
+void RegisterRuinsOfAhnQiraj(RaidRules& rules);
+void RegisterZulGurub(RaidRules& rules);
 
 } // namespace Playerbot::Raid
