@@ -482,7 +482,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
 
     // GM Bug
     PrepareStatement(CHAR_SEL_GM_BUGS, "SELECT id, playerGuid, note, createTime, mapId, posX, posY, posZ, facing, closedBy, assignedTo, comment FROM gm_bug", CONNECTION_SYNCH);
-    PrepareStatement(CHAR_REP_GM_BUG, "REPLACE INTO gm_bug (id, playerGuid, note, createTime, mapId, posX, posY, posZ, facing, closedBy, assignedTo, comment) VALUES (?, ?, ?, UNIX_TIMESTAMP(NOW()), ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_REP_GM_BUG, "REPLACE INTO gm_bug (id, playerGuid, note, createTime, mapId, posX, posY, posZ, facing, closedBy, assignedTo, comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_GM_BUG, "DELETE FROM gm_bug WHERE id = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_ALL_GM_BUGS, "DELETE FROM gm_bug", CONNECTION_ASYNC);
 
