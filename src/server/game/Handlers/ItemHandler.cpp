@@ -16,7 +16,10 @@
  */
 
 #include "WorldSession.h"
+#include "Bag.h"
 #include "BattlePetMgr.h"
+#include <algorithm>
+#include <array>
 #include "Common.h"
 #include "Creature.h"
 #include "DatabaseEnv.h"
@@ -1239,6 +1242,318 @@ void WorldSession::HandleUseCritterItem(WorldPackets::Item::UseCritterItem& useC
     _player->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
 }
 
+namespace
+{
+// Groups in the order the bags are packed, junk goes last so it ends up where the player looks when selling
+enum class BagSortCategory : uint8
+{
+    Equipment = 0,
+    Consumable,
+    TradeGoods,
+    Reagent,
+    QuestItem,
+    Other,
+    Junk,
+    Max
+};
+
+constexpr std::size_t BagSortCategoryCount = std::size_t(BagSortCategory::Max);
+constexpr std::size_t BagSortNoOwner = std::size_t(-1);
+
+BagSortCategory GetBagSortCategory(ItemTemplate const* proto)
+{
+    // class before quality: a grey quest item is still a quest item
+    if (proto->GetClass() == ITEM_CLASS_QUEST)
+        return BagSortCategory::QuestItem;
+    if (proto->GetClass() == ITEM_CLASS_ARMOR || proto->GetClass() == ITEM_CLASS_WEAPON)
+        return BagSortCategory::Equipment;
+    if (proto->GetClass() == ITEM_CLASS_CONSUMABLE)
+        return BagSortCategory::Consumable;
+    if (proto->GetClass() == ITEM_CLASS_TRADE_GOODS)
+        return BagSortCategory::TradeGoods;
+    if (proto->GetClass() == ITEM_CLASS_REAGENT || proto->GetBagFamily() != 0)
+        return BagSortCategory::Reagent;
+    if (proto->GetQuality() == ITEM_QUALITY_POOR)
+        return BagSortCategory::Junk;
+    return BagSortCategory::Other;
+}
+
+BagSlotFlags GetBagSortPriorityFlag(BagSortCategory category)
+{
+    switch (category)
+    {
+        case BagSortCategory::Equipment:  return BagSlotFlags::PriorityEquipment;
+        case BagSortCategory::Consumable: return BagSlotFlags::PriorityConsumables;
+        case BagSortCategory::TradeGoods: return BagSlotFlags::PriorityTradeGoods;
+        case BagSortCategory::Reagent:    return BagSlotFlags::PriorityReagents;
+        case BagSortCategory::QuestItem:  return BagSlotFlags::PriorityQuestItems;
+        case BagSortCategory::Junk:       return BagSlotFlags::PriorityJunk;
+        default:                          return BagSlotFlags::None;
+    }
+}
+
+struct BagSortSlot
+{
+    uint16 Pos;         // bag << 8 | slot, as taken by Player::GetItemByPos and Player::SwapItem
+    uint8 BagSlot;      // INVENTORY_SLOT_BAG_0 for the backpack, otherwise the equipped bag slot
+};
+
+struct BagSortItem
+{
+    ObjectGuid Guid;
+    BagSortCategory Category;
+    uint32 Entry;
+    uint32 Class;
+    uint32 SubClass;
+    uint32 Quality;
+    uint32 ItemLevel;
+    uint32 Count;
+    bool MayLeaveBag;   // false: the item sits in a bag that only takes one item family, it is sorted inside it only
+};
+
+bool IsSortedBefore(BagSortItem const& left, BagSortItem const& right)
+{
+    if (left.Category != right.Category)
+        return left.Category < right.Category;
+    if (left.Class != right.Class)
+        return left.Class < right.Class;
+    if (left.SubClass != right.SubClass)
+        return left.SubClass < right.SubClass;
+    if (left.Quality != right.Quality)
+        return left.Quality > right.Quality;
+    if (left.ItemLevel != right.ItemLevel)
+        return left.ItemLevel > right.ItemLevel;
+    if (left.Entry != right.Entry)
+        return left.Entry < right.Entry;
+    if (left.Count != right.Count)
+        return left.Count > right.Count;
+    return left.Guid < right.Guid;
+}
+
+// Packs the backpack and the equipped bags: the client's "clean up bags" button is only the request, the slots are
+// moved here and the client follows the resulting item updates.
+class BagSorter
+{
+public:
+    explicit BagSorter(Player* player) : _player(player) { }
+
+    void Sort();
+
+private:
+    void Collect();
+    void AddContainer(uint8 bagSlot, uint8 firstSlot, uint8 slotCount, bool rightToLeft);
+    void BuildPreference(std::size_t categoryIndex);
+    bool BuildPlan();
+    bool TryAssign(std::size_t itemIndex, std::vector<bool>& visited);
+    void ApplyPlan();
+
+    uint32 GetSlotRank(BagSortSlot const& slot, BagSortCategory category) const;
+    bool CanGoIntoSlot(ItemTemplate const* proto, BagSortSlot const& slot) const;
+
+    Player* _player;
+    std::vector<BagSortSlot> _slots;
+    std::vector<BagSortItem> _items;
+    std::array<std::vector<uint32>, BagSortCategoryCount> _preferences;
+    std::array<bool, REAGENT_BAG_SLOT_END> _specializedBags = { };
+    std::vector<std::size_t> _slotOwner;    // slot index -> item index planned for it
+};
+
+void BagSorter::Sort()
+{
+    Collect();
+
+    if (_items.size() < 2)
+        return;
+
+    std::stable_sort(_items.begin(), _items.end(), IsSortedBefore);
+
+    for (std::size_t category = 0; category < BagSortCategoryCount; ++category)
+        BuildPreference(category);
+
+    if (!BuildPlan())
+        return;
+
+    ApplyPlan();
+}
+
+void BagSorter::Collect()
+{
+    bool const rightToLeft = _player->IsSortBagsRightToLeft();
+
+    AddContainer(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, _player->GetInventorySlotCount(), false);
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < REAGENT_BAG_SLOT_END; ++bagSlot)
+    {
+        Bag* bag = _player->GetBagByPos(bagSlot);
+        if (!bag)
+            continue;
+
+        // "ignore this bag when sorting"
+        if (_player->GetBagSlotFlags(bagSlot - INVENTORY_SLOT_BAG_START).HasFlag(BagSlotFlags::DisableAutoSort))
+            continue;
+
+        ItemTemplate const* bagProto = bag->GetTemplate();
+        _specializedBags[bagSlot] = !bagProto || bagProto->GetClass() != ITEM_CLASS_CONTAINER
+            || (bagProto->GetSubClass() != ITEM_SUBCLASS_CONTAINER && bagProto->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER);
+
+        AddContainer(bagSlot, 0, uint8(bag->GetBagSize()), rightToLeft);
+    }
+}
+
+void BagSorter::AddContainer(uint8 bagSlot, uint8 firstSlot, uint8 slotCount, bool rightToLeft)
+{
+    bool const specialized = bagSlot != INVENTORY_SLOT_BAG_0 && _specializedBags[bagSlot];
+
+    for (uint8 i = 0; i < slotCount; ++i)
+    {
+        uint8 const slot = rightToLeft ? uint8(slotCount - 1 - i) : i;
+        uint16 const pos = uint16(bagSlot) << 8 | uint16(firstSlot + slot);
+
+        Item* item = _player->GetItemByPos(pos);
+        ItemTemplate const* proto = item ? item->GetTemplate() : nullptr;
+
+        // things that cannot be moved keep their slot and keep it out of the plan
+        if (item && (!proto || item->HasItemFlag(ITEM_FIELD_FLAG_CHILD) || item->IsNotEmptyBag()))
+            continue;
+
+        _slots.push_back({ pos, bagSlot });
+
+        if (!item)
+            continue;
+
+        _items.push_back({ item->GetGUID(), GetBagSortCategory(proto), proto->GetId(), proto->GetClass(), proto->GetSubClass(),
+            proto->GetQuality(), proto->GetBaseItemLevel(), item->GetCount(), !specialized });
+    }
+}
+
+void BagSorter::BuildPreference(std::size_t categoryIndex)
+{
+    BagSortCategory const category = BagSortCategory(categoryIndex);
+
+    std::vector<uint32>& order = _preferences[categoryIndex];
+    order.resize(_slots.size());
+    for (std::size_t i = 0; i < order.size(); ++i)
+        order[i] = uint32(i);
+
+    std::stable_sort(order.begin(), order.end(), [this, category](uint32 left, uint32 right)
+    {
+        return GetSlotRank(_slots[left], category) < GetSlotRank(_slots[right], category);
+    });
+}
+
+uint32 BagSorter::GetSlotRank(BagSortSlot const& slot, BagSortCategory category) const
+{
+    if (slot.BagSlot == INVENTORY_SLOT_BAG_0)
+        return 2;
+
+    if (slot.BagSlot == REAGENT_BAG_SLOT_START && category == BagSortCategory::Reagent)
+        return 0;
+
+    if (_player->GetBagSlotFlags(slot.BagSlot - INVENTORY_SLOT_BAG_START).HasFlag(GetBagSortPriorityFlag(category)))
+        return 0;
+
+    // a bag that only takes one item family is filled before the general purpose bags
+    return _specializedBags[slot.BagSlot] ? 1 : 3;
+}
+
+bool BagSorter::CanGoIntoSlot(ItemTemplate const* proto, BagSortSlot const& slot) const
+{
+    if (slot.BagSlot == INVENTORY_SLOT_BAG_0)
+        return true;
+
+    Bag* bag = _player->GetBagByPos(slot.BagSlot);
+    return bag && ItemCanGoIntoBag(proto, bag->GetTemplate());
+}
+
+bool BagSorter::BuildPlan()
+{
+    _slotOwner.assign(_slots.size(), BagSortNoOwner);
+
+    // Classic assignment problem: every item prefers the lowest ranked slot it fits into (priority bags and family
+    // bags first, then the backpack, then the rest), earlier items win by being assigned first.
+    std::vector<bool> visited(_slots.size());
+    for (std::size_t itemIndex = 0; itemIndex < _items.size(); ++itemIndex)
+    {
+        std::fill(visited.begin(), visited.end(), false);
+        if (!TryAssign(itemIndex, visited))
+        {
+            // each item always fits the slot it is in, so this is only reachable with a broken item prototype
+            TC_LOG_ERROR("network", "BagSorter: no slot found for item {} ({})", _items[itemIndex].Entry, _items[itemIndex].Guid.ToString());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool BagSorter::TryAssign(std::size_t itemIndex, std::vector<bool>& visited)
+{
+    BagSortItem const& item = _items[itemIndex];
+
+    Item* itemObject = _player->GetItemByGuid(item.Guid);
+    if (!itemObject)
+        return false;
+
+    for (uint32 slotIndex : _preferences[std::size_t(item.Category)])
+    {
+        if (visited[slotIndex])
+            continue;
+
+        BagSortSlot const& slot = _slots[slotIndex];
+
+        if (!item.MayLeaveBag && slot.BagSlot != itemObject->GetBagSlot())
+            continue;
+
+        if (!CanGoIntoSlot(itemObject->GetTemplate(), slot))
+            continue;
+
+        visited[slotIndex] = true;
+
+        std::size_t const ownerIndex = _slotOwner[slotIndex];
+        if (ownerIndex == BagSortNoOwner || TryAssign(ownerIndex, visited))
+        {
+            _slotOwner[slotIndex] = itemIndex;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void BagSorter::ApplyPlan()
+{
+    // Selection sort over the planned slots: the first sweep places everything the swaps allow, the next ones pick
+    // up whatever a refused swap (or a merged stack) left behind.
+    for (uint32 pass = 0; pass < 3; ++pass)
+    {
+        bool changed = false;
+
+        for (std::size_t slotIndex = 0; slotIndex < _slots.size(); ++slotIndex)
+        {
+            std::size_t const itemIndex = _slotOwner[slotIndex];
+            if (itemIndex == BagSortNoOwner)
+                continue;
+
+            ObjectGuid const& wantedGuid = _items[itemIndex].Guid;
+
+            Item* current = _player->GetItemByPos(_slots[slotIndex].Pos);
+            if (current && current->GetGUID() == wantedGuid)
+                continue;
+
+            Item* wanted = _player->GetItemByGuid(wantedGuid);
+            if (!wanted)
+                continue;   // merged into an identical stack, the slot already holds that stack
+
+            _player->SwapItem(wanted->GetPos(), _slots[slotIndex].Pos);
+            changed = true;
+        }
+
+        if (!changed)
+            break;
+    }
+}
+}
+
 void WorldSession::HandleSortAccountBankBags(WorldPackets::Item::SortAccountBankBags& /*sortAccountBankBags*/)
 {
     // TODO: Implement sorting
@@ -1248,8 +1563,13 @@ void WorldSession::HandleSortAccountBankBags(WorldPackets::Item::SortAccountBank
 
 void WorldSession::HandleSortBags(WorldPackets::Item::SortBags& /*sortBags*/)
 {
-    // TODO: Implement sorting
-    // Placeholder to prevent completely locking out bags clientside
+    // the client only asks for the clean up, the slots are moved on the server and the client follows the item updates
+    if (_player->IsAlive())
+    {
+        BagSorter sorter(_player);
+        sorter.Sort();
+    }
+
     SendPacket(WorldPackets::Item::BagCleanupFinished().Write());
 }
 
