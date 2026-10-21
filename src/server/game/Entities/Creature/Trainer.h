@@ -60,6 +60,7 @@ namespace Trainer
         uint8 ReqLevel = 0;
 
         bool IsCastable() const;
+        bool TeachesPetAbility() const;
     };
 
     class Trainer
