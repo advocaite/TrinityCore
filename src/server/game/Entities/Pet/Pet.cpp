@@ -1700,6 +1700,7 @@ bool Pet::learnSpell(uint32 spell_id)
         packet.Spells.push_back(spell_id);
         GetOwner()->SendDirectMessage(packet.Write());
         GetOwner()->PetSpellInitialize();
+        UpdateTrainingPoints();
     }
     return true;
 }
@@ -1769,6 +1770,7 @@ bool Pet::unlearnSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
             WorldPackets::Pet::PetUnlearnedSpells packet;
             packet.Spells.push_back(spell_id);
             GetOwner()->SendDirectMessage(packet.Write());
+            UpdateTrainingPoints();
         }
         return true;
     }
@@ -1788,7 +1790,10 @@ void Pet::unlearnSpells(std::vector<uint32> const& spellIds, bool learn_prev, bo
     }
 
     if (!m_loading)
+    {
         GetOwner()->GetSession()->SendPacket(packet.Write());
+        UpdateTrainingPoints();
+    }
 }
 
 bool Pet::removeSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
