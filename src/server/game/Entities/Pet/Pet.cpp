@@ -32,6 +32,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QueryHolder.h"
+#include "Random.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
@@ -43,6 +44,7 @@
 #include "World.h"
 #include "WorldSession.h"
 #include <sstream>
+#include <unordered_set>
 
 #define PET_XP_FACTOR 0.05f
 
@@ -414,6 +416,10 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS), holder.GetPreparedResult(PetLoadQueryHolder::CHARGES));
             LearnPetPassives();
             InitLevelupSpellsForLevel();
+            // Classic 1.60: a tamed beast (or a pet created before the start spells existed) gets Growl and its
+            // family combat abilities; harmless when it already knows them.
+            LearnClassicStartSpells();
+            UpdateTrainingPoints();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -1848,6 +1854,8 @@ void Pet::InitPetCreateSpells()
 
     LearnPetPassives();
     InitLevelupSpellsForLevel();
+    LearnClassicStartSpells();
+    UpdateTrainingPoints();
 
     CastPetAuras(false);
 }
@@ -1966,6 +1974,107 @@ void Pet::LearnPetPassives()
         for (uint32 spellId : petStore->second)
             addSpell(spellId, ACT_DECIDE, PETSPELL_NEW, PETSPELL_FAMILY);
     }
+}
+
+// Classic 1.60: a freshly tamed hunter pet starts with Growl and its family's combat abilities (vanilla
+// petcreateinfo_spell). The modern default-spell list only covers spell-summoned creatures, so without this a
+// tamed beast knew nothing but the DND family passives: it could never use an ability, and the vanilla loop
+// where the pet teaches its owner that ability (CheckLearning) never started.
+void Pet::LearnClassicStartSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    CreatureTemplate const* cInfo = GetCreatureTemplate();
+    CreatureFamilyEntry const* cFamily = cInfo ? sCreatureFamilyStore.LookupEntry(cInfo->family) : nullptr;
+    if (!cFamily)
+        return;
+
+    auto learnHighestRank = [this](uint32 chainRoot)
+    {
+        // only grant an ability the pet does not have at all; rank upgrades are trained with points
+        for (uint32 spellId = chainRoot; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+            if (HasSpell(spellId))
+                return;
+
+        uint32 learn = 0;
+        uint32 learnLevel = 0;
+        for (uint32 spellId = chainRoot; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+        {
+            SpellInfo const* rank = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE);
+            if (!rank || rank->SpellLevel > GetLevel())
+                continue;
+
+            if (rank->SpellLevel >= learnLevel)
+            {
+                learn = spellId;
+                learnLevel = rank->SpellLevel;
+            }
+        }
+
+        if (learn)
+            learnSpell(learn);
+    };
+
+    // Growl is the one ability every hunter pet starts with (chain base 2649)
+    learnHighestRank(2649);
+
+    std::unordered_set<uint32> visitedChains;
+    for (int16 skillLineId : cFamily->SkillLine)
+    {
+        if (!skillLineId)
+            continue;
+
+        std::vector<SkillLineAbilityEntry const*> const* abilities = sDB2Manager.GetSkillLineAbilitiesBySkill(skillLineId);
+        if (!abilities)
+            continue;
+
+        for (SkillLineAbilityEntry const* ability : *abilities)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(uint32(ability->Spell), DIFFICULTY_NONE);
+            if (!spellInfo)
+                continue;
+
+            uint32 chainRoot = sSpellMgr->GetFirstSpellInChain(uint32(ability->Spell));
+            if (!visitedChains.insert(chainRoot).second)
+                continue;
+
+            SpellInfo const* rootInfo = sSpellMgr->GetSpellInfo(chainRoot, DIFFICULTY_NONE);
+            if (!rootInfo)
+                continue;
+
+            // combat abilities only; the utility ones (Dash, Dive, Prowl, Cower, Furious Howl) and the passive
+            // stat/resistance abilities stay trainable through Beast Training
+            if (!rootInfo->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE) && !rootInfo->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE) &&
+                !rootInfo->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL) && !rootInfo->HasEffect(SPELL_EFFECT_WEAPON_PERCENT_DAMAGE) &&
+                !rootInfo->HasEffect(SPELL_EFFECT_ATTACK) && !rootInfo->HasEffect(SPELL_EFFECT_CHARGE))
+                continue;
+
+            learnHighestRank(chainRoot);
+        }
+    }
+}
+
+// Classic 1.60: while the pet uses an ability it has a chance to teach its owner that ability (vanilla
+// Pet::CheckLearning). The owner then sees it in the Beast Training window and can train it to any other pet.
+void Pet::CheckLearning(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET || m_loading || !HasSpell(spellId))
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner)
+        return;
+
+    uint32 teachSpellId = sSpellMgr->GetPetTeachSpell(spellId);
+    if (!teachSpellId || owner->HasSpell(teachSpellId))
+        return;
+
+    if (!roll_chance(10))
+        return;
+
+    owner->LearnSpell(teachSpellId, false);
+    TC_LOG_DEBUG("entities.pet", "Pet {} taught its owner {} the training spell {}", GetName(), owner->GetName(), teachSpellId);
 }
 
 void Pet::CastPetAuras(bool current)

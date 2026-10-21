@@ -744,6 +744,9 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPackets::Spells::PetCastSpell& 
                     pet->SendPetActionSound(PET_ACTION_SPECIAL_SPELL);
                 else
                     pet->SendPetAIReaction(petCastSpell.PetGUID);
+
+                // Classic 1.60: using an ability can teach the hunter that ability (Beast Training)
+                pet->CheckLearning(spellInfo->Id);
             }
         }
 
