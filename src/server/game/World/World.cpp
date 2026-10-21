@@ -1603,6 +1603,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading pet default spells additional to levelup spells...");
     sSpellMgr->LoadPetDefaultSpells();
 
+    TC_LOG_INFO("server.loading", "Loading pet teach spells...");
+    sSpellMgr->LoadPetTeachSpells();
+
     TC_LOG_INFO("server.loading", "Loading Creature Addon Data...");
     sObjectMgr->LoadCreatureAddons();                            // must be after LoadCreatureTemplates() and LoadCreatures()
 
