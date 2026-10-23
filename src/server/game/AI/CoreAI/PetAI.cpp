@@ -207,6 +207,10 @@ void PetAI::UpdateAI(uint32 diff)
             targets.SetUnitTarget(target);
 
             spell->prepare(targets);
+
+            // Classic 1.60: the pet using an ability can teach its owner that ability (Beast Training)
+            if (Pet* pet = me->ToPet())
+                pet->CheckLearning(spell->m_spellInfo->Id);
         }
 
         // deleted cached Spell objects
