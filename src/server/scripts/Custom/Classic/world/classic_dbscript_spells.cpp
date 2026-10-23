@@ -62,7 +62,7 @@ std::unordered_map<uint32, ClassicDbScriptCast> const ClassicDbScriptCasts =
 
 enum ClassicDbScriptSpells
 {
-    SPELL_CLASSIC_SOUL_LINK_EFFECT = 18814
+    SPELL_CLASSIC_SOUL_LINK_AURA = 25228
 };
 }
 
@@ -106,12 +106,14 @@ class classic_spell_dbscript_cast : public SpellScript
 ## classic_spell_warl_soul_link (19028)
 ######*/
 
-// VMaNGOS spell_scripts 19028: the demon (dummy effect target) casts 18814 (split damage aura on its master) triggered.
+// Soul Link 19028: the demon (dummy effect target) casts 25228 on itself, triggered. A pet area aura, it also reaches the
+// master, with the demon as caster: both deal 3% more damage, and the demon takes 30% of the damage done to the master.
+// (18814, OLDSoul Link Effect, is that split alone, as a hidden aura.)
 class classic_spell_warl_soul_link : public SpellScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_CLASSIC_SOUL_LINK_EFFECT });
+        return ValidateSpellInfo({ SPELL_CLASSIC_SOUL_LINK_AURA });
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -121,7 +123,7 @@ class classic_spell_warl_soul_link : public SpellScript
         if (!caster || !demon || demon == caster)
             return;
 
-        demon->CastSpell(caster, SPELL_CLASSIC_SOUL_LINK_EFFECT, true);
+        demon->CastSpell(demon, SPELL_CLASSIC_SOUL_LINK_AURA, true);
     }
 
     void Register() override
