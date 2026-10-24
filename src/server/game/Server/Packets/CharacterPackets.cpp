@@ -468,14 +468,13 @@ void CheckCharacterNameAvailability::Read()
     _worldPacket >> SequenceIndex;
     // Classic 1.60.1.70009: 6 bit name length, 3 unknown bits, 6 bit surname length, then name and surname data
     // (e.g. "gear" + "fd": 10 04 67656172 6664)
-    std::string surname;
     _worldPacket >> SizedString::BitsSize<6>(Name);
     _worldPacket.ReadBits(3);
-    _worldPacket >> SizedString::BitsSize<6>(surname);
+    _worldPacket >> SizedString::BitsSize<6>(Surname);
     _worldPacket.ResetBitPos();
 
     _worldPacket >> SizedString::Data(Name);
-    _worldPacket >> SizedString::Data(surname);
+    _worldPacket >> SizedString::Data(Surname);
 }
 
 WorldPacket const* CheckCharacterNameAvailabilityResult::Write()
