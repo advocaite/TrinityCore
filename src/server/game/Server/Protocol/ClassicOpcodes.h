@@ -39,9 +39,7 @@ namespace ClassicOpcodes
     TC_GAME_API bool IsBuild70291OrLater();
 
     /// client 70425 or later (realm build): selects that build's update field layouts. Client 70450 keeps them: same game data
-    /// (only DLLs changed in CASC), same client strings except build number and date, same RTTI types as 70425. Client 70532 keeps them
-    /// too: no game data changed (only DLLs, shaders and interface files), same RTTI types, client strings differ only in build number,
-    /// dates and one gamepad CVar
+    /// (only DLLs changed in CASC), same client strings except build number and date, same RTTI types as 70425
     TC_GAME_API bool IsBuild70425OrLater();
 
     /// server opcodes whose Classic number is not known yet and that crash the client when sent with the shifted retail number
