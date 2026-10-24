@@ -17163,7 +17163,18 @@ void Player::AdjustQuestObjectiveProgress(Quest const* quest)
                 {
                     uint32 reqItemCount = obj.Amount;
                     uint32 curItemCount = GetItemCount(obj.ObjectID, true);
-                    SetQuestObjectiveData(obj, std::min(curItemCount, reqItemCount));
+                    uint32 itemProgress = std::min(curItemCount, reqItemCount);
+
+                    // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: same as Player::ItemRemovedQuestCheck, never lower
+                    // the recorded progress of such an objective (the item is meant to be consumed).
+                    if (obj.Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
+                    {
+                        uint16 slot = FindQuestSlot(quest->GetQuestId());
+                        if (slot < MAX_QUEST_LOG_SIZE && GetQuestSlotObjectiveData(slot, obj) >= int32(itemProgress))
+                            break;
+                    }
+
+                    SetQuestObjectiveData(obj, itemProgress);
                 }
                 break;
             case QUEST_OBJECTIVE_HAVE_CURRENCY:
@@ -17450,6 +17461,12 @@ void Player::ItemRemovedQuestCheck(uint32 entry, uint32 /*count*/)
         QuestObjective const* objective = sObjectMgr->GetQuestObjective(objectiveItr.second.ObjectiveId);
 
         if (!quest || !objective || !IsQuestObjectiveCompletable(logSlot, quest, *objective))
+            continue;
+
+        // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: these objectives are completed by using/consuming the item
+        // itself (e.g. an on-use item whose spell takes it as a reagent to fire a follow-up kill credit), so losing
+        // the item from the inventory must not roll the objective back.
+        if (objective->Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
             continue;
 
         int32 newItemCount = GetItemCount(entry, false);  // we may have more than what the status shows, so we have to iterate inventory
