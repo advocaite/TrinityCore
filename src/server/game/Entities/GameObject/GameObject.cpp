@@ -1099,6 +1099,10 @@ bool GameObject::Create(uint32 entry, Map* map, Position const& pos, QuaternionD
             SetGoAnimProgress(animProgress);
             m_goValue.FishingHole.MaxOpens = urand(GetGOInfo()->fishingHole.minRestock, std::max(GetGOInfo()->fishingHole.minRestock, GetGOInfo()->fishingHole.maxRestock));
             break;
+        case GAMEOBJECT_TYPE_CHEST:
+            // Classic 1.60: mining veins can be mined minRestock..maxRestock times before they despawn
+            m_goValue.Chest.MaxOpens = urand(GetGOInfo()->chest.minRestock, std::max(GetGOInfo()->chest.minRestock, GetGOInfo()->chest.maxRestock));
+            break;
         case GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING:
         {
             m_goValue.Building.DestructibleHitpoint = sObjectMgr->GetDestructibleHitpoint(GetGOInfo()->destructibleBuilding.HealthRec);
@@ -1460,6 +1464,9 @@ void GameObject::Update(uint32 diff)
                             case GAMEOBJECT_TYPE_FISHINGHOLE:
                                 // Initialize a new max fish count on respawn
                                 m_goValue.FishingHole.MaxOpens = urand(GetGOInfo()->fishingHole.minRestock, std::max(GetGOInfo()->fishingHole.minRestock, GetGOInfo()->fishingHole.maxRestock));
+                                break;
+                            case GAMEOBJECT_TYPE_CHEST:
+                                m_goValue.Chest.MaxOpens = urand(GetGOInfo()->chest.minRestock, std::max(GetGOInfo()->chest.minRestock, GetGOInfo()->chest.maxRestock));
                                 break;
                             default:
                                 break;
@@ -3975,6 +3982,24 @@ void GameObject::ClearLoot()
     personalLoot.clear();
     m_unique_users.clear();
     m_usetimes = 0;
+}
+
+// Classic 1.60: a looted chest with opens left (mining veins: minRestock..maxRestock) is refilled instead of despawned
+bool GameObject::RestockForNextOpen()
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_CHEST || GetGOInfo()->chest.chestPersonalLoot || !IsFullyLooted())
+        return false;
+
+    AddUse();
+    if (GetUseCount() >= m_goValue.Chest.MaxOpens)
+        return false;
+
+    m_loot.reset();
+    m_personalLoot.clear();
+    m_unique_users.clear();
+    SetLootState(GO_READY);
+    UpdateDynamicFlagsForNearbyPlayers();
+    return true;
 }
 
 bool GameObject::IsFullyLooted() const

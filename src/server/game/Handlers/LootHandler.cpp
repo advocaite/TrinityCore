@@ -313,6 +313,8 @@ void WorldSession::DoLootRelease(Loot* loot)
 
                 go->SetLootState(allOpensConsumed ? GO_JUST_DEACTIVATED : GO_READY);
             }
+            else if (go->RestockForNextOpen())
+                return;
             else if (go->GetGoType() != GAMEOBJECT_TYPE_GATHERING_NODE && go->IsFullyLooted())
                 go->SetLootState(GO_JUST_DEACTIVATED);
 
