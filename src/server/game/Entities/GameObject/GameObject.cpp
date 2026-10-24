@@ -1095,6 +1095,9 @@ bool GameObject::Create(uint32 entry, Map* map, Position const& pos, QuaternionD
 
     switch (goInfo->type)
     {
+        case GAMEOBJECT_TYPE_CHEST:
+            RollChestOpens();
+            break;
         case GAMEOBJECT_TYPE_FISHINGHOLE:
             SetGoAnimProgress(animProgress);
             m_goValue.FishingHole.MaxOpens = urand(GetGOInfo()->fishingHole.minRestock, std::max(GetGOInfo()->fishingHole.minRestock, GetGOInfo()->fishingHole.maxRestock));
@@ -1456,6 +1459,9 @@ void GameObject::Update(uint32 diff)
                                 // We need to open doors if they are closed (add there another condition if this code breaks some usage, but it need to be here for battlegrounds)
                                 if (GetGoState() != GO_STATE_READY)
                                     ResetDoorOrButton();
+                                break;
+                            case GAMEOBJECT_TYPE_CHEST:
+                                RollChestOpens();
                                 break;
                             case GAMEOBJECT_TYPE_FISHINGHOLE:
                                 // Initialize a new max fish count on respawn
@@ -3963,6 +3969,28 @@ void GameObject::SetLootState(LootState state, Unit* unit)
 
         EnableCollision(collision);
     }
+}
+
+void GameObject::RollChestOpens()
+{
+    GameObjectTemplate const* goInfo = GetGOInfo();
+    m_goValue.Chest.MaxOpens = urand(goInfo->chest.minRestock, std::max(goInfo->chest.minRestock, goInfo->chest.maxRestock));
+    m_goValue.Chest.Opens = 0;
+}
+
+bool GameObject::TryReopenChest()
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_CHEST || m_goValue.Chest.MaxOpens <= 1)
+        return false;
+
+    if (++m_goValue.Chest.Opens >= m_goValue.Chest.MaxOpens)
+        return false;
+
+    // another successful opening: new loot at the next use, the vein stays
+    ClearLoot();
+    SetLootState(GO_READY);
+    UpdateDynamicFlagsForNearbyPlayers();
+    return true;
 }
 
 void GameObject::ClearLoot()

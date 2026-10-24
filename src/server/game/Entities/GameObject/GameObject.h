@@ -128,6 +128,14 @@ union GameObjectValue
     {
         SpellTargetCheckTypes TargetSearcherCheckType;
     } Trap;
+    //3 GAMEOBJECT_TYPE_CHEST
+    // Classic 1.60: mining veins can be looted several times (vanilla chest data 4/5, minSuccessOpens and
+    // maxSuccessOpens, where retail has restock counts that are not used for chests)
+    struct
+    {
+        uint32 MaxOpens;
+        uint32 Opens;
+    } Chest;
     //25 GAMEOBJECT_TYPE_FISHINGHOLE
     struct
     {
@@ -330,6 +338,9 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         void AddUse() { ++m_usetimes; }
 
         uint32 GetUseCount() const { return m_usetimes; }
+        // Classic 1.60: multi-open chests (mining veins): true if the chest was reset for another opening
+        bool TryReopenChest();
+        void RollChestOpens();
         uint32 GetUniqueUseCount() const { return uint32(m_unique_users.size()); }
 
         void SaveRespawnTime(uint32 forceDelay = 0);
