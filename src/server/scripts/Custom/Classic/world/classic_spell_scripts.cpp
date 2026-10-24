@@ -1222,6 +1222,46 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
     }
 };
 
+// 324, 325, 905, 945, 8134, 10431, 10432 - Lightning Shield: every rank triggers the dummy 26545 in 1.60, so cast the rank's
+// damage spell on the attacker instead (26364-26370, 26363)
+class classic_spell_sha_lightning_shield : public AuraScript
+{
+    static uint32 GetDamageSpell(uint32 shieldId)
+    {
+        switch (shieldId)
+        {
+            case 324:   return 26364;
+            case 325:   return 26365;
+            case 905:   return 26366;
+            case 945:   return 26367;
+            case 8134:  return 26369;
+            case 10431: return 26370;
+            case 10432: return 26363;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ GetDamageSpell(spellInfo->Id) });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        if (Unit* attacker = eventInfo.GetActor())
+            GetTarget()->CastSpell(attacker, GetDamageSpell(GetId()), CastSpellExtraArgsInit{
+                .TriggerFlags = TRIGGERED_FULL_MASK,
+                .TriggeringAura = aurEff
+            });
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_lightning_shield::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -1254,4 +1294,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);
+    RegisterSpellScript(classic_spell_sha_lightning_shield);
 }
