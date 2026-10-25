@@ -44,6 +44,8 @@
 #include "ThreatManager.h"
 #include "Unit.h"
 #include "WorldSession.h"
+#include <algorithm>
+#include <array>
 #include <mutex>
 #include <unordered_map>
 
@@ -1222,6 +1224,87 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
     }
 };
 
+// 436519 - Flametongue Weapon: every rank's weapon enchantment (5, 4, 3, 523, 1665, 1666, 7567) applies this dummy proc aura
+// in 1.60. Each hit with the enchanted weapon deals the rank's Fire damage, "Flametongue Weapon Proc" points / 100 per second
+// of weapon speed (rank 1: 326, 4 to 13 damage), through Flametongue Attack (spell power is added by its coefficient)
+class classic_spell_sha_flametongue_weapon : public AuraScript
+{
+    struct FlametongueRank
+    {
+        uint32 EnchantId;
+        uint32 ProcSpellId;
+        uint32 AttackSpellId;
+    };
+
+    static constexpr std::array<FlametongueRank, 7> Ranks =
+    { {
+        { 5,    8026,  29469 },
+        { 4,    8028,  29470 },
+        { 3,    8029,  10444 },
+        { 523,  10445, 10444 },
+        { 1665, 16343, 10444 },
+        { 1666, 16344, 10444 },
+        { 7567, 16344, 10444 }
+    } };
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 8026, 8028, 8029, 10445, 16343, 16344, 29469, 29470, 10444 });
+    }
+
+    Item* GetProcWeapon(ProcEventInfo& eventInfo) const
+    {
+        Player* player = GetTarget()->ToPlayer();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!player || !damageInfo || !eventInfo.GetActionTarget())
+            return nullptr;
+
+        WeaponAttackType attackType = damageInfo->GetAttackType();
+        if (attackType != BASE_ATTACK && attackType != OFF_ATTACK)
+            return nullptr;
+
+        // with two enchanted weapons each aura only procs on hits with its own weapon
+        Item* weapon = player->GetWeaponForAttack(attackType, true);
+        if (!weapon || weapon->GetGUID() != GetAura()->GetCastItemGUID())
+            return nullptr;
+
+        return weapon;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return GetProcWeapon(eventInfo) != nullptr;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Item* weapon = GetProcWeapon(eventInfo);
+        if (!weapon)
+            return;
+
+        uint32 enchantId = weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        auto rank = std::ranges::find(Ranks, enchantId, &FlametongueRank::EnchantId);
+        if (rank == Ranks.end())
+            return;
+
+        Unit* caster = GetTarget();
+        SpellInfo const* procInfo = sSpellMgr->AssertSpellInfo(rank->ProcSpellId, DIFFICULTY_NONE);
+        float const speed = weapon->GetTemplate()->GetDelay() / 1000.0f;
+        int32 const damage = std::max(1, int32(procInfo->GetEffect(EFFECT_0).CalcValue(caster) * speed / 100.0f));
+
+        caster->CastSpell(eventInfo.GetActionTarget(), rank->AttackSpellId, CastSpellExtraArgs(aurEff)
+            .AddSpellMod(SPELLVALUE_BASE_POINT0, damage));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_flametongue_weapon::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_flametongue_weapon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -1254,4 +1337,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);
+    RegisterSpellScript(classic_spell_sha_flametongue_weapon);
 }
