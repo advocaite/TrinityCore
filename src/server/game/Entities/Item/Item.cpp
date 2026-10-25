@@ -2259,30 +2259,11 @@ uint32 Item::GetSellPrice(Player const* owner, bool forVendor /*= false*/) const
     return price;
 }
 
-uint32 Item::GetSellPrice(ItemTemplate const* proto, uint32 quality, uint32 itemLevel)
+uint32 Item::GetSellPrice(ItemTemplate const* proto, uint32 /*quality*/, uint32 /*itemLevel*/)
 {
-    if (proto->HasFlag(ITEM_FLAG2_OVERRIDE_GOLD_COST))
-        return proto->GetSellPrice();
-    else
-    {
-        bool standardPrice;
-        uint32 cost = Item::GetBuyPrice(proto, quality, itemLevel, standardPrice);
-
-        if (standardPrice)
-        {
-            if (ItemClassEntry const* classEntry = sDB2Manager.GetItemClassByOldEnum(proto->GetClass()))
-            {
-                uint32 buyCount = std::max(proto->GetBuyCount(), 1u);
-                return cost * classEntry->PriceModifier / buyCount;
-            }
-
-            return 0;
-        }
-        else
-            return proto->GetSellPrice();
-    }
-
-    return 0;
+    // Classic: always the item's own sell price, the one its tooltip shows. 919 client items have no gold-cost override flag
+    // and got the retail item level formula instead (a different price, or money for items the game marks as unsellable)
+    return proto->GetSellPrice();
 }
 
 uint32 Item::GetItemLevel(Player const* owner) const
