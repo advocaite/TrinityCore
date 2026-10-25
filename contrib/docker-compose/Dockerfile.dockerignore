@@ -1,0 +1,12 @@
+# The build context is the repository root. Only what the build needs goes in: no git history, no archived SQL
+# (sql/old, 4 GB), and nothing else a checkout may hold (a game client, certificates, .env files).
+*
+!CMakeLists.txt
+!PreLoad.cmake
+!revision_data.h.in.cmake
+!cmake
+!dep
+!src
+!sql
+sql/old
+**/.DS_Store

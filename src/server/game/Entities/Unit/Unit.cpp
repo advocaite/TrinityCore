@@ -82,6 +82,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellPackets.h"
+#include "SpellTestObserver.h"
 #include "StringConvert.h"
 #include "TemporarySummon.h"
 #include "Totem.h"
@@ -3702,6 +3703,9 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint32 effMask)
         }
     }
 
+    if (SpellTestObserver::Instance && !aurApp->GetRemoveMode())
+        SpellTestObserver::Instance->OnAuraApplied(aurApp);
+
     if (Player* player = ToPlayer())
     {
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aura->GetId()))
@@ -3724,6 +3728,9 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
     aurApp->SetRemoveMode(removeMode);
     Aura* aura = aurApp->GetBase();
     TC_LOG_DEBUG("spells", "Aura {} now is remove mode {}", aura->GetId(), removeMode);
+
+    if (SpellTestObserver::Instance)
+        SpellTestObserver::Instance->OnAuraRemoved(aurApp, removeMode);
 
     // dead loop is killing the server probably
     ASSERT(m_removedAurasCount < 0xFFFFFFFF);

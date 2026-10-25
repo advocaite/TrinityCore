@@ -12,6 +12,9 @@ Forever Launcher, press Play. No MySQL or compiling needed.
 **Letting other people play on your server?** See [Hosting for other players](#hosting-for-other-players). A full
 Linux (Ubuntu 24.04) setup, tested on a fresh cloud server, is in [doc/LinuxServerSetup.md](doc/LinuxServerSetup.md).
 
+**Docker?** [doc/Docker.md](doc/Docker.md) runs the server with Docker Compose. It also covers the spell test module,
+which tests spells without a game client.
+
 ### Building from source
 
 Build the core as usual (see [Install](#install)), then:

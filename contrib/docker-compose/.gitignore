@@ -1,0 +1,5 @@
+# Secrets and generated files: never commit these.
+.env
+soap.env
+certs/
+data/

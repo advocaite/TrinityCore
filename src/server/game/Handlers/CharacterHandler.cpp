@@ -1335,6 +1335,29 @@ void WorldSession::HandleContinuePlayerLogin()
     });
 }
 
+// What HandlePlayerLoginOpcode and HandleContinuePlayerLogin do, without the connection handshake. The caller made this
+// session for the character's account, and calls UpdateWithoutClient every world update.
+bool WorldSession::LoginWithoutClient(ObjectGuid characterGuid)
+{
+    if (PlayerLoading() || GetPlayer())
+        return false;
+
+    m_playerLoading = characterGuid;
+
+    std::shared_ptr<LoginQueryHolder> holder = std::make_shared<LoginQueryHolder>(GetAccountId(), m_playerLoading);
+    if (!holder->Initialize())
+    {
+        m_playerLoading.Clear();
+        return false;
+    }
+
+    AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder)).AfterComplete([this](SQLQueryHolderBase const& holder)
+    {
+        HandlePlayerLogin(static_cast<LoginQueryHolder const&>(holder));
+    });
+    return true;
+}
+
 void WorldSession::AbortLogin(WorldPackets::Character::LoginFailureReason reason)
 {
     if (!PlayerLoading() || GetPlayer())

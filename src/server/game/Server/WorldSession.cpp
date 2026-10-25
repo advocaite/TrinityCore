@@ -1249,6 +1249,12 @@ void WorldSession::ProcessQueryCallbacks()
     _queryHolderProcessor.ProcessReadyCallbacks();
 }
 
+// Update() also reads packets and checks the socket, which a session without a client doesn't have
+void WorldSession::UpdateWithoutClient()
+{
+    ProcessQueryCallbacks();
+}
+
 TransactionCallback& WorldSession::AddTransactionCallback(TransactionCallback&& callback)
 {
     return _transactionCallbacks.AddCallback(std::move(callback));
