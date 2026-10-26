@@ -2694,8 +2694,7 @@ DurabilityLossChance.Block = 0.05
 #    Death.SicknessLevel
 #        Description: Starting level for resurrection sickness.
 #        Example:     11 - (Level 1-10 characters will not be affected,
-#                           Level 11-19 characters will be affected for 1 minute,
-#                           Level 20-MaxPlayerLevel characters will be affected for 10 minutes)
+#                           Level 11-MaxPlayerLevel characters will be affected for 10 minutes)
 #         Default:    11               - (Enabled, See Example)
 #                     MaxPlayerLevel+1 - (Disabled)
 #                     -10              - (Enabled, Level 1+ characters have 10 minute duration)
