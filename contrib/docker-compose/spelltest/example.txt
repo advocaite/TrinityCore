@@ -1,0 +1,31 @@
+# An example for spelltest.sh: ./spelltest.sh script spelltest/example.txt
+# A mage casts Fireball (rank 1, 133) on a target dummy, then a priest heals the mage with Lesser Heal (rank 1, 2050).
+# The first run creates the two test characters; later runs say they are taken and go on.
+spelltest create Testmage human mage
+spelltest create Testpriest human priest
+sleep 2
+spelltest login Testmage
+spelltest login Testpriest
+sleep 5
+spelltest status
+
+# Fireball on a fresh dummy 20 yards away
+spelltest reset Testmage
+spelltest learn Testmage 133
+spelltest dummy Testmage 20
+spelltest log Testmage
+spelltest cast Testmage 133
+sleep 4
+spelltest log Testmage
+
+# The priest heals the mage from 10 yards
+spelltest place Testpriest Testmage 10
+spelltest health Testmage 50
+spelltest learn Testpriest 2050
+spelltest log Testpriest
+spelltest cast Testpriest 2050 Testmage
+sleep 4
+spelltest log Testpriest
+
+spelltest logout Testmage
+spelltest logout Testpriest

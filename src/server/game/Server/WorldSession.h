@@ -1001,7 +1001,7 @@ class TC_GAME_API WorldSession
         WorldSession(uint32 id, std::string&& name, uint32 battlenetAccountId, std::string&& battlenetAccountEmail,
             std::shared_ptr<WorldSocket>&& sock, AccountTypes sec, uint8 expansion, time_t mute_time, std::string&& os, Minutes timezoneOffset,
             uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter);
-        ~WorldSession();
+        virtual ~WorldSession();  // virtual: a module may run sessions without a client (bots)
 
         bool PlayerLoading() const { return !m_playerLoading.IsEmpty(); }
         bool PlayerLogout() const { return m_playerLogout; }
@@ -1011,7 +1011,7 @@ class TC_GAME_API WorldSession
 
         bool IsAddonRegistered(std::string_view prefix) const;
 
-        void SendPacket(WorldPacket const* packet, bool forced = false);
+        virtual void SendPacket(WorldPacket const* packet, bool forced = false);
 
         void SendNotification(char const* format, ...) ATTR_PRINTF(2, 3);
         void SendNotification(uint32 stringId, ...);
@@ -1025,6 +1025,11 @@ class TC_GAME_API WorldSession
 
         void InitializeSession();
         void InitializeSessionCallback(LoginDatabaseQueryHolder const& holder, CharacterDatabaseQueryHolder const& realmHolder);
+
+        // A session without a client (a module's test characters: no socket, SendPacket overridden to drop): logs the
+        // character in as CMSG_PLAYER_LOGIN would, and runs the database callbacks that Update() runs for a connected session.
+        bool LoginWithoutClient(ObjectGuid characterGuid);
+        void UpdateWithoutClient();
 
         rbac::RBACData* GetRBACData() const;
         bool HasPermission(uint32 permissionId);
