@@ -15726,7 +15726,7 @@ void Player::CompleteQuest(uint32 quest_id)
 
         if (Quest const* qInfo = sObjectMgr->GetQuestTemplate(quest_id))
             if (qInfo->HasFlag(QUEST_FLAGS_TRACKING_EVENT))
-                RewardQuest(qInfo, LootItemType::Item, 0, this, false);
+                RewardQuest(qInfo, LootItemType::Item, 0, nullptr, false);   // no quest giver: keep the open gossip menu
     }
 
     if (sWorld->getBoolConfig(CONFIG_QUEST_ENABLE_QUEST_TRACKER)) // check if Quest Tracker is enabled
