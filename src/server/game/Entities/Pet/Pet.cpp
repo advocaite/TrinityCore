@@ -678,6 +678,12 @@ void Pet::Update(uint32 diff)
                 }
             }
 
+            // Forever: a following pet left behind (e.g. Undercity elevator) catches up to its owner instead of getting stuck
+            if (!isPossessed() && !IsInCombat() && GetCharmInfo() && GetCharmInfo()->HasCommandState(COMMAND_FOLLOW)
+                && !GetTransport() && !owner->GetTransport() && !owner->IsInFlight() && !owner->IsFalling()
+                && GetExactDist(owner) > 40.0f)
+                NearTeleportTo(owner->GetPosition());
+
             if (m_duration > 0)
             {
                 if (uint32(m_duration) > diff)
