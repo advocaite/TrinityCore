@@ -905,7 +905,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
                 if (!isNodeFullyFilled(parentNode))
                 {
                     if (edgeType == TraitEdgeType::RequiredForAvailability)
+                    {
+                        TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: node {} entry {} needs parent node {} filled", traitEntry.TraitNodeID, traitEntry.TraitNodeEntryID, parentNode->Data->ID);
                         return LearnResult::NotEnoughTalentsInPrimaryTree;
+                    }
 
                     continue;
                 }
@@ -914,7 +917,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
             }
 
             if (!hasAnyParentTrait)
+            {
+                TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: node {} entry {} has no filled parent node", traitEntry.TraitNodeID, traitEntry.TraitNodeEntryID);
                 return LearnResult::NotEnoughTalentsInPrimaryTree;
+            }
         }
 
         return LearnResult::Ok;
@@ -992,7 +998,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
 
         int32* grantedCount = Trinity::Containers::MapGetValuePtr(grantedCurrencies, traitCurrencyId);
         if (!grantedCount || *grantedCount < spentAmount.Total)
+        {
+            TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: trait currency {} spent {} but owned {}", traitCurrencyId, spentAmount.Total, grantedCount ? *grantedCount : -1);
             return LearnResult::NotEnoughTalentsInPrimaryTree;
+        }
     }
 
     if (requireSpendingAllCurrencies && traitConfig.Type == TraitConfigType::Combat)
