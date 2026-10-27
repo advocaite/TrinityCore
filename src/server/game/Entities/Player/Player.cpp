@@ -32625,8 +32625,30 @@ int32 TraitMgr::PlayerDataAccessor::GetLevel() const
 
 int32 TraitMgr::PlayerDataAccessor::GetClassicTalentedStartLevel() const
 {
-    // Classic 1.60 Legacy perk Talented 1225474: talent points every level starting at this level instead of 10
-    return _player->GetClassicLegacyPerkAmount(1225474, EFFECT_0);
+    // Classic 1.60 Legacy perk Talented 1225474: talent points every level starting at this level instead of 10.
+    // Its rank is read from the Legacy trait config (every entry granting the perk, rank 5 = level 5): the aura amount
+    // stayed at the rank 1 value (9), so the server allowed 2 points at level 10 where the client offered 6.
+    static constexpr uint32 TalentedSpellId = 1225474;
+    static constexpr int32 ClassicFirstTalentLevel = 10;
+    int32 rank = 0;
+    for (auto const& [configId, config] : _player->m_activePlayerData->TraitConfigs)
+    {
+        for (UF::TraitEntry const& entry : config.value.Entries)
+        {
+            TraitNodeEntryEntry const* nodeEntry = sTraitNodeEntryStore.LookupEntry(entry.TraitNodeEntryID);
+            TraitDefinitionEntry const* definition = nodeEntry ? sTraitDefinitionStore.LookupEntry(nodeEntry->TraitDefinitionID) : nullptr;
+            if (definition && uint32(definition->SpellID) == TalentedSpellId)
+            {
+                TC_LOG_DEBUG("entities.player", "Talented: {} node {} entry {} rank {} granted {}", _player->GetName(), entry.TraitNodeID, entry.TraitNodeEntryID, entry.Rank, entry.GrantedRanks);
+                rank += entry.Rank + entry.GrantedRanks;
+            }
+        }
+    }
+
+    if (rank > 0)
+        return std::max(1, ClassicFirstTalentLevel - rank);
+
+    return _player->GetClassicLegacyPerkAmount(TalentedSpellId, EFFECT_0);
 }
 
 bool TraitMgr::PlayerDataAccessor::IsQuestRewarded(int32 questId) const
