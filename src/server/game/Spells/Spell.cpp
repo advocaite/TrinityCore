@@ -60,6 +60,7 @@
 #include "SpellMgr.h"
 #include "SpellPackets.h"
 #include "SpellScript.h"
+#include "SpellTestObserver.h"
 #include "TemporarySummon.h"
 #include "TradeData.h"
 #include "TraitPackets.h"
@@ -4648,6 +4649,9 @@ void Spell::SendCastResult(SpellCastResult result, int32* param1 /*= nullptr*/, 
     if (result == SPELL_CAST_OK)
         return;
 
+    if (SpellTestObserver::Instance)
+        SpellTestObserver::Instance->OnCastFailed(this, result);
+
     Player const* receiver = m_caster->ToPlayer();
     if (m_spellInfo->HasAttribute(SPELL_ATTR7_REPORT_SPELL_FAILURE_TO_UNIT_TARGET))
         if (Player const* target = Object::ToPlayer(m_targets.GetUnitTarget()))
@@ -4825,6 +4829,9 @@ void Spell::SendSpellStart()
 
 void Spell::SendSpellGo()
 {
+    if (SpellTestObserver::Instance)
+        SpellTestObserver::Instance->OnSpellGo(this);
+
     // not send invisible spell casting
     if (!IsNeedSendToClient())
         return;

@@ -1,0 +1,195 @@
+# TrinityCore "forever" (WoW Classic beta 1.60) server in Docker: MySQL, worldserver and bnetserver, plus one-shot helpers.
+# See doc/Docker.md. All commands run in this folder.
+name: forever
+
+x-trinitycore: &trinitycore
+  image: trinitycore-forever
+  build:
+    context: ../..
+    dockerfile: contrib/docker-compose/Dockerfile
+    args:
+      BUILD_SPELL_TEST: ${BUILD_SPELL_TEST:-0}
+  init: true
+  restart: unless-stopped
+
+services:
+  db:
+    image: mysql:8.4
+    # Binary logs are only needed for replication; without them the 1 GB import takes no extra disk.
+    command: ["--skip-log-bin"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_USER: trinity
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+    # No ports: only the servers on this compose network can reach MySQL.
+
+  # One-shot: downloads the Forever world + hotfixes database release, used by the first worldserver start.
+  tdb:
+    image: alpine:3.22
+    restart: "no"
+    environment:
+      TDB_URL: https://github.com/advocaite/TrinityCore/releases/download/forever-tdb-2026-10-14/TDB_full_forever_2026_10_14.7z
+      TDB_SHA256: 373cdca7963927d4d67933032b4b858a811eae0af960d4de4ff19833a88d4f41
+    volumes:
+      - tdb:/tdb
+    command:
+      - sh
+      - -euc
+      - |
+        if ls /tdb/TDB_full_world_*.sql /tdb/TDB_full_hotfixes_*.sql >/dev/null 2>&1; then
+          echo "Database release already downloaded"
+          exit 0
+        fi
+        rm -f /tdb/*.part
+        apk add --no-cache libarchive-tools
+        wget -q -O /tmp/tdb.7z "$$TDB_URL"
+        echo "$$TDB_SHA256  /tmp/tdb.7z" | sha256sum -c -
+        mkdir -p /tmp/tdb
+        bsdtar -xf /tmp/tdb.7z -C /tmp/tdb
+        # The dump's views name trinity@localhost as their definer. Here the user is trinity@'%', and MySQL
+        # refuses a different definer without extra privileges, so let the views default to the importing user.
+        sed -i '/^\/\*!50013 DEFINER=/d' /tmp/tdb/TDB_full_world_*.sql
+        for f in /tmp/tdb/*.sql; do
+          mv "$$f" "/tdb/$$(basename "$$f").part"
+          mv "/tdb/$$(basename "$$f").part" "/tdb/$$(basename "$$f")"
+        done
+        rm -rf /tmp/tdb /tmp/tdb.7z
+        ls -l /tdb
+
+  worldserver:
+    <<: *trinitycore
+    command: ["worldserver"]
+    # On the first start, the worldserver imports the database release from its working directory.
+    working_dir: /opt/trinitycore/tdb
+    # The console reads stdin, and the server shuts down when stdin closes. Use it with: docker compose attach worldserver
+    stdin_open: true
+    tty: true
+    stop_grace_period: 1m
+    environment:
+      TC_LOGIN_DATABASE_INFO: &login_db "db;3306;trinity;${DB_PASSWORD};auth"
+      TC_WORLD_DATABASE_INFO: "db;3306;trinity;${DB_PASSWORD};world"
+      TC_CHARACTER_DATABASE_INFO: "db;3306;trinity;${DB_PASSWORD};characters"
+      TC_HOTFIX_DATABASE_INFO: "db;3306;trinity;${DB_PASSWORD};hotfixes"
+      # What the Classic client needs (README.md, contrib/linux/configure_server.sh)
+      TC_REALM_ID: "70"
+      TC_NETWORK_SKIP_BUILD_AUTH_KEY_CHECK: "1"
+      TC_NETWORK_ENTER_ENCRYPTED_MODE_REGION_GROUP: "8"
+      TC_REALM_CFG_CONTENT_SET_ID: "137"
+      TC_REALM_SUPER_DISTRICT_ID: "2"
+      TC_UPDATES_ENABLE_DATABASES: "15"
+      TC_UPDATES_AUTO_SETUP: "1"
+      # The extractor service makes no mmaps (mmaps_generator takes hours); without them path finding is off.
+      TC_MMAP_ENABLE_PATH_FINDING: "0"
+      # Roughly a million harmless warnings on every start (retail rows the Classic data lacks): file only.
+      TC_LOGGER_SQL_SQL: "5,DBErrors"
+      TC_RA_ENABLE: "0"
+      # The console over SOAP (the spell test module's commands, spelltest.sh). Its port is published on this machine only.
+      TC_SOAP_ENABLED: "1"
+      TC_SOAP_IP: "0.0.0.0"
+      # Gameplay settings of the Forever repack
+      TC_CLASSIC_GUILD_FINDER: "1"
+      TC_CLASSIC_SHOP_ENABLED: "1"
+      TC_ACCOUNT_INSTANCES_PER_HOUR: "5"
+      TC_PLAYER_SAVE_STATS_MIN_LEVEL: "1"
+    volumes:
+      - ${DATA_DIR:-./data}:/opt/trinitycore/data:ro
+      - tdb:/opt/trinitycore/tdb:ro
+      - logs:/opt/trinitycore/logs
+    ports:
+      - "${PUBLISH_IP:-127.0.0.1}:8085:8085"
+      - "127.0.0.1:7878:7878"
+    depends_on:
+      db:
+        condition: service_healthy
+      tdb:
+        condition: service_completed_successfully
+    healthcheck:
+      # Healthy once port 8085 (0x1F95) is listening, i.e. after the database setup and world loading.
+      test: ["CMD-SHELL", "grep -q ':1F95 00000000:0000 0A' /proc/net/tcp"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 1h
+
+  # One-shot: points the Forever realm (id 70) at the address players connect to.
+  realm:
+    image: mysql:8.4
+    restart: "no"
+    environment:
+      MYSQL_PWD: ${DB_PASSWORD}
+    entrypoint:
+      - mysql
+      - -h
+      - db
+      - -u
+      - trinity
+      - auth
+      - -e
+      - "UPDATE realmlist SET address = '${PUBLIC_IP:?set PUBLIC_IP in .env}' WHERE id = 70; SELECT id, name, address, port, gamebuild FROM realmlist WHERE id = 70"
+    depends_on:
+      worldserver:
+        condition: service_healthy
+
+  bnetserver:
+    <<: *trinitycore
+    command: ["bnetserver"]
+    environment:
+      TC_LOGIN_DATABASE_INFO: *login_db
+      # The client logs in to this name over TLS, and the certificate is issued for it.
+      TC_LOGIN_REST_EXTERNAL_ADDRESS: trinity.actual.battle.net
+      TC_LOGIN_REST_LOCAL_ADDRESS: trinity.actual.battle.net
+      TC_CERTIFICATES_FILE: /opt/trinitycore/certs/server.chain.pem
+      TC_PRIVATE_KEY_FILE: /opt/trinitycore/certs/server.key.pem
+      TC_REALM_CFG_CONTENT_SET_ID: "137"
+      TC_REALM_SUPER_DISTRICT_ID: "2"
+    # bnetserver resolves the login name at startup and refuses to start if it can't.
+    extra_hosts:
+      - "trinity.actual.battle.net:${PUBLIC_IP}"
+    volumes:
+      - ./certs/server.chain.pem:/opt/trinitycore/certs/server.chain.pem:ro
+      - ./certs/server.key.pem:/opt/trinitycore/certs/server.key.pem:ro
+      - logs:/opt/trinitycore/logs
+    ports:
+      - "${PUBLISH_IP:-127.0.0.1}:1119:1119"
+      - "${PUBLISH_IP:-127.0.0.1}:8081:8081"
+    depends_on:
+      realm:
+        condition: service_completed_successfully
+
+  # Extracts the game data from the client (WOW_DIR) into DATA_DIR. Run once: docker compose run --rm extractor
+  extractor:
+    <<: *trinitycore
+    profiles: [tools]
+    restart: "no"
+    user: root
+    working_dir: /opt/trinitycore/data
+    volumes:
+      # Not read-only: the extractors' CASC library opens .build.info and the config files for writing, though it
+      # only reads them. Read-only, it fails with "Error opening casc storage: FILE_NOT_FOUND".
+      - type: bind
+        source: ${WOW_DIR:-./wow}
+        target: /wow
+      - ${DATA_DIR:-./data}:/opt/trinitycore/data
+    command:
+      - sh
+      - -euxc
+      - |
+        mapextractor -i /wow -o .
+        vmap4extractor -d /wow
+        mkdir -p vmaps
+        vmap4assembler Buildings vmaps
+        rm -rf Buildings
+
+volumes:
+  db:
+  tdb:
+  logs:

@@ -37,6 +37,7 @@
 #include "SpellMgr.h"
 #include "SpellPackets.h"
 #include "SpellScript.h"
+#include "SpellTestObserver.h"
 #include "Unit.h"
 #include "Util.h"
 #include "Vehicle.h"
@@ -2019,6 +2020,9 @@ void Aura::TriggerProcOnEvent(uint32 procEffectMask, AuraApplication* aurApp, Pr
 {
     if (procEffectMask)
     {
+        if (SpellTestObserver::Instance)
+            SpellTestObserver::Instance->OnAuraProc(aurApp, procEffectMask, eventInfo);
+
         bool prevented = CallScriptProcHandlers(aurApp, eventInfo);
         if (!prevented)
         {

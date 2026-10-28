@@ -42,6 +42,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellPackets.h"
+#include "SpellTestObserver.h"
 #include "TemporarySummon.h"
 #include "Totem.h"
 #include "UpdateData.h"
@@ -1141,6 +1142,9 @@ struct CombatLogSender
 
 void WorldObject::SendCombatLogMessage(WorldPackets::CombatLog::CombatLogServerPacket* combatLog) const
 {
+    if (SpellTestObserver::Instance)
+        SpellTestObserver::Instance->OnCombatLog(this, combatLog);
+
     CombatLogSender combatLogSender(combatLog);
 
     if (Player const* self = ToPlayer())
