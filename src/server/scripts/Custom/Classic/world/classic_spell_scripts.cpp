@@ -969,6 +969,40 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
     }
 };
 
+// 17 - Power Word: Shield (vanilla): the shield leaves Weakened Soul on the target for 15 sec, and a target with Weakened Soul cannot be
+// shielded again. The 1.60 data does not apply the debuff here, so the script applies it when the shield hits and refuses the cast
+// while the target has it.
+class classic_spell_pri_power_word_shield : public SpellScript
+{
+    static constexpr uint32 SPELL_WEAKENED_SOUL = 6788;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WEAKENED_SOUL });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* target = GetExplTargetUnit();
+        if (target && target->HasAura(SPELL_WEAKENED_SOUL))
+            return SPELL_FAILED_BAD_TARGETS;
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleAfterHit()
+    {
+        if (Unit* target = GetHitUnit())
+            GetCaster()->CastSpell(target, SPELL_WEAKENED_SOUL, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_pri_power_word_shield::CheckCast);
+        AfterHit += SpellHitFn(classic_spell_pri_power_word_shield::HandleAfterHit);
+    }
+};
+
 // High Alert follows the map: recalculated when entering or leaving a battleground
 class classic_player_high_alert_map : public PlayerScript
 {
@@ -1230,6 +1264,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_tauren_cultivate_herb);
     new classic_unit_tigers_fury();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
+    RegisterSpellScript(classic_spell_pri_power_word_shield);
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
