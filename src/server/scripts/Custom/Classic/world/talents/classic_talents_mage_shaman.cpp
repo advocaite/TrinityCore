@@ -359,6 +359,23 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 1326079, 1326080, 1326081, 1326082 - Arcane Wrath: "This spell gains additional Spell Damage equal to $s2% of your maximum Mana."
+// Effect 1 is a dummy: that share of the mage's maximum mana is added like spell damage, with the damage effect's coefficient.
+class classic_spell_mage_arcane_wrath : public SpellScript
+{
+    void CalcManaBonus(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* caster = GetCaster();
+        float spellDamage = CalculatePct(float(caster->GetMaxPower(POWER_MANA)), GetEffectInfo(EFFECT_1).CalcValue(caster));
+        flatMod += int32(spellDamage * spellEffectInfo.BonusCoefficient);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_arcane_wrath::CalcManaBonus);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +810,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_arcane_wrath);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
