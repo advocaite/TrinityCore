@@ -359,6 +359,34 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 11180 - Winter's Chill: "Gives your Frost damage spells a $m2% chance to apply the Winter's Chill effect, which increases the
+// damage done by your Cone of Cold spell to the target by $12579s1%, stacking up to $s1 times." Effect 0 triggers 12579; effect 1,
+// a dummy that names 12579 as well, holds the chance (the client data proc chance is 100%; spell_proc: the mage's Frost damage
+// spell hits). Without this script both effects cast 12579, two stacks on every Frost or other spell hit, whatever the rank.
+class classic_spell_mage_winters_chill : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(GetEffect(EFFECT_1)->GetAmount());
+    }
+
+    void PreventProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_winters_chill::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_winters_chill::PreventProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +821,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_winters_chill);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
