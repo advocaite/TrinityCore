@@ -3578,6 +3578,12 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(6); // 100 yards
     });
 
+    // Retaliation (Classic 1.60): the counterattack has the Self Only range, so it failed at a melee attacker more than 3 yards away
+    ApplySpellFix({ 22858 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(2); // Combat Range
+    });
+
     // They Must Burn Bomb Aura (self)
     ApplySpellFix({ 36350 }, [](SpellInfo* spellInfo)
     {
