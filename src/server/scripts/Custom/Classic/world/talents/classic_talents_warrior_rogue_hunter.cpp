@@ -28,6 +28,7 @@
 #include "Random.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
+#include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -403,6 +404,25 @@ class classic_spell_rog_seal_fate : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_rog_seal_fate::CheckProc);
         OnProc += AuraProcFn(classic_spell_rog_seal_fate::HandleProc);
+    }
+};
+
+// 14185 - Preparation (talent): "When activated, this ability immediately finishes the cooldown on your other Rogue abilities." Effect 0
+// is a dummy, so it finished nothing: it finishes the cooldowns of the rogue's other rogue spells.
+class classic_spell_rog_preparation : public SpellScript
+{
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        GetCaster()->GetSpellHistory()->ResetCooldowns([preparation = GetSpellInfo()->Id](SpellHistory::CooldownEntry const& cooldown)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(cooldown.SpellId, DIFFICULTY_NONE);
+            return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE && spellInfo->Id != preparation;
+        }, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_rog_preparation::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -991,6 +1011,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_rog_hack_and_slash", 13706u, 13709u, 1290312u);
     RegisterSpellScript(classic_spell_rog_setup);
     RegisterSpellScript(classic_spell_rog_seal_fate);
+    RegisterSpellScript(classic_spell_rog_preparation);
     RegisterSpellScript(classic_spell_rog_cutthroat);
     RegisterSpellScript(classic_spell_rog_offhand_strike);
     RegisterSpellScript(classic_spell_rog_offhand_poison);
