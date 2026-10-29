@@ -359,6 +359,27 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 12472 - Cold Snap: "Finishes the remaining cooldown on all your other Frost spells." The effect is a dummy. As in vanilla, it
+// ends the cooldown of every mage Frost spell that has one (Frost Nova, Cone of Cold, Ice Block, Ice Barrier, Frost Ward), except
+// Cold Snap itself.
+class classic_spell_mage_cold_snap : public SpellScript
+{
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        GetCaster()->GetSpellHistory()->ResetCooldowns([coldSnap = GetSpellInfo()->Id](SpellHistory::CooldownEntry const& cooldown)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(cooldown.SpellId, DIFFICULTY_NONE);
+            return spellInfo->Id != coldSnap && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE
+                && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FROST) && spellInfo->GetRecoveryTime() > 0;
+        }, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_mage_cold_snap::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +814,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_cold_snap);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
