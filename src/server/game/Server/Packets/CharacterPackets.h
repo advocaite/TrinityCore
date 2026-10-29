@@ -312,6 +312,7 @@ namespace WorldPackets
 
             uint32 SequenceIndex = 0;
             std::string Name;
+            std::string Surname;    // Classic 1.60
         };
 
         class CheckCharacterNameAvailabilityResult final : public ServerPacket

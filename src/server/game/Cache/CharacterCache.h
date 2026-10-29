@@ -67,6 +67,8 @@ class TC_GAME_API CharacterCache
         bool HasCharacterCacheEntry(ObjectGuid const& guid) const;
         CharacterCacheEntry const* GetCharacterCacheByGuid(ObjectGuid const& guid) const;
         CharacterCacheEntry const* GetCharacterCacheByName(std::string const& name) const;
+        // Several characters may share a name (or a surname); only the name + surname combination is unique
+        CharacterCacheEntry const* GetCharacterCacheByFullName(std::string const& name, std::string const& surname) const;
 
         ObjectGuid GetCharacterGuidByName(std::string const& name) const;
         bool GetCharacterNameByGuid(ObjectGuid guid, std::string& name) const;
@@ -77,6 +79,10 @@ class TC_GAME_API CharacterCache
         ObjectGuid::LowType GetCharacterGuildIdByGuid(ObjectGuid guid) const;
         uint32 GetCharacterArenaTeamIdByGuid(ObjectGuid guid, uint8 type) const;
         bool GetCharacterNameAndClassByGUID(ObjectGuid guid, std::string& name, uint8& _class) const;
+
+    private:
+        void AddToNameStore(std::string const& name, CharacterCacheEntry* entry);
+        void RemoveFromNameStore(std::string const& name, CharacterCacheEntry const* entry);
 };
 
 #define sCharacterCache CharacterCache::instance()
