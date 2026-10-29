@@ -65,13 +65,6 @@ enum ClassicShamanTalentSpells
     SPELL_SHAMAN_ANCESTRAL_GUIDANCE_DAMAGE  = 409337
 };
 
-// Mage "Chill effects" (Frostbolt, Cone of Cold, Frostfire Bolt, Blast Wave...): mage spells with a snare. Triggered chills do not
-// proc (Frost Armor / Ice Armor chill); the Improved Blizzard chill rolls directly.
-static bool IsMageChillEffect(SpellInfo const* spellInfo)
-{
-    return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && spellInfo->HasAura(SPELL_AURA_MOD_DECREASE_SPEED);
-}
-
 // 400647 - Fingers of Frost: a Chill effect has effect 1 % chance to grant effect 0 charges of Fingers of Frost for 15 s
 static void TryGrantFingersOfFrost(Unit* mage)
 {
@@ -232,19 +225,15 @@ class classic_spell_mage_fingers_of_frost_charges : public AuraScript
 };
 
 // 400647 - Fingers of Frost: "Gives your Chill effects a 15% chance to grant you the Fingers of Frost effect, which treats your
-// next 2 spells cast as if the target were Frozen. Lasts 15 sec." (spell_proc: mage harmful spell hits; the Blizzard chill is
-// cast triggered and rolls from classic_spell_mage_improved_blizzard)
+// next 2 spells cast as if the target were Frozen. Lasts 15 sec." (spell_proc: the mage's Chill effects, spell family flag
+// 0x100000, the spells Permafrost affects: Frostbolt, Cone of Cold, Frostfire Bolt, Frost Blast, and the Chilled of Frost Armor,
+// Ice Armor and Improved Blizzard, which are triggered: the talent can proc from procs)
 class classic_spell_mage_fingers_of_frost : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_MAGE_FINGERS_OF_FROST_IGNORE, SPELL_MAGE_FINGERS_OF_FROST_STACKS })
             && ValidateSpellEffect({ { SPELL_MAGE_FINGERS_OF_FROST_TALENT, EFFECT_1 } });
-    }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        return IsMageChillEffect(eventInfo.GetSpellInfo());
     }
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
@@ -255,15 +244,14 @@ class classic_spell_mage_fingers_of_frost : public AuraScript
 
     void Register() override
     {
-        DoCheckProc += AuraCheckProcFn(classic_spell_mage_fingers_of_frost::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_fingers_of_frost::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
 // 11185 - Improved Blizzard: "Adds a Chill effect to your Blizzard spell. This effect lowers the target's movement speed by 40%
 // for 1.5 sec." Blizzard (10, 6141, 8427, 10185-10187) ticks through classic_spell_ground_area_damage; this second script on the
-// same tick chills the enemies inside the Blizzard with 12484 (talent amount as the snare), which is a Chill effect for Fingers
-// of Frost.
+// same tick chills the enemies inside the Blizzard with 12484 (talent amount as the snare), a Chill effect that procs Fingers of
+// Frost like the others.
 class classic_spell_mage_improved_blizzard : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
@@ -286,7 +274,6 @@ class classic_spell_mage_improved_blizzard : public AuraScript
         for (AreaTrigger* areaTrigger : caster->GetAreaTriggers(spellInfo->Id))
             targets.insert(areaTrigger->GetInsideUnits().begin(), areaTrigger->GetInsideUnits().end());
 
-        bool chilled = false;
         for (ObjectGuid const& guid : targets)
         {
             Unit* target = ObjectAccessor::GetUnit(*caster, guid);
@@ -294,11 +281,7 @@ class classic_spell_mage_improved_blizzard : public AuraScript
                 continue;
 
             caster->CastSpell(target, SPELL_MAGE_CHILLED, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(talent->GetAmount()));
-            chilled = true;
         }
-
-        if (chilled)
-            TryGrantFingersOfFrost(caster);
     }
 
     void Register() override
