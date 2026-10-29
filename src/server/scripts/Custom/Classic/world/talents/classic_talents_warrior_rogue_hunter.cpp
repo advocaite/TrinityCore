@@ -439,6 +439,43 @@ class classic_spell_rog_cutthroat : public AuraScript
     }
 };
 
+// 16511 - Hemorrhage, 14278 - Ghostly Strike (talent abilities): "deals 100% weapon damage (145% if a Dagger is equipped)", "deals 125%
+// (180% if a Dagger is equipped in your Main Hand) weapon damage". The dagger percent is a dummy effect after the weapon percent effect,
+// so the bonus never applied: with a dagger in the main hand, the dummy's percent replaces the weapon percent.
+class classic_spell_rog_dagger_strike : public SpellScript
+{
+public:
+    explicit classic_spell_rog_dagger_strike(SpellEffIndex weaponPctEffect, SpellEffIndex daggerPctEffect)
+        : _weaponPctEffect(weaponPctEffect), _daggerPctEffect(daggerPctEffect) { }
+
+private:
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, _weaponPctEffect }, { spellInfo->Id, _daggerPctEffect } });
+    }
+
+    void HandleDagger(SpellEffIndex /*effIndex*/)
+    {
+        Player* rogue = GetCaster()->ToPlayer();
+        Item* weapon = rogue ? rogue->GetWeaponForAttack(BASE_ATTACK, true) : nullptr;
+        if (!weapon || weapon->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_WEAPON_DAGGER)
+            return;
+
+        float weaponPct = float(GetEffectInfo(_weaponPctEffect).CalcValue(rogue));
+        float daggerPct = float(GetEffectInfo(_daggerPctEffect).CalcValue(rogue));
+        if (weaponPct > 0.0f)
+            SetHitDamage(int32(GetHitDamage() * daggerPct / weaponPct));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_rog_dagger_strike::HandleDagger, _daggerPctEffect, SPELL_EFFECT_DUMMY);
+    }
+
+    SpellEffIndex _weaponPctEffect;
+    SpellEffIndex _daggerPctEffect;
+};
+
 // 424799 - Shiv, 425012 - Poisoned Knife (rogue abilities): the client spells are dummies that cast the off-hand strike (424800 / 425013,
 // off-hand normalized weapon damage, awards the combo point).
 class classic_spell_rog_offhand_strike : public SpellScript
@@ -992,6 +1029,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_rog_setup);
     RegisterSpellScript(classic_spell_rog_seal_fate);
     RegisterSpellScript(classic_spell_rog_cutthroat);
+    RegisterSpellScriptWithArgs(classic_spell_rog_dagger_strike, "classic_spell_rog_hemorrhage", EFFECT_3, EFFECT_4);
+    RegisterSpellScriptWithArgs(classic_spell_rog_dagger_strike, "classic_spell_rog_ghostly_strike", EFFECT_0, EFFECT_3);
     RegisterSpellScript(classic_spell_rog_offhand_strike);
     RegisterSpellScript(classic_spell_rog_offhand_poison);
     RegisterSpellAndAuraScriptPair(classic_spell_rog_redirect, classic_spell_rog_redirect_aura);
