@@ -112,6 +112,40 @@ class classic_spell_warr_stance_rage : public AuraScript
     }
 };
 
+// 5308, 20658, 20660, 20661, 20662 - Execute: "Attempt to finish off a wounded foe, causing $s1 damage and converting each extra point of
+// rage into $*10;F1 additional damage." Effect 0 is a dummy, so Execute dealt no damage. The damage is the vanilla Execute damage spell
+// 20647. F1 is the effect's chain amplitude: the damage per tenth of a rage point. The cost is paid before the effects, so the rage left
+// is the extra rage, and Execute spends all of it.
+class classic_spell_warr_execute : public SpellScript
+{
+    static constexpr uint32 SPELL_WARRIOR_EXECUTE_DAMAGE = 20647;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_EXECUTE_DAMAGE });
+    }
+
+    void HandleDummy(SpellEffIndex effIndex)
+    {
+        Unit* warrior = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        int32 extraRage = warrior->GetPower(POWER_RAGE);
+        int32 damage = GetEffectValueAsInt() + int32(extraRage * GetEffectInfo(effIndex).ChainAmplitude);
+        warrior->SetPower(POWER_RAGE, 0);
+        warrior->CastSpell(target, SPELL_WARRIOR_EXECUTE_DAMAGE, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
+            .SetTriggeringSpell(GetSpell())
+            .AddSpellBP0(damage));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_execute::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 // 12317 - Enrage (talent): "Gives you a 30% chance to deal $m1% increased Physical damage for 12 sec after being the victim of any
 // damaging attack." The 30% is the talent proc chance (client data); the buff is the vanilla Enrage 12880 (physical damage done) with the
 // rank amount.
@@ -981,6 +1015,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
 {
     // warrior
     RegisterSpellScript(classic_spell_warr_stance_rage);
+    RegisterSpellScript(classic_spell_warr_execute);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
