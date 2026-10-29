@@ -11533,6 +11533,17 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
     if (creature && creature->IsPet() && creature->GetOwnerGUID().IsPlayer())
         isRewardAllowed = false;
 
+    // Classic 1.60: open world PvP credit. Battleground kills reach KillRewarder through
+    // Battleground::RewardXPAtKill, which passes the killer explicitly; for a player victim in the
+    // open world nobody did, so the reward list stayed empty and an honorable kill paid no honor,
+    // counted no HK and sent no PvPCredit packet. Add the killer (already resolved to its owner for
+    // pets/totems) so KillRewarder pays honor exactly like the battleground path does. Battleground
+    // victims are excluded: they are rewarded by Battleground::HandleKillPlayer/RewardXPAtKill, and
+    // honoring them here too would pay twice and bypass Battleground.GiveXPForKills.
+    Player* playerVictim = victim->ToPlayer();
+    if (isRewardAllowed && !creature && player && playerVictim && player != playerVictim && !playerVictim->InBattleground())
+        tappers.push_back(player);
+
     // Reward player, his pets, and group/raid members
     // call kill spell proc event (before real die and combat stop to triggering auras removed at death/combat stop)
     if (isRewardAllowed)
