@@ -441,6 +441,60 @@ class classic_spell_pri_renewed_hope_crit : public SpellScript
     }
 };
 
+// 2652, 19261, 19262, 19264, 19265, 19266 - Touch of Weakness: "The next melee attack on the caster will cause $19254s1 Shadow damage and
+// reduce the attacker's melee attack power by the attacker by $19254s2 for $19254d."
+// 18137, 19308, 19309, 19310, 19311, 19312 - Shadowguard: "When a spell, melee or ranged attack hits the caster, the attacker will be
+// struck for $28382s1 Shadow damage."
+// In this client data each rank triggers a dummy (28598, 28376), so neither did anything. Each rank casts the effect spell its tooltip
+// names at the attacker.
+class classic_spell_pri_racial_proc : public AuraScript
+{
+    static uint32 GetEffectSpell(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            // Touch of Weakness
+            case 2652:  return 2943;
+            case 19261: return 19249;
+            case 19262: return 19251;
+            case 19264: return 19252;
+            case 19265: return 19253;
+            case 19266: return 19254;
+            // Shadowguard
+            case 18137: return 28377;
+            case 19308: return 28378;
+            case 19309: return 28379;
+            case 19310: return 28380;
+            case 19311: return 28381;
+            case 19312: return 28382;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ GetEffectSpell(spellInfo->Id) });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* attacker = eventInfo.GetActor();
+        return attacker && attacker != GetTarget() && attacker->IsAlive();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(eventInfo.GetActor(), GetEffectSpell(GetId()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pri_racial_proc::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pri_racial_proc::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 431622 - Divine Aegis: "Your critical heals create a protective shield on the target, absorbing 15% of the amount healed. Lasts 12 sec."
 // (431624, crit only + triggered heals via spell_proc)
 class classic_spell_pri_divine_aegis : public AuraScript
@@ -1171,6 +1225,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_penance);
     RegisterSpellScript(classic_spell_pri_renewed_hope);
     RegisterSpellScript(classic_spell_pri_renewed_hope_crit);
+    RegisterSpellScript(classic_spell_pri_racial_proc);
     RegisterSpellScript(classic_spell_pri_divine_aegis);
     RegisterSpellScript(classic_spell_pri_power_in_light);
     RegisterSpellScript(classic_spell_pri_early_demise);
