@@ -194,6 +194,39 @@ class classic_spell_warr_blood_craze : public AuraScript
     }
 };
 
+// 20230 - Retaliation: "Instantly counterattack any enemy that strikes you in melee for $d. Melee attacks made from behind cannot be
+// counterattacked. A maximum of $n attacks will cause retaliation." The aura is a dummy with the charges and the proc data, so it
+// never counterattacked. Each melee hit taken from the front casts the counterattack, 22858 (weapon damage), at the attacker; hits
+// from behind, or while stunned, keep the charge.
+class classic_spell_warr_retaliation : public AuraScript
+{
+    static constexpr uint32 SPELL_WARRIOR_RETALIATION_DAMAGE = 22858;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_RETALIATION_DAMAGE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* warrior = GetTarget();
+        Unit* attacker = eventInfo.GetActor();
+        return attacker && attacker != warrior && warrior->isInFront(attacker) && !warrior->HasUnitState(UNIT_STATE_STUNNED);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(eventInfo.GetActor(), SPELL_WARRIOR_RETALIATION_DAMAGE, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_warr_retaliation::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_warr_retaliation::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 1290261 - Weaponmaster (warrior) and 13960 - Hack and Slash (rogue), Forever talents: "Gives your melee weapon attacks a benefit
 // depending on the weapon." The client data has a hidden passive per weapon group with the weapon requirement (SpellEquippedItems):
 //   Weaponmaster:   $s1 crit    Axe/Polearm -> 12700 (aura 290)     $s2 armor ignored  Mace/Staff -> 12284 (aura 280)
@@ -983,6 +1016,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_stance_rage);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
+    RegisterSpellScript(classic_spell_warr_retaliation);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
