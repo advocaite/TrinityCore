@@ -359,6 +359,24 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 11071 - Frostbite: "Gives your Chill effects a $s1% chance to Freeze the target for $12494d." The client data proc chance is
+// 100%; the chance is the talent amount, rolled on the mage's Chill effects (spell_proc: mage spell family flag 0x100000, the
+// spells Permafrost affects: Frostbolt, Cone of Cold, Frostfire Bolt, Frost Blast, and the Chilled of Frost Armor, Ice Armor and
+// Improved Blizzard, which are triggered). The core makes no proc data of its own for this aura (SPELL_ATTR3_CAN_PROC_FROM_PROCS
+// with a 100% chance), so without the spell_proc row it never procs.
+class classic_spell_mage_frostbite : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(GetEffect(EFFECT_0)->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_frostbite::CheckProc);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +811,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_frostbite);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
