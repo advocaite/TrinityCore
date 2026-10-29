@@ -45,6 +45,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
+    SPELL_MAGE_FIRE_POWER                   = 11124,    // effect 0: damage bonus per Fire effect on the target
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
 };
 
@@ -356,6 +357,61 @@ class classic_spell_mage_heating_up : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 11124 - Fire Power: "Increases the damage done by your Fire spells by $s1% per your Fire effects on the target, up to a maximum
+// increase of ${$s1*4}%. Effects which mix multiple schools of magic do not qualify." The talent is a dummy aura. A Fire effect is an
+// aura of the mage's on the target whose spell is of the Fire school alone (the damage over time of Fireball and Pyroblast, Ignite,
+// Fire Vulnerability, Impact, Blast Wave); up to 4 count.
+static constexpr uint32 FIRE_POWER_MAX_EFFECTS = 4;
+
+static float GetFirePowerBonus(Unit const* mage, Unit const* target)
+{
+    AuraEffect const* talent = mage->GetAuraEffect(SPELL_MAGE_FIRE_POWER, EFFECT_0);
+    if (!talent)
+        return 0.0f;
+
+    uint32 effects = 0;
+    for (auto const& [_, aurApp] : target->GetAppliedAuras())
+    {
+        Aura const* aura = aurApp->GetBase();
+        if (aura->GetCasterGUID() == mage->GetGUID() && aura->GetSpellInfo()->GetSchoolMask() == SPELL_SCHOOL_MASK_FIRE)
+            if (++effects == FIRE_POWER_MAX_EFFECTS)
+                break;
+    }
+    return float(talent->GetAmount()) * effects;
+}
+
+// Fire Power on the direct damage of the mage's Fire spells (Fireball, Fire Blast, Scorch, Pyroblast, Flamestrike, Blast Wave,
+// Frostfire Bolt)
+class classic_spell_mage_fire_power : public SpellScript
+{
+    void CalcFirePowerDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (float bonus = GetFirePowerBonus(GetCaster(), victim))
+            AddPct(pctMod, bonus);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_fire_power::CalcFirePowerDamage);
+    }
+};
+
+// Fire Power on the damage over time of Fireball, Pyroblast and Frostfire Bolt, and on Flamestrike's burning ground
+class classic_spell_mage_fire_power_periodic : public AuraScript
+{
+    void CalcDamage(AuraEffect const* /*aurEff*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (Unit* caster = GetCaster())
+            if (float bonus = GetFirePowerBonus(caster, victim))
+                AddPct(pctMod, bonus);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_mage_fire_power_periodic::CalcDamage, EFFECT_ALL, SPELL_AURA_ANY);
     }
 };
 
@@ -793,6 +849,8 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_fire_power);
+    RegisterSpellScript(classic_spell_mage_fire_power_periodic);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
