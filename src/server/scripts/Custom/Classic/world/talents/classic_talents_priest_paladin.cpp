@@ -389,6 +389,22 @@ class classic_spell_pri_penance : public SpellScript
     }
 };
 
+// 14909 - Searing Light (talent): "gives a $m2% chance each time your Holy Fire spell deals periodic damage for your next Holy Nova to cost
+// no Mana." Effect 1 procced at the client data's 100% from any spell: only Holy Fire's periodic damage (spell_proc) rolls its rank value.
+// Its buff, Holy Purpose (1284536), had no proc row either, so the next Holy Nova never used it up (spell_proc).
+class classic_spell_pri_searing_light : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pri_searing_light::CheckProc, EFFECT_1, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 425280 - Renewed Hope: "Your heals from Flash Heal, Binding Heal, Lesser Heal, Heal, Greater Heal, and Penance gain 10% increased critical
 // strike chance when cast on targets with Weakened Soul, and reduce the remaining duration of Weakened Soul on their target by 5 sec."
 // The talent aura (proc limited to those heals by spell_proc) shortens Weakened Soul by effect 1 (-5000 ms) ...
@@ -1169,6 +1185,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_prayer_of_mending_aura);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending_jump);
     RegisterSpellScript(classic_spell_pri_penance);
+    RegisterSpellScript(classic_spell_pri_searing_light);
     RegisterSpellScript(classic_spell_pri_renewed_hope);
     RegisterSpellScript(classic_spell_pri_renewed_hope_crit);
     RegisterSpellScript(classic_spell_pri_divine_aegis);
