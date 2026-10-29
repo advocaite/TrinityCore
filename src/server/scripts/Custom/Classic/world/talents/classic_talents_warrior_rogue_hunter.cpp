@@ -21,6 +21,7 @@
 
 #include "ScriptMgr.h"
 #include "Creature.h"
+#include "CreatureAI.h"
 #include "DB2Stores.h"
 #include "Item.h"
 #include "Pet.h"
@@ -31,6 +32,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "TemporarySummon.h"
 #include "Unit.h"
 
 enum ClassicWarriorRogueHunterTalents
@@ -811,6 +813,75 @@ class classic_spell_hun_lacerating_strikes : public AuraScript
     }
 };
 
+// 1293241, 1293525, 1293526, 1293527 - Summon Hawk (talent and ranks): "Command a hawk to dive-bomb your targeted enemy, dealing
+// ${$s1+($rap*($s4/100))} Physical damage and continuing its assault for $1293248d. Only $s3 hawks can be active at once." Effects 2 and 3
+// are dummies, and so is the missile 1312639, so the hit had no ranged attack power part and no hawk stayed. The hit adds effect 3's
+// percent of the ranged attack power; the missile summons the hawk (1293248) at the target.
+class classic_spell_hun_summon_hawk : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_3 } });
+    }
+
+    void CalcRangedAttackPower(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* hunter = GetCaster();
+        flatMod += int32(CalculatePct(hunter->GetTotalAttackPowerValue(RANGED_ATTACK), GetEffectInfo(EFFECT_3).CalcValue(hunter)));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_hun_summon_hawk::CalcRangedAttackPower);
+    }
+};
+
+// 1312639 - Summon Hawk (the missile of the spells above): a dummy; summons the hawk 1293248 (18 sec) at the target, which attacks it. Beyond
+// the number of hawks that Summon Hawk's effect 2 allows, the one with the least time left leaves first.
+class classic_spell_hun_summon_hawk_missile : public SpellScript
+{
+    static constexpr uint32 SPELL_HUNTER_SUMMON_HAWK = 1293241;
+    static constexpr uint32 SPELL_HUNTER_SUMMON_HAWK_CREATURE = 1293248;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_HUNTER_SUMMON_HAWK, EFFECT_2 }, { SPELL_HUNTER_SUMMON_HAWK_CREATURE, EFFECT_0 } });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* hunter = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        uint32 hawkEntry = uint32(sSpellMgr->AssertSpellInfo(SPELL_HUNTER_SUMMON_HAWK_CREATURE, DIFFICULTY_NONE)->GetEffect(EFFECT_0).MiscValue);
+        int32 maxHawks = sSpellMgr->AssertSpellInfo(SPELL_HUNTER_SUMMON_HAWK, DIFFICULTY_NONE)->GetEffect(EFFECT_2).CalcValueAsInt(hunter);
+        std::list<TempSummon*> hawks;
+        hunter->GetAllMinionsByEntry(hawks, hawkEntry);
+        hawks.sort([](TempSummon const* a, TempSummon const* b) { return a->GetTimer() < b->GetTimer(); });
+        while (int32(hawks.size()) >= std::max(1, maxHawks))
+        {
+            hawks.front()->UnSummon();
+            hawks.pop_front();
+        }
+
+        hunter->CastSpell(target, SPELL_HUNTER_SUMMON_HAWK_CREATURE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+
+        // the new hawk attacks the missile's target, whatever the hunter has selected
+        hawks.clear();
+        hunter->GetAllMinionsByEntry(hawks, hawkEntry);
+        for (TempSummon* hawk : hawks)
+            if (!hawk->IsInCombat() && hawk->IsAIEnabled())
+                hawk->AI()->AttackStart(target);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_hun_summon_hawk_missile::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 // 409379 - Kill Command (hunter ability): "Give the command to kill, increasing your pet's damage done from Claw and Bite by 60% for 30
 // sec. Each Claw or Bite done by the pet reduces the damage bonus by 20%." The client spell is a dummy aura; 409396 is the client buff
 // (+20% Claw / Bite per stack, a spell mod on the hunter that pet spells use) and triggers 409418 on the pet, whose proc takes one stack.
@@ -1003,6 +1074,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_hun_rapid_recuperation);
     RegisterSpellScript(classic_spell_hun_rapid_killing_consumed);
     RegisterSpellScript(classic_spell_hun_lacerating_strikes);
+    RegisterSpellScript(classic_spell_hun_summon_hawk);
+    RegisterSpellScript(classic_spell_hun_summon_hawk_missile);
     RegisterSpellAndAuraScriptPair(classic_spell_hun_kill_command, classic_spell_hun_kill_command_aura);
     RegisterSpellScript(classic_spell_hun_kill_command_pet);
 
