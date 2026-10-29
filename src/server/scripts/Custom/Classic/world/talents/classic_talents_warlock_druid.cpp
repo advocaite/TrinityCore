@@ -907,6 +907,23 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 18119 - Aftermath: "Increases the initial damage of your Immolate spell by $m2% and your Conflagrate spell has a $m1% chance to Daze
+// the target, reducing the target's movement speed by $18118m1% for $18118d." Effect 0 triggers the daze (18118), its amount is the
+// chance; with SPELL_ATTR3_CAN_PROC_FROM_PROCS and a 100% chance in the client data, the core made no proc data. spell_proc lets
+// Conflagrate hits proc it, and the script rolls the talent amount.
+class classic_talent_warl_aftermath : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(GetEffect(EFFECT_0)->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_aftermath::CheckProc);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1381,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_aftermath);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
