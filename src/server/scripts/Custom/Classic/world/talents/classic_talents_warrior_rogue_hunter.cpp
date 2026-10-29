@@ -290,6 +290,81 @@ class classic_spell_weapon_extra_attack_chance : public AuraScript
     }
 };
 
+// 12834 - Deep Wounds (talent): "Your critical strikes cause your opponent to Bleed, dealing $m1% of your melee weapon's average
+// damage over $412609d." The talent's trigger spell 12162 is a dummy and the bleed 412609 a periodic dummy, so it did nothing. Each
+// melee critical strike (spell_proc) starts the bleed with the rank's percent of the weapon's average damage, split over its ticks.
+class classic_spell_warr_deep_wounds : public AuraScript
+{
+    static constexpr uint32 SPELL_WARRIOR_DEEP_WOUND_BLEED = 412609;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_WARRIOR_DEEP_WOUND_BLEED, EFFECT_0 } });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* warrior = GetTarget();
+        Unit* target = eventInfo.GetActionTarget();
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        if (!target || target == warrior || !damageInfo || aurEff->GetAmountAsInt() <= 0)
+            return;
+
+        WeaponAttackType attackType = damageInfo->GetAttackType() == OFF_ATTACK ? OFF_ATTACK : BASE_ATTACK;
+        float average = (warrior->GetWeaponDamageRange(attackType, MINDAMAGE) + warrior->GetWeaponDamageRange(attackType, MAXDAMAGE)) / 2.0f;
+
+        SpellInfo const* bleed = sSpellMgr->AssertSpellInfo(SPELL_WARRIOR_DEEP_WOUND_BLEED, GetCastDifficulty());
+        SpellEffectInfo const& tick = bleed->GetEffect(EFFECT_0);
+        int32 ticks = tick.ApplyAuraPeriod ? std::max(1, bleed->GetMaxDuration() / int32(tick.ApplyAuraPeriod)) : 1;
+        int32 perTick = std::max(1, int32(CalculatePct(average, aurEff->GetAmount()) / ticks));
+        warrior->CastSpell(target, SPELL_WARRIOR_DEEP_WOUND_BLEED, CastSpellExtraArgs(aurEff).AddSpellBP0(perTick));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_warr_deep_wounds::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 412609 - Deep Wound: the bleed of Deep Wounds. A periodic dummy: each tick deals its amount as physical damage, which armor doesn't
+// reduce.
+class classic_spell_warr_deep_wound_bleed : public AuraScript
+{
+    void HandleTick(AuraEffect const* aurEff)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target->IsAlive() || aurEff->GetAmountAsInt() <= 0)
+            return;
+
+        SpellInfo const* spellInfo = GetSpellInfo();
+        SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
+        damageInfo.periodicLog = true;
+        damageInfo.damage = target->SpellDamageBonusTaken(caster, spellInfo, aurEff->GetAmountAsInt(), DOT);
+        damageInfo.originalDamage = damageInfo.damage;
+        Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+        caster->SendSpellNonMeleeDamageLog(&damageInfo);
+        caster->DealSpellDamage(&damageInfo, true);
+
+        ProcFlagsInit procVictim = PROC_FLAG_TAKE_HARMFUL_PERIODIC;
+        ProcFlagsHit hitMask = damageInfo.absorb ? PROC_HIT_ABSORB : PROC_HIT_NONE;
+        if (damageInfo.damage)
+        {
+            hitMask |= PROC_HIT_NORMAL;
+            procVictim |= PROC_FLAG_TAKE_ANY_DAMAGE;
+        }
+        DamageInfo procDamageInfo(damageInfo, DOT, BASE_ATTACK, hitMask);
+        Unit::ProcSkillsAndAuras(caster, target, PROC_FLAG_DEAL_HARMFUL_PERIODIC, procVictim, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask, nullptr, &procDamageInfo, nullptr);
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_warr_deep_wound_bleed::HandleTick, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
 // 403228 - Meathook (warrior ability): "Throw out a hooked chain to restrain the target and pull them toward you. May not be used on
 // enemies higher than level 61 or which are marked as boss enemies." The client spell is a dummy; the target jumps in front of the
 // warrior with 403233 (jump to destination, stun immunity while pulled).
@@ -984,6 +1059,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
+    RegisterSpellScript(classic_spell_warr_deep_wounds);
+    RegisterSpellScript(classic_spell_warr_deep_wound_bleed);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
 
