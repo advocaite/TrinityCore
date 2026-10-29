@@ -744,6 +744,22 @@ class classic_spell_pal_consecrated_ground : public AuraScript
     }
 };
 
+// 633, 2800, 10310 - Lay on Hands: "Heals a friendly target for an amount equal to the Paladin's maximum health and restores $s2 of their
+// mana. Drains all of the Paladin's remaining Mana when used, but does not interrupt Mana regeneration." The client data gives it no cost,
+// so it drained nothing: the cast takes all of the paladin's mana, before the effects restore the target's.
+class classic_spell_pal_lay_on_hands : public SpellScript
+{
+    void HandleCast()
+    {
+        GetCaster()->SetPower(POWER_MANA, 0);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_spell_pal_lay_on_hands::HandleCast);
+    }
+};
+
 // 1310911, 1311590, 1311595 - Light's Vigil (ranks 1-3): "Applies Light's Vigil to the target for 30 sec. Your next Holy Shock cast on them
 // triggers no cooldown and causes enemy targets to suffer X Holy damage and refund 75% of Light's Vigil's Mana cost, or allied targets to
 // heal their party for Y. You may only have one Light's Vigil active per party."
@@ -1182,6 +1198,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_redoubt);
     RegisterSpellScript(classic_spell_pal_infusion_of_light);
     RegisterSpellScript(classic_spell_pal_consecrated_ground);
+    RegisterSpellScript(classic_spell_pal_lay_on_hands);
     RegisterSpellScript(classic_spell_pal_lights_vigil);
     RegisterSpellScript(classic_spell_pal_lights_vigil_mark);
     RegisterSpellScript(classic_spell_pal_holy_shock_lights_vigil);
