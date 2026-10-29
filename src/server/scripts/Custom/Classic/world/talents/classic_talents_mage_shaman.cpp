@@ -45,6 +45,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
+    SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE    = 29442,    // energize mana (bp = mana gained)
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
 };
 
@@ -356,6 +357,32 @@ class classic_spell_mage_heating_up : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 29441 - Magic Absorption: "Increases all your resistances by $s2 and causes all spells you fully resist to restore $s1% of your total
+// mana. Cannot trigger more often than 1 time per sec." Effect 0 is a dummy: 29442 restores its amount in % of the mage's maximum mana
+// (vanilla, VMaNGOS Unit::HandleDummyAuraProc). It procs on the harmful spells the mage fully resists (spell_proc): a failed spell
+// hit roll is a miss here (vanilla showed it as resisted), and a resisted mechanic is a resist.
+class classic_spell_mage_magic_absorption : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        Unit* target = GetTarget();
+        int32 mana = CalculatePct(target->GetMaxPower(POWER_MANA), aurEff->GetAmount());
+        if (mana > 0)
+            target->CastSpell(target, SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE, CastSpellExtraArgs(aurEff).AddSpellBP0(mana));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_magic_absorption::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -793,6 +820,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_magic_absorption);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
