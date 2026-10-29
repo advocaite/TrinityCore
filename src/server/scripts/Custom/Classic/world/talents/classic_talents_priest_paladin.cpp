@@ -1090,6 +1090,73 @@ class classic_spell_pal_holy_light_flash_of_light : public SpellScript
     }
 };
 
+// 20177 - Reckoning (talent): "Gives you a $m1% chance after Blocking and a ${$m1*2.5}% chance after receiving a non-periodic critical
+// strike to gain an extra attack. Stores up to $1326084u extra attacks. Cannot occur from Blocks more than once every ${$proccooldown}.1
+// sec." Effect 0 is a dummy, so it never gave an extra attack. Blocks roll the rank value, at most once per proc cooldown; critical
+// strikes taken roll 2.5 times it. Each success adds a stack of 1326084, which keeps them for the next swing.
+class classic_spell_pal_reckoning : public AuraScript
+{
+    static constexpr uint32 SPELL_PAL_RECKONING_ATTACKS = 1326084;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_RECKONING_ATTACKS });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        AuraEffect const* talent = GetEffect(EFFECT_0);
+        if (!talent || talent->GetAmount() <= 0)
+            return false;
+
+        if (eventInfo.GetHitMask() & (PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK))
+        {
+            TimePoint now = GameTime::Now();
+            if (now < _nextBlockProc || !roll_chance(talent->GetAmount()))
+                return false;
+
+            _nextBlockProc = now + Milliseconds(GetSpellInfo()->ProcCooldown);
+            return true;
+        }
+
+        return (eventInfo.GetHitMask() & PROC_HIT_CRITICAL) && roll_chance(talent->GetAmount() * 2.5f);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        Unit* paladin = GetTarget();
+        paladin->CastSpell(paladin, SPELL_PAL_RECKONING_ATTACKS, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pal_reckoning::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+
+    TimePoint _nextBlockProc;
+};
+
+// 1326084 - Reckoning (the stored attacks, up to 4 stacks): a dummy whose one charge the next melee swing uses (client proc data); that
+// swing is followed by one extra attack per stack.
+class classic_spell_pal_reckoning_attacks : public AuraScript
+{
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        // the core performs added extra attacks only for a recorded extra attack spell
+        Unit* paladin = GetTarget();
+        paladin->SetLastExtraAttackSpell(GetId());
+        paladin->AddExtraAttacks(GetStackAmount());
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning_attacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 412019 - Sacred Shield: "Each time the target takes damage they gain a Sacred Shield, absorbing [36 * (38.258376 + 0.904195 * L + 0.161311 *
 // L * L) / 100] damage and increasing the Paladin's chance to critically hit with Flash of Light by 50% for up to 6 sec. In addition, causes
 // your Flash of Light to heal targets with Sacred Shield for an additional 100% over 12 sec. They cannot gain this effect more than once
@@ -1190,5 +1257,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_sanctified_judgement);
     RegisterSpellScript(classic_spell_pal_improved_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_holy_light_flash_of_light);
+    RegisterSpellScript(classic_spell_pal_reckoning);
+    RegisterSpellScript(classic_spell_pal_reckoning_attacks);
     RegisterSpellScript(classic_spell_pal_sacred_shield);
 }
