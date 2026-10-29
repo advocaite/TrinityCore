@@ -71,6 +71,7 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_PYROCLASM_STUN                = 18093,    // 3 sec stun
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -907,6 +908,57 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 18073 - Pyroclasm: "Gives your Soul Fire spell a $s1% chance to Stun the target for $18093d, and your Rain of Fire and Hellfire spells
+// a $s1% chance over their duration to Stun targets they damage for $18093d." Effect 0 is the chance (a dummy) and effect 1 triggers a
+// dummy spell (18350); with SPELL_ATTR3_CAN_PROC_FROM_PROCS and a 100% chance in the client data, the core made no proc data.
+// spell_proc lets Soul Fire hits and the ticks of Rain of Fire and Hellfire proc it. A tick rolls the chance spread over the ticks of
+// its channel, 1 - (1 - chance)^(1 / ticks), so a target that every tick damages is stunned at the talent's chance.
+class classic_talent_warl_pyroclasm : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_PYROCLASM_STUN });
+    }
+
+    // the ticks of the warlock's channel that a tick belongs to: Hellfire casts its ticks (5857, 11681, 11682), Rain of Fire's own
+    // periodic dummy (effect 2) is the tick
+    static uint32 GetChannelTicks(Unit const* warlock, SpellInfo const* tickSpell)
+    {
+        for (AuraEffect const* channel : warlock->GetAuraEffectsByType(SPELL_AURA_PERIODIC_TRIGGER_SPELL))
+            if (channel->GetSpellEffectInfo().TriggerSpell == tickSpell->Id)
+                return channel->GetTotalTicks();
+        if (AuraEffect const* channel = warlock->GetAuraEffect(tickSpell->Id, EFFECT_2))
+            return channel->GetTotalTicks();
+        return 1;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        Unit* target = eventInfo.GetActionTarget();
+        if (!spellInfo || !target || target == GetTarget())
+            return false;
+
+        float chance = float(GetEffect(EFFECT_0)->GetAmount());
+        if (!(spellInfo->SpellFamilyFlags[1] & 0x80))  // not Soul Fire: a tick of Rain of Fire or Hellfire
+            if (uint32 ticks = GetChannelTicks(GetTarget(), spellInfo); ticks > 1)
+                chance = 100.0f * (1.0f - std::pow(1.0f - chance / 100.0f, 1.0f / float(ticks)));
+        return roll_chance(chance);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_CWD_PYROCLASM_STUN, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_pyroclasm::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_pyroclasm::HandleProc, EFFECT_1, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1416,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_pyroclasm);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);

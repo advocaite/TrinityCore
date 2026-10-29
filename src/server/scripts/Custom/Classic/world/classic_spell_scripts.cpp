@@ -112,6 +112,17 @@ class classic_spell_ground_area_damage : public AuraScript
             Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
             caster->SendSpellNonMeleeDamageLog(&damageInfo);
             caster->DealSpellDamage(&damageInfo, true);
+
+            // a tick is periodic damage for procs, as a damage over time tick is (Pyroclasm on Rain of Fire)
+            ProcFlagsInit procVictim = PROC_FLAG_TAKE_HARMFUL_PERIODIC;
+            ProcFlagsHit hitMask = damageInfo.absorb ? PROC_HIT_ABSORB : PROC_HIT_NONE;
+            if (damageInfo.damage)
+            {
+                hitMask |= PROC_HIT_NORMAL;
+                procVictim |= PROC_FLAG_TAKE_ANY_DAMAGE;
+            }
+            DamageInfo procDamageInfo(damageInfo, DOT, BASE_ATTACK, hitMask);
+            Unit::ProcSkillsAndAuras(caster, target, PROC_FLAG_DEAL_HARMFUL_PERIODIC, procVictim, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask, nullptr, &procDamageInfo, nullptr);
         }
     }
 
