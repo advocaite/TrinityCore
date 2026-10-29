@@ -290,6 +290,30 @@ class classic_spell_weapon_extra_attack_chance : public AuraScript
     }
 };
 
+// 1289682 - Bloodthrill (talent): "Grants your Main Hand melee attacks against enemies afflicted by your Rend a $s1% chance to allow
+// an activation of Overpower." The client proc chance is 100%, so every melee attack gave one: main hand attacks on a target with the
+// warrior's Rend roll the rank's chance.
+class classic_spell_warr_bloodthrill : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        Unit* target = eventInfo.GetActionTarget();
+        if (!damageInfo || damageInfo->GetAttackType() != BASE_ATTACK || !target)
+            return false;
+
+        if (!target->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_WARRIOR, flag128(0x20, 0, 0, 0), GetTarget()->GetGUID()))
+            return false;   // Rend
+
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_warr_bloodthrill::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 403228 - Meathook (warrior ability): "Throw out a hooked chain to restrain the target and pull them toward you. May not be used on
 // enemies higher than level 61 or which are marked as boss enemies." The client spell is a dummy; the target jumps in front of the
 // warrior with 403233 (jump to destination, stun immunity while pulled).
@@ -984,6 +1008,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
+    RegisterSpellScript(classic_spell_warr_bloodthrill);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
 
