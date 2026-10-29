@@ -415,6 +415,9 @@ public:
             target->SetSpeedRate(MOVE_RUN, allSpeed);
             target->SetSpeedRate(MOVE_SWIM, allSpeed);
             target->SetSpeedRate(MOVE_FLIGHT, allSpeed);
+            target->SetSpeedRate(MOVE_RUN_BACK, allSpeed);
+            target->SetSpeedRate(MOVE_SWIM_BACK, allSpeed);
+            target->SetSpeedRate(MOVE_FLIGHT_BACK, allSpeed);
             return true;
         }
         return false;
