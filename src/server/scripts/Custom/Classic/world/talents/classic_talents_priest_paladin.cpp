@@ -1042,6 +1042,65 @@ class classic_spell_pal_improved_seal_of_fury : public AuraScript
     }
 };
 
+// 20210 - Illumination (talent): "After getting a critical effect from your Flash of Light, Holy Light, Light's Vigil, or Holy Shock heal
+// spell you have a $m1% chance to gain Mana equal to $m3% of the base cost of the spell." The talent triggered a dummy (18350) from any
+// spell and effects 1-3 are dummies, so it gave no mana. The spell_proc row limits it to critical heals of those spells; the script rolls
+// effect 0 and gives effect 2's percent of the base cost, as the vanilla Illumination energize 20272 (without its aura). The heals of Holy
+// Shock and Light's Vigil are triggered and cost nothing: the Holy Shock rank of the same level, or the Light's Vigil rank, has the cost.
+class classic_spell_pal_illumination : public AuraScript
+{
+    static constexpr uint32 SPELL_PAL_ILLUMINATION_ENERGIZE = 20272;
+
+    static int32 GetHealBaseCost(SpellInfo const* heal, Unit const* paladin)
+    {
+        if (int32 cost = GetClassicBaseManaCost(heal, paladin))
+            return cost;
+
+        if (heal->SpellFamilyFlags[0] & 0x200000)   // Holy Shock
+            for (uint32 rankId : { 20473u, 20929u, 20930u, 1311606u })
+                if (SpellInfo const* rank = sSpellMgr->GetSpellInfo(rankId, DIFFICULTY_NONE); rank && rank->SpellLevel == heal->SpellLevel)
+                    return GetClassicBaseManaCost(rank, paladin);
+
+        for (ClassicLightsVigilRank const& rank : ClassicLightsVigilRanks)
+            if (rank.PartyHeal == heal->Id)
+                if (SpellInfo const* vigil = sSpellMgr->GetSpellInfo(rank.Cast, DIFFICULTY_NONE))
+                    return GetClassicBaseManaCost(vigil, paladin);
+
+        return 0;
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_ILLUMINATION_ENERGIZE }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        SpellInfo const* heal = eventInfo.GetSpellInfo();
+        AuraEffect const* pct = GetEffect(EFFECT_2);
+        if (!heal || !pct)
+            return;
+
+        Unit* paladin = GetTarget();
+        int32 mana = CalculatePct(GetHealBaseCost(heal, paladin), pct->GetAmount());
+        if (mana > 0)
+            paladin->EnergizeBySpell(paladin, sSpellMgr->AssertSpellInfo(SPELL_PAL_ILLUMINATION_ENERGIZE, DIFFICULTY_NONE), mana, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pal_illumination::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_illumination::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // Holy Light (635, 639, 647, 1026, 1042, 3472, 10328, 10329, 25292) and Flash of Light (19750, 19939-19943):
 // - 19977, 19978, 19979 Blessing of Light (and 25890 Greater Blessing of Light): "increasing the effects of Holy Light spells used on the
 //   target by up to X and the effect Flash of Light spells used on the target by up to Y". Effect 0 is the Holy Light bonus, effect 1 the
@@ -1189,6 +1248,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_holy_shock_forever);
     RegisterSpellScript(classic_spell_pal_sanctified_judgement);
     RegisterSpellScript(classic_spell_pal_improved_seal_of_fury);
+    RegisterSpellScript(classic_spell_pal_illumination);
     RegisterSpellScript(classic_spell_pal_holy_light_flash_of_light);
     RegisterSpellScript(classic_spell_pal_sacred_shield);
 }
