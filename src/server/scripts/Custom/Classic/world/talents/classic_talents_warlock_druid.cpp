@@ -71,6 +71,12 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_DEMONIC_BRAND_TALENT          = 1293695,
+    SPELL_CWD_DEMONIC_BRAND                 = 1293696,  // on the target, its charges are the demon's attacks
+    SPELL_CWD_DEMONIC_BRAND_SHADOW          = 1293697,
+    SPELL_CWD_DEMONIC_BRAND_FIRE            = 1293698,
+    SPELL_CWD_DEMONIC_BRAND_PHYSICAL        = 1293699,
+    SPELL_CWD_UNHOLY_POWER                  = 18769,
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -907,6 +913,81 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 5676, 17919, 17920, 17921, 17922, 17923 - Searing Pain
+// 1293695 - Demonic Brand: "Your Searing Pain generates $s1% less threat and brands the target for $1293696d." (the brand is 1293696)
+class classic_talent_warl_demonic_brand_searing_pain : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_DEMONIC_BRAND_TALENT, SPELL_CWD_DEMONIC_BRAND });
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (Unit* target = GetHitUnit())
+            if (caster->HasAura(SPELL_CWD_DEMONIC_BRAND_TALENT))
+                caster->CastSpell(target, SPELL_CWD_DEMONIC_BRAND, CastSpellExtraArgs(GetSpell()));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_talent_warl_demonic_brand_searing_pain::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 1293696 - Demonic Brand: "The caster's pet deals an additional ${$<minDam>*$<mult>} to ${$<maxDam>*$<mult>} damage with its next $m2
+// attacks." Its charges come from 1293695 effect 1. The tooltip variables (SpellDescriptionVariables 1020): minDam is (level - 26) *
+// 1.5 + 14 + 0.078 * the higher of the warlock's Fire and Shadow spell damage, maxDam the same + 17 instead of 14, and mult is 1.1 for
+// each of Master Demonologist (Imp 23759, Succubus 23761) and Unholy Power (18769). A hit of the warlock's demon on the branded target
+// uses a charge: the demon deals the damage, Fire for the Imp (1293698), Physical for the Felguard (1293699), else Shadow (1293697).
+// The demon's own Master Demonologist aura adds that multiplier; Unholy Power's is applied here.
+class classic_talent_warl_demonic_brand : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_DEMONIC_BRAND_SHADOW, SPELL_CWD_DEMONIC_BRAND_FIRE, SPELL_CWD_DEMONIC_BRAND_PHYSICAL });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* warlock = GetCaster();
+        Unit* demon = eventInfo.GetActor();
+        return warlock && demon && demon->GetGUID() == warlock->GetPetGUID();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* warlock = GetCaster();
+        Unit* demon = eventInfo.GetActor();
+        if (!warlock || !demon)
+            return;
+
+        float spellDamage = float(std::max(warlock->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE), warlock->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW)));
+        float base = (float(warlock->GetLevel()) - 26.0f) * 1.5f + 0.078f * spellDamage;
+        float damage = frand(base + 14.0f, base + 17.0f);
+        if (warlock->HasAura(SPELL_CWD_UNHOLY_POWER))
+            damage *= 1.1f;
+
+        uint32 spellId = SPELL_CWD_DEMONIC_BRAND_SHADOW;
+        switch (GetDemonKind(demon->GetEntry()))
+        {
+            case DemonKind::Imp:      spellId = SPELL_CWD_DEMONIC_BRAND_FIRE; break;
+            case DemonKind::Felguard: spellId = SPELL_CWD_DEMONIC_BRAND_PHYSICAL; break;
+            default: break;
+        }
+        demon->CastSpell(GetTarget(), spellId, CastSpellExtraArgs(aurEff).AddSpellBP0(std::max(1, int32(damage))));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_demonic_brand::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_demonic_brand::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1445,8 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_demonic_brand_searing_pain);
+    RegisterSpellScript(classic_talent_warl_demonic_brand);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
