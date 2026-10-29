@@ -3102,9 +3102,11 @@ void WorldSession::HandleRandomizeCharNameOpcode(WorldPackets::Character::Genera
         return;
     }
 
+    // Classic 1.60: the client's character-create UI only fills its surname box when it generates the name itself, which
+    // it does (name and surname from NameGen for the selected race and sex) when the server reports no name. A server name
+    // would leave the surname empty.
     WorldPackets::Character::GenerateRandomCharacterNameResult result;
-    result.Success = true;
-    result.Name = sDB2Manager.GetNameGenEntry(packet.Race, packet.Sex);
+    result.Success = false;
 
     SendPacket(result.Write());
 }
