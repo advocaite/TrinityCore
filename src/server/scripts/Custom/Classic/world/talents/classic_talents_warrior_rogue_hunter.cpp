@@ -374,6 +374,23 @@ class classic_spell_rog_setup : public AuraScript
     }
 };
 
+// 13754 - Improved Kick, 13976 - Initiative, 14156 - Ruthlessness (talents): "a $m1% chance to ..." The chance is effect 0's rank value,
+// while the client proc chance is 100%, from any melee ability: every finisher silenced the target and gave combo points. The spell_proc
+// rows give each one its spells (Kick; Ambush, Garrote and Cheap Shot; finishing moves); the script rolls the amount, once per cast: the
+// part of an ability that hits the rogue (its combo point) doesn't roll.
+class classic_spell_rog_talent_chance : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        return eventInfo.GetActionTarget() != GetTarget() && roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_rog_talent_chance::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 14186 - Seal Fate: "Your critical strikes from abilities that add Combo Points have a $m1% chance to add an additional Combo Point.
 // (500ms cooldown)" spell_proc: crits only, 500 ms cooldown, triggered spells may proc (Shiv strike). 14189 adds the point on the target.
 class classic_spell_rog_seal_fate : public AuraScript
@@ -990,6 +1007,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     // rogue
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_rog_hack_and_slash", 13706u, 13709u, 1290312u);
     RegisterSpellScript(classic_spell_rog_setup);
+    RegisterSpellScript(classic_spell_rog_talent_chance);
     RegisterSpellScript(classic_spell_rog_seal_fate);
     RegisterSpellScript(classic_spell_rog_cutthroat);
     RegisterSpellScript(classic_spell_rog_offhand_strike);
