@@ -33,6 +33,21 @@ namespace Trainer
         return sSpellMgr->AssertSpellInfo(SpellId, DIFFICULTY_NONE)->HasEffect(SPELL_EFFECT_LEARN_SPELL);
     }
 
+    bool Spell::TeachesPetAbility() const
+    {
+        // Classic 1.60: pet trainers sell the hunter the hidden spells that teach a pet ability (e.g. 4195
+        // Great Stamina -> 4187). Buying one must put the spell into the hunter's spellbook so the Beast
+        // Training window can cast it; casting it on the spot only trains the currently summoned pet once and
+        // never lets the hunter train another pet. Profession ranks and the like teach a player spell and keep
+        // the cast-to-learn behaviour, so only triggers that are real pet abilities are rerouted.
+        for (SpellEffectInfo const& effect : sSpellMgr->AssertSpellInfo(SpellId, DIFFICULTY_NONE)->GetEffects())
+            if ((effect.Effect == SPELL_EFFECT_LEARN_SPELL || effect.Effect == SPELL_EFFECT_LEARN_PET_SPELL)
+                && effect.TriggerSpell && sSpellMgr->IsPetAbility(effect.TriggerSpell))
+                return true;
+
+        return false;
+    }
+
     Trainer::Trainer(uint32 id, Type type, std::string_view greeting, std::vector<Spell> spells) : _id(id), _type(type), _spells(std::move(spells))
     {
         _greeting[DEFAULT_LOCALE] = greeting;
@@ -112,7 +127,7 @@ namespace Trainer
         }
 
         // learn explicitly or cast explicitly
-        if (trainerSpell->IsCastable())
+        if (trainerSpell->IsCastable() && !trainerSpell->TeachesPetAbility())
         {
             player->CastSpell(player, trainerSpell->SpellId, true);
         }

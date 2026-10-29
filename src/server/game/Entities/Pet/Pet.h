@@ -137,6 +137,8 @@ class TC_GAME_API Pet final : public Guardian
         bool HasSpell(uint32 spell) const override;
 
         void LearnPetPassives();
+        void LearnClassicStartSpells();   // Classic 1.60: Growl + the family's combat abilities on a fresh hunter pet
+        void CheckLearning(uint32 spellId); // Classic 1.60: using an ability can teach the owner its training spell
         void CastPetAuras(bool current);
         void CastPetAura(PetAura const* aura);
         bool IsPetAura(Aura const* aura);

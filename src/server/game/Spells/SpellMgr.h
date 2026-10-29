@@ -719,6 +719,8 @@ class TC_GAME_API SpellMgr
 
         PetLevelupSpellSet const* GetPetLevelupSpellList(uint32 petFamily) const;
         PetDefaultSpellsEntry const* GetPetDefaultSpellsEntry(int32 id) const;
+        uint32 GetPetTeachSpell(uint32 petSpellId) const;   // classic: pet ability -> the spell that teaches it to a pet
+        bool IsPetAbility(uint32 spellId) const;            // spell appears on a pet family skill line
 
         // Spell area
         SpellAreaMapBounds GetSpellAreaMapBounds(uint32 spell_id) const;
@@ -757,6 +759,7 @@ class TC_GAME_API SpellMgr
         void LoadSpellRequired();
         void LoadSpellLearnSkills();
         void LoadSpellLearnSpells();
+        void LoadPetTeachSpells();
         void LoadSpellTargetPositions();
         void LoadSpellGroups();
         void LoadSpellGroupStackRules();
@@ -788,6 +791,8 @@ class TC_GAME_API SpellMgr
         SpellRequiredMap           mSpellReq;
         SpellLearnSkillMap         mSpellLearnSkills;
         SpellLearnSpellMap         mSpellLearnSpells;
+        std::unordered_map<uint32, uint32> mPetTeachSpells;  // Classic 1.60: pet ability -> hidden spell that teaches it to a pet
+        std::unordered_set<uint32> mPetAbilitySpells;       // spells that appear on a pet family skill line
         SpellLearnedBySpellMap     mSpellLearnedBySpells;
         SpellTargetPositionMap     mSpellTargetPositions;
         SpellSpellGroupMap         mSpellSpellGroup;
