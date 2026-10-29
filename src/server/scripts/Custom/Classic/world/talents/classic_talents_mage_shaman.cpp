@@ -45,6 +45,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
+    SPELL_MAGE_ARCANE_BLAST_BUFF            = 400573,   // per stack: Intellect % as spell damage, Arcane Blast mana cost +%
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
 };
 
@@ -356,6 +357,35 @@ class classic_spell_mage_heating_up : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 400574, 1239696, 1239697, 1239699, 1239700 - Arcane Blast: "Each time you cast Arcane Blast, you gain $400573s1% of your Intellect as
+// Spell Damage and the mana cost of Arcane Blast is increased by $400573s2%. Effect stacks up to $400573u times and lasts $400573d from
+// time of initial application." The client spell only deals damage: each cast adds a stack of 400573, and a new stack keeps the
+// remaining duration of the first one.
+class classic_spell_mage_arcane_blast : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_ARCANE_BLAST_BUFF });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        Aura const* stacks = caster->GetAura(SPELL_MAGE_ARCANE_BLAST_BUFF);
+        int32 const duration = stacks ? stacks->GetDuration() : 0;
+
+        caster->CastSpell(caster, SPELL_MAGE_ARCANE_BLAST_BUFF, CastSpellExtraArgs(GetSpell()));
+        if (duration > 0)
+            if (Aura* buff = caster->GetAura(SPELL_MAGE_ARCANE_BLAST_BUFF))
+                buff->SetDuration(duration);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_mage_arcane_blast::HandleAfterCast);
     }
 };
 
@@ -793,6 +823,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_arcane_blast);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
