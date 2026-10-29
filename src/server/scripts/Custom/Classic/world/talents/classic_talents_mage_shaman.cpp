@@ -359,6 +359,23 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 11213 - Arcane Concentration: "Gives you a $m1% chance of entering a Clearcasting state after any damage spell hits a target. The
+// Clearcasting state reduces the mana cost of your next damage spell by $/10;12536s1%." Effect 0 triggers 12536. The client data
+// proc chance is 100%; the chance is the talent amount, rolled on the mage's damage spell hits (spell_proc; the client data's 1 s
+// proc cooldown follows a Clearcasting).
+class classic_spell_mage_arcane_concentration : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(GetEffect(EFFECT_0)->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_arcane_concentration::CheckProc);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +810,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_arcane_concentration);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
