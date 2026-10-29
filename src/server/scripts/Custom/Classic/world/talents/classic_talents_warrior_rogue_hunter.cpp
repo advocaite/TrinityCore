@@ -771,6 +771,27 @@ class classic_spell_hun_rapid_killing_consumed : public AuraScript
     }
 };
 
+// 1310532 - Expose Prey (talent): "Grants your melee and ranged attacks against enemies afflicted by Hunter's Mark a $s1% chance to allow
+// an activation of Mongoose Bite. Lasts $1310726d." The client proc chance is 100%, from any attack, with or without Hunter's Mark:
+// attacks on a target with the hunter's Hunter's Mark roll the rank value. The activation 1310726 gives Mongoose Bite's aura state
+// (SpellInfo), and only Mongoose Bite uses it up (spell_proc).
+class classic_spell_hun_expose_prey : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Unit* target = eventInfo.GetActionTarget();
+        if (!target || !target->GetAuraEffect(SPELL_AURA_MOD_STALKED, SPELLFAMILY_HUNTER, flag128(0x400, 0, 0, 0), GetTarget()->GetGUID()))
+            return false;   // Hunter's Mark
+
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_hun_expose_prey::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 1310533 - Lacerating Strikes: "Your Mongoose Bite also causes the target to Bleed for damage equal to $s1% of the damage done by
 // Mongoose Bite over 21 sec" - bleed 1310536 (periodic damage every 3 sec), the total split over its ticks.
 class classic_spell_hun_lacerating_strikes : public AuraScript
@@ -1002,6 +1023,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_hun_spirit_bond);
     RegisterSpellScript(classic_spell_hun_rapid_recuperation);
     RegisterSpellScript(classic_spell_hun_rapid_killing_consumed);
+    RegisterSpellScript(classic_spell_hun_expose_prey);
     RegisterSpellScript(classic_spell_hun_lacerating_strikes);
     RegisterSpellAndAuraScriptPair(classic_spell_hun_kill_command, classic_spell_hun_kill_command_aura);
     RegisterSpellScript(classic_spell_hun_kill_command_pet);
