@@ -1137,7 +1137,7 @@ bool Loot::hasItemFor(Player const* player) const
             return true;
 
     if (NotNormalLootItemList const* ffaItems = Trinity::Containers::MapGetValuePtr(GetPlayerFFAItems(), player->GetGUID()))
-        if (std::ranges::any_of(*ffaItems, &NotNormalLootItem::is_looted))
+        if (std::ranges::any_of(*ffaItems, [](NotNormalLootItem const& ffaItem) { return !ffaItem.is_looted; }))
             return true;
 
     return false;
