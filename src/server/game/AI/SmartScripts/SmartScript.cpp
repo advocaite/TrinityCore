@@ -3615,7 +3615,8 @@ void SmartScript::ProcessEvent(SmartScriptHolder& e, Unit* unit, uint32 var0, ui
         }
         case SMART_EVENT_FRIENDLY_HEALTH_PCT:
         {
-            if (!me || me->IsInEvadeMode())
+            // Forever: classic healers only heal allies while engaged themselves (reverts upstream 1248bdffcb for this event)
+            if (!me || !me->IsEngaged())
                 return;
 
             Unit* unitTarget = nullptr;
