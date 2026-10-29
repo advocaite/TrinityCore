@@ -6956,10 +6956,8 @@ void ActivePlayerData::WriteUpdate(Mask const& changesMask, ByteBuffer& data, Pl
         {
             data << uint8(TransmogCostMinScalingLevel);
         }
-        if (changesMask[116])
-        {
-            data << int32(PetSpellPower);
-        }
+        // Classic 1.60 has no PetSpellPower: bit 116 is dropped from the header, so writing the value shifted every later field by 4 bytes
+        // (client crash reading an InvSlots guid past the end when a summon consumed a soul shard)
         if (changesMask[117])
         {
             data << float(UiHitModifier);
