@@ -97,6 +97,23 @@ class classic_spell_pri_inspiration : public AuraScript
     }
 };
 
+// 15326 - Blackout, 15257 - Shadow Weaving, 14531 - Martyrdom, 15270 - Spirit Tap (talents): "a $m1% chance to ..." The chance is effect
+// 0's rank value. Blackout and Shadow Weaving can proc from procs and had no restriction, so the core made no proc data for them and they
+// never procced; Martyrdom and Spirit Tap procced at the client data's 100%. The spell_proc rows give each one what its tooltip names
+// (Shadow damage spells, critical strikes taken, kills); the script rolls the amount.
+class classic_spell_pri_talent_chance : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pri_talent_chance::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 27811 - Blessed Recovery: "After being struck by a melee or ranged critical hit, or suffering more than 30% of your maximum Health from a
 // single attack, heal 8% of the damage taken over 6 sec. Refreshing this effect carries over any remaining healing." Effect 0 is the heal
 // percentage, effect 1 the health threshold. The heal is 27813 (1.60: periodic dummy, 3 ticks) whose amount holds the total; the remaining
@@ -1163,6 +1180,7 @@ void AddSC_classic_talents_priest_paladin()
 {
     // Priest
     RegisterSpellScript(classic_spell_pri_inspiration);
+    RegisterSpellScript(classic_spell_pri_talent_chance);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
     RegisterSpellScript(classic_spell_pri_blessed_recovery_hot);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending);
