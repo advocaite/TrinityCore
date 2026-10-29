@@ -45,6 +45,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
+    SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE  = 29077,    // restores its base points of mana
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
 };
 
@@ -356,6 +357,47 @@ class classic_spell_mage_heating_up : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 29074 - Master of Elements: "Your Fire and Frost critical strikes will refund $s1% of their base mana cost." The talent is a dummy
+// aura (spell_proc: Fire and Frost spell critical hits); 29077 restores the mana. The client data's 9 ms proc cooldown makes a
+// spell that crits several targets at once refund once.
+class classic_spell_mage_master_of_elements : public AuraScript
+{
+    // the flat cost plus the share of base mana, before cost modifiers
+    static int32 GetBaseManaCost(SpellInfo const* spellInfo, Unit const* caster)
+    {
+        for (SpellPowerEntry const* power : spellInfo->PowerCosts)
+            if (power && power->PowerType == POWER_MANA)
+                return power->ManaCost + int32(CalculatePct(float(caster->GetCreateMana()), power->PowerCostPct));
+        return 0;
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return eventInfo.GetSpellInfo() != nullptr;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* mage = GetTarget();
+        int32 const mana = CalculatePct(GetBaseManaCost(eventInfo.GetSpellInfo(), mage), aurEff->GetAmount());
+        if (mana > 0)
+            mage->CastSpell(mage, SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE, CastSpellExtraArgs(aurEff).AddSpellBP0(mana));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_master_of_elements::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_master_of_elements::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -793,6 +835,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_master_of_elements);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
