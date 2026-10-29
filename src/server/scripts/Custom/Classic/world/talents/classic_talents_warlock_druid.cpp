@@ -71,6 +71,7 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_SHADOW_TRANCE                 = 17941,    // Nightfall: the next Shadow Bolt is instant
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -907,6 +908,35 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 18094 - Nightfall: "Gives your Corruption, Drain Soul, Drain Life, and Wrack spells a $m1% chance to cause you to enter a Shadow
+// Trance after damaging the opponent. The Shadow Trance reduces the casting time of your next Shadow Bolt spell by $17941s1%." The
+// talent is a dummy aura with a 100% proc chance: spell_proc limits it to the damage of those spells, the script rolls the talent
+// amount and casts 17941, which the next Shadow Bolt uses up (spell_proc).
+class classic_talent_warl_nightfall : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_SHADOW_TRANCE });
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(GetEffect(EFFECT_0)->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(GetTarget(), SPELL_CWD_SHADOW_TRANCE, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_nightfall::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_nightfall::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1394,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_nightfall);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
