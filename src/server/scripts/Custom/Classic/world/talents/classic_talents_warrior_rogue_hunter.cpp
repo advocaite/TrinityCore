@@ -651,6 +651,33 @@ class classic_spell_hun_entrapment_frost_trap : public AuraScript
     }
 };
 
+// 19228 - Improved Wing Clip, 19407 - Improved Concussive Shot, 440529 - Resourcefulness (talents): "a $m1% chance to ..." The chance is
+// the rank value of the effect that procs, while the client proc chance is 100%, from any attack: Wing Clip's root and Concussive Shot's
+// stun came with every Auto Shot. The spell_proc rows give each talent the spell or the hits from its tooltip; the script rolls the amount.
+class classic_spell_hun_talent_chance : public AuraScript
+{
+public:
+    explicit classic_spell_hun_talent_chance(SpellEffIndex effIndex) : _effIndex(effIndex) { }
+
+private:
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, _effIndex } });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_hun_talent_chance::CheckProc, _effIndex, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+
+    SpellEffIndex _effIndex;
+};
+
 // 19578 - Spirit Bond: "While your pet is active, you and your pet will regenerate $m1% of total health every $m2 sec." $m2 is 10 at
 // rank 1 and 5 at rank 2 (trait curve on the dummy effect 1). The client regen spells are area pet auras (TC: cast by the pet, on the pet
 // and its owner): 1310725 every 10 sec, 24529 every 5 sec. The pet gets the right one when the talent applies and on every heartbeat.
@@ -999,6 +1026,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     // hunter
     RegisterSpellScript(classic_spell_hun_entrapment_trap);
     RegisterSpellScript(classic_spell_hun_entrapment_frost_trap);
+    RegisterSpellScriptWithArgs(classic_spell_hun_talent_chance, "classic_spell_hun_talent_chance", EFFECT_0);
+    RegisterSpellScriptWithArgs(classic_spell_hun_talent_chance, "classic_spell_hun_resourcefulness", EFFECT_1);
     RegisterSpellScript(classic_spell_hun_spirit_bond);
     RegisterSpellScript(classic_spell_hun_rapid_recuperation);
     RegisterSpellScript(classic_spell_hun_rapid_killing_consumed);
