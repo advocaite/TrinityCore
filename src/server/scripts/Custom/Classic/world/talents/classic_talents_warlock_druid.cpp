@@ -907,6 +907,23 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 412758, 1293812, 1293813 - Incinerate: "Deals $s1 Fire damage to your target and an additional $m2% damage if the target is afflicted
+// by Immolate." Effect 1 is a dummy: the damage gets its amount in % when the target has the warlock's Immolate.
+class classic_talent_warl_incinerate : public SpellScript
+{
+    void CalcImmolateBonus(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        // Immolate: warlock family flag 0x4
+        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_WARLOCK, flag128(0x4, 0, 0, 0), GetCaster()->GetGUID()))
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValue(GetCaster()));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_talent_warl_incinerate::CalcImmolateBonus);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1381,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_incinerate);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
