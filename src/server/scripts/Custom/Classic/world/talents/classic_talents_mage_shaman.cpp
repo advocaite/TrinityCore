@@ -45,6 +45,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
+    SPELL_MAGE_COMBUSTION_CRIT              = 28682,    // +10% Fire critical strike chance per stack, 10 stacks
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
 };
 
@@ -356,6 +357,45 @@ class classic_spell_mage_heating_up : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 11129 - Combustion: "When activated, this spell causes each of your Fire damage spell hits to increase your critical strike
+// chance with Fire damage spells by $28682s1%. This effect lasts until you have caused $n non-periodic critical strikes with Fire
+// spells." The cast gives the first stack of 28682 (effect 1). As in vanilla, every Fire damage spell hit adds a stack (spell_proc:
+// the mage's Fire damage spell hits), only critical strikes use a charge, and the last charge ends Combustion and 28682.
+class classic_spell_mage_combustion : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_COMBUSTION_CRIT });
+    }
+
+    void KeepChargeOnHit(ProcEventInfo& eventInfo)
+    {
+        if (!(eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
+            PreventDefaultAction();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+
+        // a critical strike already used its charge: after the last one Combustion ends instead
+        if (GetCharges() > 0)
+            GetTarget()->CastSpell(GetTarget(), SPELL_MAGE_COMBUSTION_CRIT, CastSpellExtraArgs(aurEff));
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_MAGE_COMBUSTION_CRIT);
+    }
+
+    void Register() override
+    {
+        DoPrepareProc += AuraProcFn(classic_spell_mage_combustion::KeepChargeOnHit);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_combustion::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_mage_combustion::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -793,6 +833,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_combustion);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
