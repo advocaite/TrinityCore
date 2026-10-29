@@ -701,6 +701,38 @@ class classic_spell_pal_redoubt : public AuraScript
     }
 };
 
+// 1311034 - Iron Creed (talent): "While Righteous Fury is active, Holy Strike also reduces your damage taken by $m2% for $1311033d." Effect
+// 1 casts 1311033 with its rank value, from any melee ability (client data), and as a positive value, which raised the damage taken:
+// only Holy Strike (spell_proc) while Righteous Fury is active, with the value as a reduction.
+class classic_spell_pal_iron_creed : public AuraScript
+{
+    static constexpr uint32 SPELL_PAL_RIGHTEOUS_FURY = 25780;
+    static constexpr uint32 SPELL_PAL_IRON_CREED_BUFF = 1311033;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_RIGHTEOUS_FURY, SPELL_PAL_IRON_CREED_BUFF });
+    }
+
+    bool CheckProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        return GetTarget()->HasAura(SPELL_PAL_RIGHTEOUS_FURY);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        Unit* paladin = GetTarget();
+        paladin->CastSpell(paladin, SPELL_PAL_IRON_CREED_BUFF, CastSpellExtraArgs(aurEff).AddSpellBP0(-aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pal_iron_creed::CheckProc, EFFECT_1, SPELL_AURA_PROC_TRIGGER_SPELL_WITH_VALUE);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_iron_creed::HandleProc, EFFECT_1, SPELL_AURA_PROC_TRIGGER_SPELL_WITH_VALUE);
+    }
+};
+
 // 426065 - Infusion of Light: "Your Holy Shock and Flash of Light critical hits reduce the cast time of your next Holy Light cast within
 // 15 sec by 1.0 sec." Crits of Holy Shock / Flash of Light (spell_proc family mask) give 437063 (Holy Light cast time, 1 charge) with the
 // talent amount.
@@ -1180,6 +1212,7 @@ void AddSC_classic_talents_priest_paladin()
     // Paladin
     RegisterSpellScript(classic_spell_pal_eye_for_an_eye);
     RegisterSpellScript(classic_spell_pal_redoubt);
+    RegisterSpellScript(classic_spell_pal_iron_creed);
     RegisterSpellScript(classic_spell_pal_infusion_of_light);
     RegisterSpellScript(classic_spell_pal_consecrated_ground);
     RegisterSpellScript(classic_spell_pal_lights_vigil);
