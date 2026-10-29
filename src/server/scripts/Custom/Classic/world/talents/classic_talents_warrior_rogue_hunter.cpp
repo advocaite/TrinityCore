@@ -112,6 +112,36 @@ class classic_spell_warr_stance_rage : public AuraScript
     }
 };
 
+// 402927 - Victory Rush: "Instantly attack the target causing ${1+$AP*$m3/100} damage and healing you for $s2% of your maximum health.
+// Only useable within $402975d after you kill a non-trivial enemy." Effect 2 is a dummy that holds the attack power percent, so the
+// damage was 1. The cast uses up Victorious (402975).
+class classic_spell_warr_victory_rush : public SpellScript
+{
+    static constexpr uint32 SPELL_WARRIOR_VICTORIOUS = 402975;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_VICTORIOUS }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void CalcAttackPowerDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* warrior = GetCaster();
+        flatMod += int32(CalculatePct(warrior->GetTotalAttackPowerValue(BASE_ATTACK), GetEffectInfo(EFFECT_2).CalcValue(warrior)));
+    }
+
+    void HandleAfterCast()
+    {
+        GetCaster()->RemoveAurasDueToSpell(SPELL_WARRIOR_VICTORIOUS);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warr_victory_rush::CalcAttackPowerDamage);
+        AfterCast += SpellCastFn(classic_spell_warr_victory_rush::HandleAfterCast);
+    }
+};
+
 // 12317 - Enrage (talent): "Gives you a 30% chance to deal $m1% increased Physical damage for 12 sec after being the victim of any
 // damaging attack." The 30% is the talent proc chance (client data); the buff is the vanilla Enrage 12880 (physical damage done) with the
 // rank amount.
@@ -981,6 +1011,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
 {
     // warrior
     RegisterSpellScript(classic_spell_warr_stance_rage);
+    RegisterSpellScript(classic_spell_warr_victory_rush);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
