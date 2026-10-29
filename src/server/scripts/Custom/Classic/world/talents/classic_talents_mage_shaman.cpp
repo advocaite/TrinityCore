@@ -168,9 +168,19 @@ class classic_spell_mage_ignite_dot : public AuraScript
 
 // 11170 - Shatter: "Increases the critical strike chance of all your spells against Frozen targets by 1%" (rank amount).
 // 400647 - Fingers of Frost: "treats your next 2 spells cast as if the target were Frozen": every cast mage damage spell uses
-// one charge of 400670 and counts as hitting a Frozen target (for Shatter). Bound to all player mage damage spells.
+// one charge of 400670 and counts as hitting a Frozen target (for Shatter and Ice Lance). Bound to all player mage damage spells.
 class classic_spell_mage_frozen_target : public SpellScript
 {
+public:
+    bool IsFrozen(Unit const* victim)
+    {
+        Unit* caster = GetCaster();
+        return _fingersOfFrost
+            || (GetSpell()->IsTriggered() && caster->HasAura(SPELL_MAGE_FINGERS_OF_FROST_STACKS))
+            || victim->HasAuraState(AURA_STATE_FROZEN, GetSpellInfo(), caster);
+    }
+
+private:
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_MAGE_FINGERS_OF_FROST_STACKS });
@@ -191,15 +201,8 @@ class classic_spell_mage_frozen_target : public SpellScript
 
     void CalcCritChance(Unit const* victim, float& critChance)
     {
-        Unit* caster = GetCaster();
-        AuraEffect const* shatter = caster->GetAuraEffect(SPELL_MAGE_SHATTER, EFFECT_0);
-        if (!shatter)
-            return;
-
-        bool const frozen = _fingersOfFrost
-            || (GetSpell()->IsTriggered() && caster->HasAura(SPELL_MAGE_FINGERS_OF_FROST_STACKS))
-            || victim->HasAuraState(AURA_STATE_FROZEN, GetSpellInfo(), caster);
-        if (frozen)
+        AuraEffect const* shatter = GetCaster()->GetAuraEffect(SPELL_MAGE_SHATTER, EFFECT_0);
+        if (shatter && IsFrozen(victim))
             critChance += float(shatter->GetAmount());
     }
 
@@ -210,6 +213,29 @@ class classic_spell_mage_frozen_target : public SpellScript
     }
 
     bool _fingersOfFrost = false;
+};
+
+// 1312002, 400640, 1240044-1240047 - Ice Lance: "Deals $s2% increased damage to Frozen targets." (effect 1, a dummy). Frozen as
+// for Shatter, Fingers of Frost included (classic_spell_mage_frozen_target, bound to Ice Lance too).
+class classic_spell_mage_ice_lance : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void CalcFrozenDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        classic_spell_mage_frozen_target* frozenTarget = GetSpell()->GetScript<classic_spell_mage_frozen_target>();
+        bool const frozen = frozenTarget ? frozenTarget->IsFrozen(victim) : victim->HasAuraState(AURA_STATE_FROZEN, GetSpellInfo(), GetCaster());
+        if (frozen)
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValue(GetCaster()));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_ice_lance::CalcFrozenDamage);
+    }
 };
 
 // 400670 - Fingers of Frost (charges): the aura state ignore buff 400669 ends with the last charge
@@ -788,6 +814,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_ignite);
     RegisterSpellScript(classic_spell_mage_ignite_dot);
     RegisterSpellScript(classic_spell_mage_frozen_target);
+    RegisterSpellScript(classic_spell_mage_ice_lance);
     RegisterSpellScript(classic_spell_mage_fingers_of_frost_charges);
     RegisterSpellScript(classic_spell_mage_fingers_of_frost);
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
