@@ -1222,8 +1222,65 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
     }
 };
 
+enum ClassicConeOfCold
+{
+    SPELL_MAGE_CONE_OF_COLD_RANK_5  = 10161     // effects 2-4: number of targets, extra slow, extra seconds (for every rank)
+};
+
+// 120, 8492, 10159, 10160, 10161 - Cone of Cold: "Targets in a cone in front of the caster take X Frost damage and are slowed by
+// $s1% for $d. The first $10161s3 targets hit by this cone are slowed by an additional $10161s4% for an additional $10161s5 sec."
+// The tooltip of every rank names rank 5's values (its dummy effects 2-4). The targets closest to the mage are the first hit: their
+// slow (effect 0) gets the extra amount and duration.
+class classic_spell_mage_cone_of_cold : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_MAGE_CONE_OF_COLD_RANK_5, EFFECT_4 } });
+    }
+
+    void SelectFirstTargets(std::list<WorldObject*>& targets)
+    {
+        SpellInfo const* rank5 = sSpellMgr->AssertSpellInfo(SPELL_MAGE_CONE_OF_COLD_RANK_5, GetCastDifficulty());
+        std::size_t const count = std::size_t(std::max(0, rank5->GetEffect(EFFECT_2).CalcValueAsInt()));
+
+        Unit* caster = GetCaster();
+        std::vector<WorldObject*> closest(targets.begin(), targets.end());
+        std::ranges::sort(closest, {}, [caster](WorldObject const* target) { return caster->GetExactDist2dSq(target); });
+        if (closest.size() > count)
+            closest.resize(count);
+
+        for (WorldObject const* target : closest)
+            _firstTargets.insert(target->GetGUID());
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* target = GetHitUnit();
+        Aura* slow = GetHitAura();
+        if (!target || !slow || !_firstTargets.contains(target->GetGUID()))
+            return;
+
+        SpellInfo const* rank5 = sSpellMgr->AssertSpellInfo(SPELL_MAGE_CONE_OF_COLD_RANK_5, GetCastDifficulty());
+        if (AuraEffect* speed = slow->GetEffect(EFFECT_0))
+            speed->ChangeAmount(speed->GetAmount() + rank5->GetEffect(EFFECT_3).CalcValue());
+
+        int32 const duration = slow->GetMaxDuration() + rank5->GetEffect(EFFECT_4).CalcValueAsInt() * IN_MILLISECONDS;
+        slow->SetMaxDuration(duration);
+        slow->SetDuration(duration);
+    }
+
+    void Register() override
+    {
+        OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(classic_spell_mage_cone_of_cold::SelectFirstTargets, EFFECT_0, TARGET_UNIT_CONE_ENEMY_24);
+        AfterHit += SpellHitFn(classic_spell_mage_cone_of_cold::HandleAfterHit);
+    }
+
+    GuidUnorderedSet _firstTargets;
+};
+
 void AddSC_classic_spell_scripts()
 {
+    RegisterSpellScript(classic_spell_mage_cone_of_cold);
     RegisterSpellScript(classic_spell_warr_gore_drinker);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
     RegisterSpellScript(classic_spell_tauren_cultivation);
