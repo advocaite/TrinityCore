@@ -492,6 +492,35 @@ class classic_spell_pri_power_in_light : public SpellScript
     }
 };
 
+// 15407, 17311, 17312, 17313, 17314, 18807 - Mind Flay, with 1225139 - Improved Mind Flay (talent): "Each instance of damage of Mind Flay
+// deals $s1% more damage than its previous instance of damage." The talent is a dummy aura, so the ticks stayed equal: each tick after
+// the first deals the rank's percent more than the one before.
+class classic_spell_pri_improved_mind_flay : public AuraScript
+{
+    static constexpr uint32 SPELL_PRIEST_IMPROVED_MIND_FLAY = 1225139;
+
+    void HandleTick(AuraEffect const* aurEff)
+    {
+        Unit* priest = GetCaster();
+        AuraEffect const* talent = priest ? priest->GetAuraEffect(SPELL_PRIEST_IMPROVED_MIND_FLAY, EFFECT_0) : nullptr;
+        AuraEffect* damage = GetEffect(aurEff->GetEffIndex());
+        if (!talent || talent->GetAmount() <= 0 || !damage)
+            return;
+
+        if (aurEff->GetTickNumber() <= 1)
+            _firstTick = damage->GetAmount();
+        else
+            damage->ChangeAmount(_firstTick * std::pow(1.0f + float(talent->GetAmount()) / 100.0f, float(aurEff->GetTickNumber() - 1)));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_pri_improved_mind_flay::HandleTick, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+
+    SpellEffectValue _firstTick = 0;
+};
+
 // 1310076 - Early Demise: "Increases Shadow Word: Death's critical strike chance on targets at or below 20% health by 30%." Effect 0 is the
 // crit bonus, effect 1 the health threshold. Bound to the Shadow Word: Death ranks.
 class classic_spell_pri_early_demise : public SpellScript
@@ -1173,6 +1202,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_renewed_hope_crit);
     RegisterSpellScript(classic_spell_pri_divine_aegis);
     RegisterSpellScript(classic_spell_pri_power_in_light);
+    RegisterSpellScript(classic_spell_pri_improved_mind_flay);
     RegisterSpellScript(classic_spell_pri_early_demise);
     RegisterSpellScript(classic_spell_pri_litany_of_light);
     RegisterSpellScript(classic_spell_pri_contingency_plan);
