@@ -336,6 +336,40 @@ class classic_spell_warr_meathook : public SpellScript
     }
 };
 
+// 1310222 - Spearing Strike (talent ability): "A brutal attack that deals $s2% weapon damage. Deals an additional ${$s2*$s3}% weapon
+// damage against Giants, Dragonkin, and mounted targets. Mounted targets are dismounted." Effect 2 is a dummy that holds the multiplier,
+// so the bonus and the dismount were missing.
+class classic_spell_warr_spearing_strike : public SpellScript
+{
+    static bool IsSpearingTarget(Unit const* target)
+    {
+        uint32 type = target->GetCreatureType();
+        return target->IsMounted() || type == CREATURE_TYPE_GIANT || type == CREATURE_TYPE_DRAGONKIN;
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleHit()
+    {
+        Unit* target = GetHitUnit();
+        if (!target || !IsSpearingTarget(target))
+            return;
+
+        // the weapon damage effects deal $s2%: the bonus is that times $s3
+        SetHitDamage(GetHitDamage() + int32(GetHitDamage() * GetEffectInfo(EFFECT_2).CalcValue(GetCaster())));
+        if (target->IsMounted())
+            target->RemoveAurasByType(SPELL_AURA_MOUNTED);
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(classic_spell_warr_spearing_strike::HandleHit);
+    }
+};
+
 /*######
 ## Rogue
 ######*/
@@ -986,6 +1020,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
+    RegisterSpellScript(classic_spell_warr_spearing_strike);
 
     // rogue
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_rog_hack_and_slash", 13706u, 13709u, 1290312u);
