@@ -965,6 +965,29 @@ class classic_spell_pal_holy_shock_forever : public SpellScript
     }
 };
 
+// 1310994 - Swift Judgement (talent): "Finishes the remaining cooldown on your Judgement ability and reduces the Mana cost of your next
+// Judgement by $s1%." The cost is the aura's spell modifier, which the next Judgement uses up (spell_proc). The cooldown part is no
+// effect of the spell, so it never happened: the cast finishes Judgement's cooldown.
+class classic_spell_pal_swift_judgement : public SpellScript
+{
+    static constexpr uint32 SPELL_PAL_JUDGEMENT = 20271;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_JUDGEMENT });
+    }
+
+    void HandleAfterCast()
+    {
+        GetCaster()->GetSpellHistory()->ResetCooldown(SPELL_PAL_JUDGEMENT, true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_pal_swift_judgement::HandleAfterCast);
+    }
+};
+
 // 20271 - Judgement (extra script) for 1311074 Sanctified Judgement: "Gives your Judgement ability a 100% chance to return 60% of the Mana
 // cost of the judged seal." Effect 0 is the chance, effect 1 the percentage; the energize is 1311077.
 class classic_spell_pal_sanctified_judgement : public SpellScript
@@ -1187,6 +1210,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_holy_shock_lights_vigil);
     RegisterSpellScript(classic_spell_pal_lights_vigil_party_heal);
     RegisterSpellScript(classic_spell_pal_holy_shock_forever);
+    RegisterSpellScript(classic_spell_pal_swift_judgement);
     RegisterSpellScript(classic_spell_pal_sanctified_judgement);
     RegisterSpellScript(classic_spell_pal_improved_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_holy_light_flash_of_light);
