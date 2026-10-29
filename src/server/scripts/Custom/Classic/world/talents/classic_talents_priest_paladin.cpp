@@ -470,6 +470,52 @@ class classic_spell_pri_divine_aegis : public AuraScript
     }
 };
 
+// 1326159 - Dark Inspiration (talent): "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration, increasing yours and your
+// party's Spirit by $m1% for $1326168d." A dummy aura with no proc data, so it did nothing. Mind Blast's hit, and the end of a Mind Flay
+// that ran its full duration, cast 1326168 (the party Spirit buff) with the rank's percent.
+static void CastClassicDarkInspiration(Unit* priest)
+{
+    if (AuraEffect const* talent = priest->GetAuraEffect(1326159, EFFECT_0); talent && talent->GetAmount() > 0)
+        priest->CastSpell(priest, 1326168, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(talent->GetAmount()));
+}
+
+// 8092, 8102, 8103, 8104, 8105, 8106, 10945, 10946, 10947 - Mind Blast
+class classic_spell_pri_dark_inspiration_mind_blast : public SpellScript
+{
+    bool Load() override
+    {
+        return GetCaster()->HasAura(1326159);
+    }
+
+    void HandleAfterHit()
+    {
+        CastClassicDarkInspiration(GetCaster());
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_pri_dark_inspiration_mind_blast::HandleAfterHit);
+    }
+};
+
+// 15407, 17311, 17312, 17313, 17314, 18807 - Mind Flay
+class classic_spell_pri_dark_inspiration_mind_flay : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
+            return;
+
+        if (Unit* priest = GetCaster())
+            CastClassicDarkInspiration(priest);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_dark_inspiration_mind_flay::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 1309969 - Power in Light: "Your Smite and Penance spells deal 15% increased damage to targets afflicted with your Holy Fire." Bound to
 // Smite (all ranks) and the Penance damage spells.
 class classic_spell_pri_power_in_light : public SpellScript
@@ -1172,6 +1218,8 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_renewed_hope);
     RegisterSpellScript(classic_spell_pri_renewed_hope_crit);
     RegisterSpellScript(classic_spell_pri_divine_aegis);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_blast);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_flay);
     RegisterSpellScript(classic_spell_pri_power_in_light);
     RegisterSpellScript(classic_spell_pri_early_demise);
     RegisterSpellScript(classic_spell_pri_litany_of_light);
