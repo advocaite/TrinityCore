@@ -678,6 +678,22 @@ class classic_spell_pal_eye_for_an_eye : public AuraScript
     }
 };
 
+// 20150 - Shield Specialization (paladin talent): "gives your blocks a $m2% chance to restore $1310925m1% of your maximum Mana. May only
+// occur once every $proccooldown sec." The chance is effect 1's rank value, while the client proc chance is 100%, from any hit taken:
+// blocks (spell_proc) roll it.
+class classic_spell_pal_shield_specialization : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pal_shield_specialization::CheckProc, EFFECT_1, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 // 20127 - Redoubt: "Damaging melee attacks against you have a 10% chance to increase your chance to block by X%. Lasts 10 sec or 5 blocks."
 // (20128 with the talent amount; the 10% chance and the melee hits are the talent's own proc data)
 class classic_spell_pal_redoubt : public AuraScript
@@ -1179,6 +1195,7 @@ void AddSC_classic_talents_priest_paladin()
 
     // Paladin
     RegisterSpellScript(classic_spell_pal_eye_for_an_eye);
+    RegisterSpellScript(classic_spell_pal_shield_specialization);
     RegisterSpellScript(classic_spell_pal_redoubt);
     RegisterSpellScript(classic_spell_pal_infusion_of_light);
     RegisterSpellScript(classic_spell_pal_consecrated_ground);
