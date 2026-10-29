@@ -1159,6 +1159,46 @@ class classic_spell_pal_sacred_shield : public AuraScript
     TimePoint _nextShield = TimePoint::min();
 };
 
+// 9452 - Vindication (talent): "Gives your damaging melee attacks a chance to reduce the target's Attack Power by ${$m1/-3*$440667m1}, and
+// increase your Attack Power by $m1% for $440667d." Both effects are dummies, so it did nothing. Each damaging melee attack (client proc
+// data) puts 440667 on the target with the rank's third of its attack power reduction, and 440668 on the paladin with the rank's percent.
+class classic_spell_pal_vindication : public AuraScript
+{
+    static constexpr uint32 SPELL_PAL_VINDICATION_DEBUFF = 440667;
+    static constexpr uint32 SPELL_PAL_VINDICATION_BUFF = 440668;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_VINDICATION_BUFF }) && ValidateSpellEffect({ { SPELL_PAL_VINDICATION_DEBUFF, EFFECT_1 } });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* paladin = GetTarget();
+        Unit* target = eventInfo.GetActionTarget();
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        float rank = float(aurEff->GetAmount());
+        if (!target || target == paladin || rank <= 0.0f || !damageInfo || !damageInfo->GetDamage())
+            return;
+
+        // the debuff's amounts grow with the level, and a base points override would get that growth twice: set the rank's share after
+        SpellInfo const* debuffInfo = sSpellMgr->AssertSpellInfo(SPELL_PAL_VINDICATION_DEBUFF, GetCastDifficulty());
+        paladin->CastSpell(target, SPELL_PAL_VINDICATION_DEBUFF, CastSpellExtraArgs(aurEff));
+        if (Aura* debuff = target->GetAura(SPELL_PAL_VINDICATION_DEBUFF, paladin->GetGUID()))
+            for (AuraEffect* effect : debuff->GetAuraEffects())
+                if (effect)
+                    effect->ChangeAmount(debuffInfo->GetEffect(effect->GetEffIndex()).CalcValue(paladin) * rank / 3.0f);
+        paladin->CastSpell(paladin, SPELL_PAL_VINDICATION_BUFF, CastSpellExtraArgs(aurEff).AddSpellBP0(rank));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_vindication::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_talents_priest_paladin()
 {
     // Priest
@@ -1191,4 +1231,5 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_improved_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_holy_light_flash_of_light);
     RegisterSpellScript(classic_spell_pal_sacred_shield);
+    RegisterSpellScript(classic_spell_pal_vindication);
 }
