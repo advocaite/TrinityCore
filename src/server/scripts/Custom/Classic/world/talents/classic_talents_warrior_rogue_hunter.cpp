@@ -194,6 +194,34 @@ class classic_spell_warr_blood_craze : public AuraScript
     }
 };
 
+// 12319 - Flurry (talent): "Increases your melee attack speed by $m1% for your next $12966n swings after dealing a melee critical
+// strike." A dummy aura, so it did nothing. Each melee critical strike (spell_proc) casts the vanilla Flurry buff 12966, whose 3
+// charges are the swings, with the rank's attack speed.
+class classic_spell_warr_flurry : public AuraScript
+{
+    static constexpr uint32 SPELL_WARRIOR_FLURRY_BUFF = 12966;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_FLURRY_BUFF });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        if (aurEff->GetAmountAsInt() <= 0)
+            return;
+
+        Unit* warrior = GetTarget();
+        warrior->CastSpell(warrior, SPELL_WARRIOR_FLURRY_BUFF, CastSpellExtraArgs(aurEff).AddSpellBP0(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_warr_flurry::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 1290261 - Weaponmaster (warrior) and 13960 - Hack and Slash (rogue), Forever talents: "Gives your melee weapon attacks a benefit
 // depending on the weapon." The client data has a hidden passive per weapon group with the weapon requirement (SpellEquippedItems):
 //   Weaponmaster:   $s1 crit    Axe/Polearm -> 12700 (aura 290)     $s2 armor ignored  Mace/Staff -> 12284 (aura 280)
@@ -983,6 +1011,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_stance_rage);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
     RegisterSpellScript(classic_spell_warr_blood_craze);
+    RegisterSpellScript(classic_spell_warr_flurry);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
