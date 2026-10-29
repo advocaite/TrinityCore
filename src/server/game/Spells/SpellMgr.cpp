@@ -3744,6 +3744,12 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(5); // 40yd
     });
 
+    // Improved Concussive Shot (Classic 1.60): the stun has the Self Only range, so it failed at the shot's target
+    ApplySpellFix({ 19410 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(13); // 50000yd, as the Improved Wing Clip root
+    });
+
     // Nether Portal - Perseverence
     ApplySpellFix({ 30421 }, [](SpellInfo* spellInfo)
     {
