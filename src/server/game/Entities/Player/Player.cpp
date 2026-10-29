@@ -24280,6 +24280,10 @@ void Player::StartTaxiMovement(uint32 mountDisplayId, uint32 path, uint32 pathNo
     // remove fake death
     RemoveAurasWithInterruptFlags(SpellAuraInterruptFlags::Interacting);
 
+    // Forever: classic dismisses the pet for the flight and Dismount() on landing resummons it; left out, the pet
+    // stays behind, falls out of visibility range and is removed with its reagent (soul shard) refunded.
+    UnsummonPetTemporaryIfAny();
+
     if (mountDisplayId)
         Mount(mountDisplayId);
 
