@@ -725,6 +725,33 @@ class classic_spell_pal_infusion_of_light : public AuraScript
     }
 };
 
+// 678, 679, 680, 1866, 2495, 5569, 10332, 10333 - Holy Strike: "An instant strike that causes $m2% weapon damage plus an additional $s1 as
+// Holy damage." The weapon damage code adds effect 0's bonus to the weapon damage before effect 1's percent applies, so the bonus was
+// halved along with the weapon, and the spell power of its coefficient never counted. Effect 2, a script effect, adds what is missing.
+class classic_spell_pal_holy_strike : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleBonus(SpellEffIndex /*effIndex*/)
+    {
+        Unit* paladin = GetCaster();
+        SpellEffectInfo const& bonus = GetEffectInfo(EFFECT_0);
+        float weaponPct = float(GetEffectInfo(EFFECT_1).CalcValue(paladin)) / 100.0f;
+        float missing = float(bonus.CalcValue(paladin, nullptr, GetHitUnit())) * (1.0f - weaponPct)
+            + paladin->SpellBaseDamageBonusDone(GetSpellInfo()->GetSchoolMask()) * bonus.BonusCoefficient;
+        if (missing > 0.0f)
+            SetHitDamage(GetHitDamage() + int32(missing));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_holy_strike::HandleBonus, EFFECT_2, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 // 1280353 - Consecration (Consecrated Ground debuff): "Gives your Holy spells 10% increased damage against the first 4 enemies that enter your
 // Consecration." The debuff (Holy damage taken from the caster) has no points in the data: it takes the paladin's Consecrated Ground
 // (1310905) amount, nothing without the talent.
@@ -1181,6 +1208,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_eye_for_an_eye);
     RegisterSpellScript(classic_spell_pal_redoubt);
     RegisterSpellScript(classic_spell_pal_infusion_of_light);
+    RegisterSpellScript(classic_spell_pal_holy_strike);
     RegisterSpellScript(classic_spell_pal_consecrated_ground);
     RegisterSpellScript(classic_spell_pal_lights_vigil);
     RegisterSpellScript(classic_spell_pal_lights_vigil_mark);
