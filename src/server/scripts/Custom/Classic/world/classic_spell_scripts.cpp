@@ -52,9 +52,11 @@
 ######*/
 
 // Classic 1.60 ground spells (official client data): the spell creates an area trigger (effect 1) and puts a periodic dummy aura
-// on the caster (effect 2); every tick damages the enemies inside the caster's area trigger of that spell. The client data has
-// no damage spell or per-rank damage for them (placeholder values on effect 0): the tick damage per rank is the vanilla one
-// (VMaNGOS spell_template, persistent area aura base points + 1), the spell power share per tick the vanilla coefficient.
+// on the caster (effect 2); every tick damages the enemies inside the caster's area trigger of that spell. Effect 0 has
+// placeholder values: the tick damage per rank is the vanilla one (VMaNGOS spell_template, persistent area aura base points + 1),
+// the spell power share per tick the vanilla coefficient. A tick is direct spell damage, as the client's own tick spells for
+// Blizzard (1279976-1279980, 1279949) and Flamestrike (1279983-1279990) are, so the caster's damage done modifiers apply to it
+// (Piercing Ice, Fire Power).
 struct ClassicGroundAreaDamage
 {
     uint32 TickDamage;
@@ -82,7 +84,7 @@ class classic_spell_ground_area_damage : public AuraScript
         return ClassicGroundAreaDamages.contains(spellInfo->Id);
     }
 
-    void HandleTick(AuraEffect const* /*aurEff*/)
+    void HandleTick(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         if (!caster)
@@ -104,7 +106,9 @@ class classic_spell_ground_area_damage : public AuraScript
             int32 damage = values.TickDamage;
             if (values.Coefficient > 0.0f)
                 damage += int32(caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask()) * values.Coefficient);
-            damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
+            // the periodic dummy has no spell power coefficient: this adds the caster's percent and spell modifiers only
+            damage = caster->SpellDamageBonusDone(target, spellInfo, damage, SPELL_DIRECT_DAMAGE, aurEff->GetSpellEffectInfo(), 1, nullptr, aurEff);
+            damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, SPELL_DIRECT_DAMAGE);
 
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
             damageInfo.periodicLog = true;
