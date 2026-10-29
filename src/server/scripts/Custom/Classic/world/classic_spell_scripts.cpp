@@ -549,6 +549,42 @@ private:
     uint32 _longBuffSpell;
 };
 
+// 1260189 (warriors, paladins, rogues), 1260201 (priests, mages, warlocks) - Touch of the Grave (Forever undead racial): "Your spells
+// and attacks have a $h% chance to drain Health from the target, up to $s1% of your maximum Health." A dummy aura; the client data
+// gives the chance (20% / 30%) and a 25 sec cooldown (SpellAuraOptions). The drain is 1260198, a health leech of $1260189s1% of the
+// undead's maximum health; the leech heals only what the target had left.
+class classic_spell_undead_touch_of_the_grave : public AuraScript
+{
+    static constexpr uint32 SPELL_TOUCH_OF_THE_GRAVE_DRAIN = 1260198;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_TOUCH_OF_THE_GRAVE_DRAIN });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        // checked before the cooldown starts: a killing blow or a spell on oneself must not use it up
+        Unit* target = eventInfo.GetActionTarget();
+        return target && target != GetTarget() && target->IsAlive();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* undead = GetTarget();
+        undead->CastSpell(eventInfo.GetActionTarget(), SPELL_TOUCH_OF_THE_GRAVE_DRAIN, CastSpellExtraArgs(aurEff)
+            .AddSpellMod(SPELLVALUE_BASE_POINT0, std::max<int32>(1, undead->CountPctFromMaxHealth(aurEff->GetAmount()))));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_undead_touch_of_the_grave::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_undead_touch_of_the_grave::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 1319421 - Motivated (Executor's Motivator, undead quest Discipline 99134): a dummy aura on a Tirisfal Deathguard. The official
 // server credits the objective (Deathguard Cyrus 1746, 5 needed) for any of them, with an empty victim GUID (sniff of 2026-10-06:
 // QUEST_UPDATE_ADD_CREDIT 99134 / 1746, 1..5 of 5; Motivated was seen on 1496, 1652, 1735, 1738, 1742-1746, 2210, 5725, 272101).
@@ -1244,6 +1280,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_executors_motivator);
     RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_read_ley_line", 2246, 1259691);
     RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_skysight", 2271, 1270893);
+    RegisterSpellScript(classic_spell_undead_touch_of_the_grave);
     RegisterSpellScript(classic_spell_warl_immolate);
     RegisterSpellScript(classic_spell_hun_taming_rod);
     RegisterSpellScript(classic_spell_hun_tame_beast_channel);
