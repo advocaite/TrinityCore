@@ -629,6 +629,14 @@ void Pet::setDeathState(DeathState s)                       // overwrite virtual
 
             //SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED);
         }
+
+        // Classic 1.60: a pet that dies outside PvP loses one whole happiness level
+        // (VMaNGOS Pet::SetDeathState). Battlegrounds and arenas are exempt, and because loyalty only
+        // reacts to the happiness *level* on its 12 s tick, an exempt death costs no loyalty either.
+        // `IsInWorld()` keeps the penalty off the load path: LoadFromDB revives a pet that was saved
+        // dead by going through JUST_DIED -> CORPSE, which is not a death that just happened.
+        if (HasHappiness() && IsInWorld() && !GetMap()->IsBattlegroundOrArena())
+            ModifyPower(POWER_HAPPINESS, -HAPPINESS_MAX / 3);
     }
     else if (getDeathState() == ALIVE)
     {
