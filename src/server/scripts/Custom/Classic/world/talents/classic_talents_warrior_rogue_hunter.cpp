@@ -149,6 +149,34 @@ class classic_spell_warr_enrage_talent : public AuraScript
     }
 };
 
+// 12975 - Last Stand: "When activated, this ability temporarily grants you $12976s1% of your maximum health for $12976d. After the
+// effect expires, the health is lost." Effect 0 is a dummy, so Last Stand did nothing. 12976 adds a flat amount of health: it gets
+// that percent of the warrior's maximum health.
+class classic_spell_warr_last_stand : public SpellScript
+{
+    static constexpr uint32 SPELL_WARRIOR_LAST_STAND_HEALTH = 12976;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_WARRIOR_LAST_STAND_HEALTH, EFFECT_0 } });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* warrior = GetCaster();
+        SpellInfo const* health = sSpellMgr->AssertSpellInfo(SPELL_WARRIOR_LAST_STAND_HEALTH, GetCastDifficulty());
+        float pct = float(health->GetEffect(EFFECT_0).CalcValue(warrior));
+        warrior->CastSpell(warrior, SPELL_WARRIOR_LAST_STAND_HEALTH, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
+            .SetTriggeringSpell(GetSpell())
+            .AddSpellBP0(int32(warrior->CountPctFromMaxHealth(pct))));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_last_stand::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 // 16487 - Blood Craze: "Regenerates $m1% of your total Health over 6 sec after being the victim of a critical strike or suffering more
 // than $m2% of your maximum Health from a single attack." 16488 heals a flat amount every 2 sec, so the rank percent of max health is
 // split over its ticks. (The default dummy proc cast 16488 with its 1 point base on every hit.)
@@ -982,6 +1010,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     // warrior
     RegisterSpellScript(classic_spell_warr_stance_rage);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
+    RegisterSpellScript(classic_spell_warr_last_stand);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
