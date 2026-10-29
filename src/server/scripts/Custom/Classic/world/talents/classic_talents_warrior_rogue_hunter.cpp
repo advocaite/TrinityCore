@@ -149,6 +149,38 @@ class classic_spell_warr_enrage_talent : public AuraScript
     }
 };
 
+// 18499 - Berserker Rage, with 20500 - Improved Berserker Rage (talent): "Your Berserker Rage ability will instantly generate $/10;m1
+// Rage and has a $m2% chance to remove all movement impairing effects when activated." Both talent effects are dummies, so the talent
+// did nothing.
+class classic_spell_warr_improved_berserker_rage : public SpellScript
+{
+    static constexpr uint32 SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE = 20500;
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE);
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* warrior = GetCaster();
+        Aura const* talent = warrior->GetAura(SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE);
+        if (!talent)
+            return;
+
+        if (AuraEffect const* rage = talent->GetEffect(EFFECT_0); rage && rage->GetAmountAsInt() > 0)
+            warrior->ModifyPower(POWER_RAGE, rage->GetAmountAsInt());
+
+        if (AuraEffect const* freedom = talent->GetEffect(EFFECT_1); freedom && roll_chance(freedom->GetAmount()))
+            warrior->RemoveMovementImpairingAuras(true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_warr_improved_berserker_rage::HandleAfterCast);
+    }
+};
+
 // 16487 - Blood Craze: "Regenerates $m1% of your total Health over 6 sec after being the victim of a critical strike or suffering more
 // than $m2% of your maximum Health from a single attack." 16488 heals a flat amount every 2 sec, so the rank percent of max health is
 // split over its ticks. (The default dummy proc cast 16488 with its 1 point base on every hit.)
@@ -982,6 +1014,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     // warrior
     RegisterSpellScript(classic_spell_warr_stance_rage);
     RegisterSpellScript(classic_spell_warr_enrage_talent);
+    RegisterSpellScript(classic_spell_warr_improved_berserker_rage);
     RegisterSpellScript(classic_spell_warr_blood_craze);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
