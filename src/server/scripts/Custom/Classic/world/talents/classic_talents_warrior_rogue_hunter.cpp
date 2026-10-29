@@ -336,6 +336,42 @@ class classic_spell_warr_meathook : public SpellScript
     }
 };
 
+// 12322 - Unbridled Wrath, 12289 - Improved Hamstring, 12311 - Improved Shield Bash, 1310316 - Master of Defense, 12298 - Shield
+// Specialization (talents): "a $m1% chance to ..." The chance is the effect's rank value, but the client proc chance is 100%, so these
+// procced every time. The effect that procs rolls its amount; the spell_proc rows give the spells and the hits they proc from.
+// Master of Defense works only while a shield is equipped.
+class classic_spell_warr_talent_chance : public AuraScript
+{
+public:
+    explicit classic_spell_warr_talent_chance(SpellEffIndex effIndex, bool needsShield) : _effIndex(effIndex), _needsShield(needsShield) { }
+
+private:
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, _effIndex } });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        if (_needsShield)
+        {
+            Player* warrior = GetTarget()->ToPlayer();
+            if (!warrior || !warrior->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND)
+                || warrior->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND)->GetTemplate()->GetInventoryType() != INVTYPE_SHIELD)
+                return false;
+        }
+        return roll_chance(aurEff->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_warr_talent_chance::CheckProc, _effIndex, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+
+    SpellEffIndex _effIndex;
+    bool _needsShield;
+};
+
 /*######
 ## Rogue
 ######*/
@@ -986,6 +1022,9 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);
+    RegisterSpellScriptWithArgs(classic_spell_warr_talent_chance, "classic_spell_warr_talent_chance", EFFECT_0, false);
+    RegisterSpellScriptWithArgs(classic_spell_warr_talent_chance, "classic_spell_warr_shield_specialization", EFFECT_1, false);
+    RegisterSpellScriptWithArgs(classic_spell_warr_talent_chance, "classic_spell_warr_master_of_defense", EFFECT_0, true);
 
     // rogue
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_rog_hack_and_slash", 13706u, 13709u, 1290312u);
