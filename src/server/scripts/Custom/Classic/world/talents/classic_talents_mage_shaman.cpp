@@ -359,6 +359,40 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 400588 - Missile Barrage: "Gives your Arcane Blast spell a $m1% chance, your Arcane Missile hits a ${$m1/4}% chance, and your Arcane
+// Wrath, Fireball, Frostbolt, and Frostfire Bolt spells a ${$m1/2}% chance to reduce the channeled duration of your next Arcane
+// Missiles spell by $400589s1%, reduce the Mana cost by $400589s3%, and missiles fire every ${$m2/10}.1 sec." The client data procs
+// on every harmful spell at 100%, and effect 1 (a dummy, the tooltip's missile period) also triggers 400589. spell_proc limits the
+// procs to these spells (Frost Blast has the Frostbolt flags), the script rolls the spell's chance, and only effect 0 triggers the
+// buff. 400589 is used by the next Arcane Missiles (spell_proc).
+class classic_spell_mage_missile_barrage : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return false;
+
+        float chance = float(GetEffect(EFFECT_0)->GetAmount());
+        if (spellInfo->SpellFamilyFlags[0] & 0x00200000)            // the missiles of Arcane Missiles
+            chance /= 4.0f;
+        else if (!(spellInfo->SpellFamilyFlags[0] & 0x20000000))    // not Arcane Blast
+            chance /= 2.0f;
+        return roll_chance(chance);
+    }
+
+    void PreventDummyTrigger(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_missile_barrage::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_missile_barrage::PreventDummyTrigger, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -793,6 +827,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_missile_barrage);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
