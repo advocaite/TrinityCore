@@ -2806,6 +2806,8 @@ void SpellInfo::_LoadAuraState()
 
         switch (Id)
         {
+            case 1310726: // Expose Prey (Classic 1.60): Mongoose Bite activated
+                return AURA_STATE_DEFENSIVE;
             case 1064: // Dazed
                 return AURA_STATE_DAZED;
             case 32216: // Victorious
