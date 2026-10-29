@@ -71,6 +71,8 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_DECIMATION                    = 440870,
+    SPELL_CWD_DECIMATION_SOUL_FIRE          = 440873,   // Soul Fire: cast time -40%, no Soul Shard, 10 sec
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -907,6 +909,68 @@ class classic_talent_warl_create_healthstone : public SpellScript
     }
 };
 
+// 440870 - Decimation: "Reduces the cooldown of your Soul Fire spell by $m2%. When you cast Shadow Bolt or Searing Pain on an enemy
+// below $m3% health, they deal $m4% increased damage, and for the next $440873d your Soul Fire spell has its cast time reduced by
+// $m1% and costs no Soul Shards." Effects 0 and 2 are dummies, and effect 3 is a Shadow Bolt and Searing Pain damage modifier that
+// would apply at any health: its amount is 0 here, and classic_talent_warl_decimation_cast adds it below the health threshold. The
+// client data procs on every harmful spell; the cast script handles Shadow Bolt and Searing Pain instead.
+class classic_talent_warl_decimation : public AuraScript
+{
+    void CalcConditionalDamage(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& /*canBeRecalculated*/)
+    {
+        amount = 0;
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return false;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_talent_warl_decimation::CalcConditionalDamage, EFFECT_3, SPELL_AURA_ADD_PCT_MODIFIER);
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_decimation::CheckProc);
+    }
+};
+
+// 686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661, 25307 - Shadow Bolt; 5676, 17919, 17920, 17921, 17922, 17923 - Searing Pain
+// 440870 - Decimation: the target's health when the spell is cast, before its damage: below the threshold (effect 2), the spell gets
+// the damage bonus (effect 3) and the warlock gets 440873.
+class classic_talent_warl_decimation_cast : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_DECIMATION, SPELL_CWD_DECIMATION_SOUL_FIRE });
+    }
+
+    static bool IsBelowThreshold(Unit const* caster, Unit const* target)
+    {
+        AuraEffect const* threshold = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_2);
+        return threshold && target && target->HealthBelowPct(threshold->GetAmountAsInt());
+    }
+
+    void HandleCast()
+    {
+        Unit* caster = GetCaster();
+        if (IsBelowThreshold(caster, GetExplTargetUnit()))
+            caster->CastSpell(caster, SPELL_CWD_DECIMATION_SOUL_FIRE, CastSpellExtraArgs(GetSpell()));
+    }
+
+    void CalcDecimationDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        if (IsBelowThreshold(caster, victim))
+            if (AuraEffect const* bonus = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_3))
+                AddPct(pctMod, bonus->GetSpellEffectInfo().CalcValue(caster));
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_talent_warl_decimation_cast::HandleCast);
+        CalcDamage += SpellCalcDamageFn(classic_talent_warl_decimation_cast::CalcDecimationDamage);
+    }
+};
+
 /*######
 ## Druid
 ######*/
@@ -1364,6 +1428,8 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
     RegisterSpellScript(classic_talent_warl_create_healthstone);
+    RegisterSpellScript(classic_talent_warl_decimation);
+    RegisterSpellScript(classic_talent_warl_decimation_cast);
 
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
