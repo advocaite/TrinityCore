@@ -97,10 +97,15 @@ void ChatAddonMessageTargeted::Read()
     _worldPacket >> PlayerGUID;
     _worldPacket >> PlayerVirtualRealmAddress;
 
+    // Classic 1.60: a second 9 bit sized string follows PlayerName, as in CMSG_CHAT_MESSAGE_WHISPER (empty in every sniffed packet).
+    // Without it the bit block is read one byte short and PlayerName starts a byte early ("Karrz" read as "\0Karr").
+    std::string unknownName;
     _worldPacket >> SizedCString::BitsSize<9>(PlayerName);
+    _worldPacket >> SizedCString::BitsSize<9>(unknownName);
     _worldPacket >> SizedCString::BitsSize<8>(ChannelName);
 
     _worldPacket >> SizedCString::Data(PlayerName);
+    _worldPacket >> SizedCString::Data(unknownName);
     _worldPacket >> SizedCString::Data(ChannelName);
 }
 
