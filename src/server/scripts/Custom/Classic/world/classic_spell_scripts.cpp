@@ -538,7 +538,21 @@ private:
 
         PreventHitDefaultEffect(effIndex);
         caster->CastSpell(caster, _longBuffSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+
+        // "Reading the Ley Lines" (92597) completes on criteria 109629: cast Read Ley Line while having Leyline Convergence
+        // (1271952). Nothing in the client data or the sniffed DB applies that aura (on the official server it comes from a
+        // server-side source that was not captured), so the quest could never complete. Give it next to the ley line and
+        // count the cast again now that the condition holds.
+        if (_spellFocus == SPELL_FOCUS_LEY_LINE)
+            if (Player* player = caster->ToPlayer())
+            {
+                player->CastSpell(player, SPELL_LEYLINE_CONVERGENCE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+                player->UpdateCriteria(CriteriaType::CastSpell, GetSpellInfo()->Id);
+            }
     }
+
+    static constexpr uint32 SPELL_FOCUS_LEY_LINE = 2246;
+    static constexpr uint32 SPELL_LEYLINE_CONVERGENCE = 1271952;
 
     void Register() override
     {
