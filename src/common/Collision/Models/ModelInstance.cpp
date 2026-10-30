@@ -16,6 +16,7 @@
  */
 
 #include "ModelInstance.h"
+#include "CliManager.h"
 #include "WorldModel.h"
 #include "MapTree.h"
 
@@ -116,6 +117,13 @@ namespace VMAP
         return false;
     }
 
+    // vmap files can be read while the server is running and its console prompt is visible
+    static void PrintModelSpawnError(char const* message)
+    {
+        CliManager::OutputGuard promptGuard;
+        std::cout << message << std::endl;
+    }
+
     bool ModelSpawn::readFromFile(FILE* rf, ModelSpawn& spawn)
     {
         uint32 check = 0, nameLen;
@@ -124,7 +132,7 @@ namespace VMAP
         if (!check)
         {
             if (ferror(rf))
-                std::cout << "Error reading ModelSpawn!\n";
+                PrintModelSpawnError("Error reading ModelSpawn!");
             return false;
         }
         check += fread(&spawn.adtId, sizeof(uint8), 1, rf);
@@ -143,19 +151,19 @@ namespace VMAP
         check += fread(&nameLen, sizeof(uint32), 1, rf);
         if (check != uint32(has_bound ? 17 : 11))
         {
-            std::cout << "Error reading ModelSpawn!\n";
+            PrintModelSpawnError("Error reading ModelSpawn!");
             return false;
         }
         char nameBuff[500];
         if (nameLen > 500) // file names should never be that long, must be file error
         {
-            std::cout << "Error reading ModelSpawn, file name too long!\n";
+            PrintModelSpawnError("Error reading ModelSpawn, file name too long!");
             return false;
         }
         check = fread(nameBuff, sizeof(char), nameLen, rf);
         if (check != nameLen)
         {
-            std::cout << "Error reading ModelSpawn!\n";
+            PrintModelSpawnError("Error reading ModelSpawn!");
             return false;
         }
         spawn.name = std::string(nameBuff, nameLen);
