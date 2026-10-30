@@ -87,8 +87,30 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     }
 
     ObjectGuid receiverGuid;
-    if (normalizePlayerName(sendMail.Info.Target))
-        receiverGuid = sCharacterCache->GetCharacterGuidByName(sendMail.Info.Target);
+    {
+        // The client sends recipients as "Name" or "Name Surname"
+        std::string recipientName = sendMail.Info.Target;
+        std::string recipientSurname;
+        if (size_t spacePos = recipientName.find(' '); spacePos != std::string::npos)
+        {
+            recipientSurname = recipientName.substr(spacePos + 1);
+            recipientName.erase(spacePos);
+            // tolerate repeated/trailing whitespace
+            recipientSurname.erase(0, recipientSurname.find_first_not_of(' '));
+            recipientSurname.erase(recipientSurname.find_last_not_of(' ') + 1);
+        }
+
+        if (!recipientName.empty() && normalizePlayerName(recipientName))
+        {
+            if (!recipientSurname.empty())
+            {
+                if (CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByFullName(recipientName, recipientSurname))
+                    receiverGuid = entry->Guid;
+            }
+            else
+                receiverGuid = sCharacterCache->GetCharacterGuidByName(recipientName);
+        }
+    }
 
     if (!receiverGuid)
     {
