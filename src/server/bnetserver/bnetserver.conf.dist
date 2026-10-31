@@ -184,6 +184,16 @@ Network.HandshakeTimeout = 30
 Network.LoginTimeout = 600
 
 #
+#    Network.RequestsPerSecond
+#        Description: Requests one Battle.net connection may send per second on average, with room for a burst of ten seconds'
+#                     worth (a login sends a few dozen at once). A connection over it is closed. Counted per connection, so
+#                     players sharing one address (a tunnel, a household) do not share it.
+#        Default:     10
+#                     0 - (No limit)
+
+Network.RequestsPerSecond = 10
+
+#
 #    WrongPass.MaxCount
 #        Description: Number of login attempts with wrong password before the account or IP will be
 #                     banned.

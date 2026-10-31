@@ -109,6 +109,11 @@ private:
     std::weak_ptr<Battlenet::Session> _session;
 };
 
+int64 SteadyNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(TimePoint::clock::now().time_since_epoch()).count();
+}
+
 TimePoint DeadlineFromConfig(char const* name, int32 defaultSeconds)
 {
     int32 const seconds = sConfigMgr->GetIntDefault(name, defaultSeconds);
@@ -133,6 +138,7 @@ void Battlenet::Session::Start()
 
     _handshakeDeadline = DeadlineFromConfig("Network.HandshakeTimeout", 30);
     _loginDeadline = DeadlineFromConfig("Network.LoginTimeout", 600);
+    _requestRateLimit = Trinity::Net::RequestRateLimit(uint32(std::max(sConfigMgr->GetIntDefault("Network.RequestsPerSecond", 10), 0)), SteadyNowMs());
 
     // build initializer chain
     std::array<std::shared_ptr<Trinity::Net::SocketConnectionInitializer>, 4> initializers =
@@ -274,6 +280,15 @@ void Battlenet::Session::OnLogon(std::string_view platform, std::string_view loc
     _timezoneOffset = timezoneOffset;
 }
 
+bool Battlenet::Session::TryBeginLogin()
+{
+    if (_authed || _loginInFlight)
+        return false;
+
+    _loginInFlight = true;
+    return true;
+}
+
 void Battlenet::Session::OnLogonSuccess(std::shared_ptr<AccountInfo> accountInfo, std::string_view ipCountry)
 {
     _accountInfo = std::move(accountInfo);
@@ -386,6 +401,13 @@ bool Battlenet::Session::ReadDataHandler()
     bool parseSuccess = header.ParseFromArray(_packetBuffer.GetBasePointer() + PacketHeaderLengthSize, _packetBuffer.GetReadPointer() - _packetBuffer.GetBasePointer() - PacketHeaderLengthSize);
     if (!parseSuccess)  // malformed or empty request (seen at logout): close the connection instead of taking the server down
         return false;
+
+    // a client sends a few dozen requests to log in and a trickle after; a flood (each logon request queues login database work) closes it
+    if (!_requestRateLimit.Allow(SteadyNowMs()))
+    {
+        TC_LOG_ERROR("session", "{} sent more than Network.RequestsPerSecond requests, closing the connection", GetClientInfo());
+        return false;
+    }
 
     if (header.service_id() != 0xFE)
     {
