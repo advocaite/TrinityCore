@@ -507,7 +507,9 @@ void PlayerMenu::SendQuestGiverQuestDetails(Quest const* quest, ObjectGuid npcGU
     packet.QuestGiverGUID = npcGUID;
     packet.InformUnit = _session->GetPlayer()->GetPlayerSharingQuest();
     packet.QuestID = quest->GetQuestId();
-    packet.QuestPackageID = quest->GetQuestPackageID();
+    // Classic 1.60: the client has no quest packages (QuestPackageItem.db2 is empty). A package id here makes the client look
+    // for package items instead of the quest's reward choices, so the choices are not shown (Harvesting Windstones 93552).
+    packet.QuestPackageID = 0;
     packet.PortraitGiver = quest->GetQuestGiverPortrait();
     packet.PortraitGiverMount = quest->GetQuestGiverPortraitMount();
     packet.PortraitGiverModelSceneID = quest->GetQuestGiverPortraitModelSceneId();
@@ -636,7 +638,9 @@ void PlayerMenu::SendQuestGiverOfferReward(Quest const* quest, ObjectGuid npcGUI
     packet.PortraitGiver = quest->GetQuestGiverPortrait();
     packet.PortraitGiverMount = quest->GetQuestGiverPortraitMount();
     packet.PortraitGiverModelSceneID = quest->GetQuestGiverPortraitModelSceneId();
-    packet.QuestPackageID = quest->GetQuestPackageID();
+    // Classic 1.60: no quest packages in the client, see SendQuestGiverQuestDetails. With a package id the reward screen
+    // shows no choices and the client completes the quest with no choice picked.
+    packet.QuestPackageID = 0;
 
     _session->SendPacket(packet.Write());
     TC_LOG_DEBUG("network", "WORLD: Sent SMSG_QUESTGIVER_OFFER_REWARD NPC={}, questid={}", npcGUID.ToString(), quest->GetQuestId());
