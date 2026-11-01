@@ -28,6 +28,7 @@
 #include <map>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 class Item;
 class Player;
@@ -337,8 +338,10 @@ private:
     std::map<AuctionsBucketKey, AuctionsBucketData> _buckets; // ordered for search by itemid only
     std::unordered_map<ObjectGuid, CommodityQuote> _commodityQuotes;
 
-    std::unordered_multimap<ObjectGuid, uint32> _playerOwnedAuctions;
-    std::unordered_multimap<ObjectGuid, uint32> _playerBidderAuctions;
+    // a set per player, not a multimap: removing one auction from a multimap walks every auction of that owner, and the
+    // auction bot sellers own thousands each, so expiring them all after a long stop took minutes (world thread freeze)
+    std::unordered_map<ObjectGuid, std::unordered_set<uint32>> _playerOwnedAuctions;
+    std::unordered_map<ObjectGuid, std::unordered_set<uint32>> _playerBidderAuctions;
 
     // Map of throttled players for GetAll, and throttle expiry time
     // Stored here, rather than player object to maintain persistence after logout
