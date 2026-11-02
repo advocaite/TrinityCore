@@ -357,6 +357,12 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundQueueTypeId que
         return nullptr;
     }
 
+    if (bg_template->MapIDs.empty())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: CreateNewBattleground - bg template {} has no map", bgTypeId);
+        return nullptr;
+    }
+
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketById(bg_template->MapIDs.front(), bracketId);
     if (!bracketEntry)
     {
@@ -455,7 +461,9 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
             }
         }
 
-        if (bgTemplate.MapIDs.size() == 1)
+        if (bgTemplate.MapIDs.empty())
+            TC_LOG_ERROR("bg.battleground", "Battleground ID {} has no map in BattlemasterListXMap, nobody can join it.", bgTypeId);
+        else if (bgTemplate.MapIDs.size() == 1)
             _battlegroundMapTemplates[bgTemplate.MapIDs.front()] = &_battlegroundTemplates[bgTypeId];
 
         ++count;
