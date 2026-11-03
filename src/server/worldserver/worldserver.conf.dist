@@ -4648,6 +4648,27 @@ Classic.MainGroupInsertIndex = 152
 
 Classic.ClientMainGroupInsertIndex = 315
 
+#    Classic.ClientMainGroupInsertIndex70755
+#    Classic.ClientMainGroupInsertCount70755
+#        Description: Client 1.60.1.70755+: 70755 index (decimal) of the first of the messages added to the main client group
+#                     (0x44), and how many. They are rejected and the client messages after them are that many lower.
+#                     In-game login narrows the index to 99..167 (0x63..0xA7): SET_ACTION_BUTTON 0x62 unchanged,
+#                     CALENDAR_GET_NUM_PENDING 0xA6 -> 0xA8.
+#        Default:     99, 2
+
+Classic.ClientMainGroupInsertIndex70755 = 99
+Classic.ClientMainGroupInsertCount70755 = 2
+
+#    Classic.ServerMainGroupInsertIndex70755
+#    Classic.ServerMainGroupInsertCount70755
+#        Description: Client 1.60.1.70755+: first 70707 index (decimal) of the main server message group that moved up, and by
+#                     how much. 293 (0x125): SET_TIME_ZONE_INFORMATION (0x124) is unchanged, TEXT_EMOTE 0x127 -> 0x128.
+#                     -1 = the server main group did not change.
+#        Default:     293, 1
+
+Classic.ServerMainGroupInsertIndex70755 = 293
+Classic.ServerMainGroupInsertCount70755 = 1
+
 #    Classic.OfficialFeatureFlags
 #        Description: Send the client feature flags exactly as the official server does (sniffs 70205/70235).
 #                     0 goes back to the older hand-picked flags.

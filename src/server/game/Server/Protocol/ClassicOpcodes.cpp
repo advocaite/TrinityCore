@@ -118,8 +118,48 @@ bool ClassicOpcodes::IsBuild70425OrLater()
     return later;
 }
 
+
+// Client 1.60.1.70755 (2026-11-03), on top of the 70291+ rules above (the tables stay in 70245 numbers):
+//  - client: the main group (0x44) got two more messages between 70755 index 0x63 and 0xA7. In-game login has
+//    LOADING_SCREEN_NOTIFY 0x24, LFG_LIST_GET_STATUS 0x39, DF_GET_SYSTEM_INFO / DF_GET_JOIN_STATUS 0x41/0x42,
+//    BATTLE_PET_REQUEST_JOURNAL 0x4E and SET_ACTION_BUTTON 0x62 unchanged, and every message from 0xA8 on two higher than
+//    70707: CALENDAR_GET_NUM_PENDING 0xA6 -> 0xA8, QUERY_REALM_NAME 0xB5 -> 0xB7, SERVER_TIME_OFFSET_REQUEST 0xCA -> 0xCC,
+//    BATTLE_PAY_GET_PRODUCT_LIST / GET_PURCHASE_LIST 0xE9/0xEA -> 0xEB/0xEC, GET_UNDELETE_CHARACTER_COOLDOWN_STATUS 0x10F -> 0x111,
+//    SET_EXCLUDED_CHAT_CENSOR_SOURCES 0x132 -> 0x134, SOCIAL_CONTRACT_REQUEST 0x177 -> 0x179.
+//    Classic.ClientMainGroupInsertIndex70755 = 70755 index of the first new message (they are rejected, everything after them
+//    is Classic.ClientMainGroupInsertCount70755 lower).
+//  - server: the main group (client 0x47, dispatcher switch rva 0x65F010, jump table rva 0x66D81C, 0x38F cases) got one more
+//    message at 70755 index 0x125, so every 70707 index from 0x125 on is one higher. Matched by constructor layout (the message
+//    classes have no RTTI; GetOpcode() returns the 70755 number): SET_TIME_ZONE_INFORMATION 0x124 unchanged,
+//    BATTLE_PET_CAGE_DATE_ERROR 0x126, TEXT_EMOTE 0x128, TAXI_NODE_STATUS 0x12A, UPDATE_ACCOUNT_DATA (zlib) 0x1B5,
+//    GAME_TIME_UPDATE / GAME_TIME_SET / LOGIN_SET_TIME_SPEED 0x1B8-0x1BA, SERVER_TIME_OFFSET 0x1C1, PLAY_SOUND 0x214,
+//    ITEM_COOLDOWN 0x274, EMOTE 0x275, UNDELETE_COOLDOWN_STATUS_RESPONSE 0x278, BATTLENET_RESPONSE / NOTIFICATION /
+//    CONNECTION_STATUS / CHANGE_REALM_TICKET_RESPONSE 0x2B1-0x2B4. Sent unshifted, SOCIAL_CONTRACT_REQUEST_RESPONSE (0x326)
+//    and SERVER_TIME_OFFSET (0x1C0) crash the client. Classic.ServerMainGroupInsertIndex70755 = first 70707 index that moved
+//    up by Classic.ServerMainGroupInsertCount70755 (-1 = none).
+static bool IsBuild70755OrLater()
+{
+    static bool const later = []()
+    {
+        std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm();
+        return realm && realm->Build >= 70755;
+    }();
+    return later;
+}
+
 uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
 {
+    if (IsBuild70755OrLater() && OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup + ExtraGroupShift() - 2)
+    {
+        static uint32 const insertIndex = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertIndex70755", 0x63));
+        static uint32 const insertCount = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertCount70755", 2));
+        uint32 index = classicOpcode & 0xFFFF;
+        if (index >= insertIndex + insertCount)
+            classicOpcode -= insertCount;
+        else if (index >= insertIndex)
+            return UNKNOWN_OPCODE;      // new in 70755, no core message yet
+    }
+
     if (uint32 shift = ExtraGroupShift())
     {
         // client: the connection group (70245 0x45) moved to 0x46
@@ -148,6 +188,14 @@ uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode)
             ++classicOpcode;
         if (group >= FirstRetailServerGroup + 1 && group <= LastRetailServerGroup + 1)
             classicOpcode = WithOpcodeGroup(classicOpcode, group + shift);
+
+        if (IsBuild70755OrLater() && group == FirstRetailServerGroup + 1)
+        {
+            static int32 const insertIndex = sConfigMgr->GetIntDefault("Classic.ServerMainGroupInsertIndex70755", 0x125);
+            static uint32 const insertCount = uint32(sConfigMgr->GetIntDefault("Classic.ServerMainGroupInsertCount70755", 1));
+            if (insertIndex >= 0 && (classicOpcode & 0xFFFF) >= uint32(insertIndex))
+                classicOpcode += insertCount;
+        }
     }
     return classicOpcode;
 }
