@@ -14687,9 +14687,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                     if (!HasPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN) || IsMaxLevel())
                         canTalk = false;
                     break;
+                case GossipOptionNpc::Trainer:
+                {
+                    // A class trainer offers training to its own class only (classic: another class saw no train option, only the
+                    // trainer's talk). The trainer is the option's own, else the creature's, as when the option is picked.
+                    uint32 trainerId = sObjectMgr->GetCreatureTrainerForGossipOption(creature->GetEntry(), menuId, gossipMenuItem.OrderIndex);
+                    if (!trainerId)
+                        trainerId = creature->GetTrainerId();
+                    if (Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(trainerId))
+                        if (!(trainer->GetClassMask() & GetClassMask()))
+                            canTalk = false;
+                    break;
+                }
                 case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
-                case GossipOptionNpc::Trainer:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
@@ -14751,7 +14762,9 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             return false;
         };
 
-        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && creature->GetTrainerId() && !hasOption(GossipOptionNpc::Trainer))
+        Trainer::Trainer const* ownTrainer = creature->GetTrainerId() ? sObjectMgr->GetTrainer(creature->GetTrainerId()) : nullptr;
+        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && ownTrainer && (ownTrainer->GetClassMask() & GetClassMask())
+            && !hasOption(GossipOptionNpc::Trainer))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_TRAINER, menu.GetMenuItemCount(), GossipOptionNpc::Trainer, "Train me.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
 
