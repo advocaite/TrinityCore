@@ -19216,6 +19216,34 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             }
         }
 
+        // A zeppelin or boat between two continents is on the other continent by the time the player logs in again,
+        // so it is not found on the saved map. Look for it on the other maps of its route before sending the player home.
+        if (!transport)
+        {
+            if (TransportSpawn const* transportSpawn = sTransportMgr->GetTransportSpawn(fields.transguid))
+            {
+                if (TransportTemplate const* transportTemplate = sTransportMgr->GetTransportTemplate(transportSpawn->TransportGameObjectId))
+                {
+                    for (uint32 routeMapId : transportTemplate->MapIds)
+                    {
+                        if (routeMapId == mapId)
+                            continue;
+
+                        if (Map* routeMap = sMapMgr->CreateMap(routeMapId, this))
+                        {
+                            if (Transport* transportOnRoute = routeMap->GetTransport(transGUID))
+                            {
+                                transport = transportOnRoute;
+                                mapId = routeMapId;
+                                instanceId = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (transport)
         {
             m_movementInfo.transport.pos.Relocate(fields.trans_x, fields.trans_y, fields.trans_z, fields.trans_o);
