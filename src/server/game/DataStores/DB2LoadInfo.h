@@ -5356,15 +5356,16 @@ struct SpellCooldownsLoadInfo
 
 struct SpellDurationLoadInfo
 {
-    static constexpr DB2FieldMeta Fields[4] =
+    static constexpr DB2FieldMeta Fields[5] =
     {
         { .IsSigned = false, .Type = FT_INT, .Name = "ID" },
         { .IsSigned = true, .Type = FT_INT, .Name = "Duration" },
+        { .IsSigned = true, .Type = FT_INT, .Name = "DurationPerLevel" },
         { .IsSigned = true, .Type = FT_INT, .Name = "MaxDuration" },
         { .IsSigned = true, .Type = FT_INT, .Name = "DurationPerResource" },
     };
 
-    static constexpr DB2LoadInfo Instance{ Fields, 4, &SpellDurationMeta::Instance, HOTFIX_SEL_SPELL_DURATION };
+    static constexpr DB2LoadInfo Instance{ Fields, 5, &SpellDurationMeta::Instance, HOTFIX_SEL_SPELL_DURATION };
 };
 
 struct SpellEffectLoadInfo
