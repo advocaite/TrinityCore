@@ -123,7 +123,7 @@ float CONF_flat_liquid_delta_limit = 0.001f; // If max - min less this value - l
 
 uint32 CONF_Locale = 0;
 
-char const* CONF_Product = "wow_classic_beta";   // Classic 1.60 fork: the Forever client (pass -p wow for retail)
+char const* CONF_Product = "wowf";   // Classic 1.60 fork: the Forever client, its own product since 1.60.1.70790 (-p wow_classic_beta for the old beta, -p wow for retail)
 char const* CONF_Region = "eu";
 bool CONF_UseRemoteCasc = false;
 

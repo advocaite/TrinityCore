@@ -81,7 +81,7 @@ bool preciseVectorData = false;
 std::string ListfilePath;
 Road::ListfileMap g_wmoListfileStorage;
 Road::ListfileMap const* g_wmoListfile = nullptr;
-char const* CascProduct = "wow_classic_beta";   // Classic 1.60 fork: the Forever client (pass -p wow for retail)
+char const* CascProduct = "wowf";   // Classic 1.60 fork: the Forever client, its own product since 1.60.1.70790 (-p wow_classic_beta for the old beta, -p wow for retail)
 char const* CascRegion = "eu";
 bool UseRemoteCasc = false;
 uint32 DbcLocale = 0;

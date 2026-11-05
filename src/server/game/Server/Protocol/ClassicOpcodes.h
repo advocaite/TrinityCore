@@ -42,6 +42,9 @@ namespace ClassicOpcodes
     /// (only DLLs changed in CASC), same client strings except build number and date, same RTTI types as 70425
     TC_GAME_API bool IsBuild70425OrLater();
 
+    /// client 70790 or later (realm build): the WoW Forever product, one more message in the main server group
+    TC_GAME_API bool IsBuild70790OrLater();
+
     /// server opcodes whose Classic number is not known yet and that crash the client when sent with the shifted retail number
     TC_GAME_API bool IsServerOpcodeBlocked(uint32 coreOpcode);
 
