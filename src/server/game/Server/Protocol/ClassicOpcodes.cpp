@@ -118,6 +118,16 @@ bool ClassicOpcodes::IsBuild70425OrLater()
     return later;
 }
 
+bool ClassicOpcodes::IsBuild70790OrLater()
+{
+    static bool const later = []()
+    {
+        std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm();
+        return realm && realm->Build >= 70790;
+    }();
+    return later;
+}
+
 uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
 {
     if (uint32 shift = ExtraGroupShift())
@@ -125,6 +135,18 @@ uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
         // client: the connection group (70245 0x45) moved to 0x46
         if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup + shift)
             classicOpcode = WithOpcodeGroup(classicOpcode, ClassicClientConnectionGroup);
+        // client 70790 (the WoW Forever product) added two messages to the main client group: official 70532 vs 70790 sniffs have
+        // SET_ACTION_BUTTON (0x62) unchanged and everything seen from QUERY_REALM_NAME (0xB5) on two higher.
+        // Classic.ClientMainGroupInsertIndex70790 = the 70790 index of the first new message; the two new ones stay unknown
+        if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup - 1 && IsBuild70790OrLater())
+        {
+            static uint32 const clientInsertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertIndex70790", 0x63));
+            uint32 index = classicOpcode & 0xFFFF;
+            if (index >= clientInsertIndex70790 + 2)
+                classicOpcode -= 2;
+            else if (index >= clientInsertIndex70790)
+                return WithOpcodeGroup(0xFFFF, OpcodeGroup(classicOpcode) - 1);     // no handler: logged as an unknown opcode
+        }
         // and the main client group 0x44 got one more message between 70245 index 0x13A and 0x150 (sniffs 2026-10-09: 0x13A
         // BATTLE_PAY_OPEN_CHECKOUT unchanged, 0x150 -> 0x151; RECENT_ALLY_REQUEST_DATA, ACCEPT_SOCIAL_CONTRACT, club finder are
         // above it). Classic.ClientMainGroupInsertIndex = the 70291 index of the new message, everything after it is one lower.
@@ -145,6 +167,13 @@ uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode)
         // Classic.MainGroupInsertIndex = the first 70245 main-group index that moved (0x98, see above)
         static uint32 const insertIndex = uint32(sConfigMgr->GetIntDefault("Classic.MainGroupInsertIndex", 0x98));
         if (group == FirstRetailServerGroup + 1 && (classicOpcode & 0xFFFF) >= insertIndex)
+            ++classicOpcode;
+        // client 70790 (the WoW Forever product) added another message to the main server group: official 70338/70532 vs 70790
+        // sniffs have every index up to 0xDE (INSTANCE_INFO) unchanged and every one from 0xED (ACHIEVEMENT_EARNED) one higher,
+        // 49 messages in all. Nothing in 0xDF..0xEC was seen, so Classic.MainGroupInsertIndex70790 = its first moved index, in
+        // the numbering above (70291..70658)
+        static uint32 const insertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.MainGroupInsertIndex70790", 0xDF));
+        if (group == FirstRetailServerGroup + 1 && IsBuild70790OrLater() && (classicOpcode & 0xFFFF) >= insertIndex70790)
             ++classicOpcode;
         if (group >= FirstRetailServerGroup + 1 && group <= LastRetailServerGroup + 1)
             classicOpcode = WithOpcodeGroup(classicOpcode, group + shift);

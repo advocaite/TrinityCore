@@ -73,7 +73,7 @@ std::unordered_map<uint32, LiquidTypeEntry> LiquidTypes;
 std::vector<MapEntry> map_ids;
 boost::filesystem::path input_path;
 bool preciseVectorData = false;
-char const* CascProduct = "wow_classic_beta";   // Classic 1.60 fork: the Forever client (pass -p wow for retail)
+char const* CascProduct = "wowf";   // Classic 1.60 fork: the Forever client, its own product since 1.60.1.70790 (-p wow_classic_beta for the old beta, -p wow for retail)
 char const* CascRegion = "eu";
 bool UseRemoteCasc = false;
 uint32 DbcLocale = 0;
