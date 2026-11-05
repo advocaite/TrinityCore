@@ -21119,8 +21119,10 @@ struct SpellDispelTypeMeta
 
 struct SpellDurationMeta
 {
-    static constexpr DB2MetaField Fields[3] =
+    // Classic 1.60.1.70790: DurationPerLevel is back as the second field (vanilla's layout); layout hash 0xA931BD2B -> 0x4FDF0951
+    static constexpr DB2MetaField Fields[4] =
     {
+        { .Type = FT_INT,                  .ArraySize =  1, .IsSigned =  true },
         { .Type = FT_INT,                  .ArraySize =  1, .IsSigned =  true },
         { .Type = FT_INT,                  .ArraySize =  1, .IsSigned =  true },
         { .Type = FT_INT,                  .ArraySize =  1, .IsSigned =  true },
@@ -21131,9 +21133,9 @@ struct SpellDurationMeta
         .FileDataId         = 1137828,
         .IndexField         = -1,
         .ParentIndexField   = -1,
-        .FieldCount         = 3,
-        .FileFieldCount     = 3,
-        .LayoutHash         = 0xA931BD2B,
+        .FieldCount         = 4,
+        .FileFieldCount     = 4,
+        .LayoutHash         = 0x4FDF0951,
         .Fields             = Fields
     };
 };

@@ -1618,7 +1618,7 @@ void HotfixDatabaseConnection::DoPrepareStatements()
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_SPELL_COOLDOWNS, "SELECT MAX(ID) + 1 FROM spell_cooldowns", CONNECTION_SYNCH);
 
     // SpellDuration.db2
-    PrepareStatement(HOTFIX_SEL_SPELL_DURATION, "SELECT ID, Duration, MaxDuration, DurationPerResource FROM spell_duration"
+    PrepareStatement(HOTFIX_SEL_SPELL_DURATION, "SELECT ID, Duration, DurationPerLevel, MaxDuration, DurationPerResource FROM spell_duration"
         " WHERE (`VerifiedBuild` > 0) = ?", CONNECTION_SYNCH);
     PREPARE_MAX_ID_STMT(HOTFIX_SEL_SPELL_DURATION, "SELECT MAX(ID) + 1 FROM spell_duration", CONNECTION_SYNCH);
 
