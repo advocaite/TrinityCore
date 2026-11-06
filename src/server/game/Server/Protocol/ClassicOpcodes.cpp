@@ -172,9 +172,10 @@ uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode)
             ++classicOpcode;
         // client 70790 (the WoW Forever product) added another message to the main server group: official 70338/70532 vs 70790
         // sniffs have every index up to 0xDE (INSTANCE_INFO) unchanged and every one from 0xED (ACHIEVEMENT_EARNED) one higher,
-        // 49 messages in all. Nothing in 0xDF..0xEC was seen, so Classic.MainGroupInsertIndex70790 = its first moved index, in
-        // the numbering above (70291..70658)
-        static uint32 const insertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.MainGroupInsertIndex70790", 0xDF));
+        // 49 messages in all. Nothing in 0xDF..0xEC was seen in the sniffs; a 70790 client test pins it: with 0xDF the mail
+        // result did not reach the client (the mail window stays frozen after Send), with 0xED it did. So 0xDF..0xEC keep their
+        // numbers and Classic.MainGroupInsertIndex70790 = 0xED, the first moved index in the numbering above (70291..70658)
+        static uint32 const insertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.MainGroupInsertIndex70790", 0xED));
         if (group == FirstRetailServerGroup + 1 && IsBuild70790OrLater() && (classicOpcode & 0xFFFF) >= insertIndex70790)
             ++classicOpcode;
         if (group >= FirstRetailServerGroup + 1 && group <= LastRetailServerGroup + 1)

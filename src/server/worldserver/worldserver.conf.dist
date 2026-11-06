@@ -4645,10 +4645,12 @@ Classic.MainGroupInsertIndex = 152
 #        Description: Client 70790+ (realmlist.gamebuild >= 70790): first index (decimal, in 70291..70658 numbering) of the
 #                     main server message group that moved up by one more. The official sniffs narrow it to 223..237
 #                     (0xDF..0xED): INSTANCE_INFO (0xDE) is unchanged, ACHIEVEMENT_EARNED (0xED) moved. Messages in that
-#                     range include mail results (0xE5, 0xE6) and scenes (0xE0, 0xE1).
-#        Default:     223
+#                     range include mail results (0xE5, 0xE6) and scenes (0xE0, 0xE1). Tested on a 70790 client: with 223
+#                     the mail result does not arrive (mail window frozen after Send), with 237 it does, so 0xDF..0xEC
+#                     keep their numbers and 237 (0xED) is the first moved index.
+#        Default:     237
 
-Classic.MainGroupInsertIndex70790 = 223
+Classic.MainGroupInsertIndex70790 = 237
 
 #    Classic.ClientMainGroupInsertIndex70790
 #        Description: Client 70790+ (realmlist.gamebuild >= 70790): 70790 index (decimal) of the first of the two messages
