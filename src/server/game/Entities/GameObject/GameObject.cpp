@@ -2721,6 +2721,12 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
             if (!player)
                 return;
 
+            // A player using this chest again while its loot window is still open: close that window first, as SendLoot would.
+            // Closing an emptied vein reopens it (TryReopenChest) and frees its loot, so doing it inside SendLoot below built the
+            // loot response from freed memory. Done here, the reopened vein also gets its new loot in this same use.
+            if (player->GetLootByWorldObjectGUID(GetGUID()))
+                player->GetSession()->DoLootReleaseAll();
+
             GameObjectTemplate const* info = GetGOInfo();
             if (!m_loot && info->GetLootId())
             {
