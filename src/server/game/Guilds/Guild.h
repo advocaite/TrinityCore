@@ -576,6 +576,7 @@ class TC_GAME_API Guild
                     m_guildId(guildId), m_rankId(rankId), m_rankOrder(rankOrder), m_name(name), m_rights(rights), m_bankMoneyPerDay(money) { }
 
                 void LoadFromDB(Field* fields);
+                static std::string GetDefaultRankName(GuildRankOrder rankOrder);
                 void SaveToDB(CharacterDatabaseTransaction trans) const;
 
                 GuildRankId GetId() const { return m_rankId; }
