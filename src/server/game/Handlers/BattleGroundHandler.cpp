@@ -106,6 +106,14 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPackets::Battleground::Batt
         return;
     }
 
+    // a template with no map in BattlemasterListXMap (client data) has an empty map list, and front() on it reads address 0
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: type {} has no map in BattlemasterListXMap, join by {} ignored", uint32(bgTypeId), _player->GetName());
+        ChatHandler(this).SendSysMessage("This battleground is not available on this server.");
+        return;
+    }
+
     // expected bracket entry
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketByLevel(bgTemplate->MapIDs.front(), _player->GetLevel());
     if (!bracketEntry)
@@ -400,6 +408,12 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
         return;
     }
 
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("network", "BattlegroundHandle: BattlegroundTemplate for type id {} has no map.", bgTypeId);
+        return;
+    }
+
     uint32 mapId = bgTemplate->MapIDs.front();
 
     // BGTemplateId returns BATTLEGROUND_AA when it is arena queue.
@@ -572,7 +586,7 @@ void WorldSession::HandleRequestBattlefieldStatusOpcode(WorldPackets::Battlegrou
         else
         {
             BattlegroundTemplate const* bgTemplate  = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(bgTypeId);
-            if (!bgTemplate)
+            if (!bgTemplate || bgTemplate->MapIDs.empty())
                 continue;
 
             // expected bracket entry
@@ -606,6 +620,15 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
 
     if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, BATTLEGROUND_AA, nullptr))
     {
+        ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
+        return;
+    }
+
+    // The Classic client data has no BattlemasterListXMap row for "all arenas" (6), so its map list is empty and
+    // MapIDs.front() read address 0: dev realm crash 2026-11-02 18:57 (eea74327b3), on the first login of a new level 1 Human Hunter
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: all arenas (6) has no map in BattlemasterListXMap, arena join by {} ignored", _player->GetName());
         ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;
     }
