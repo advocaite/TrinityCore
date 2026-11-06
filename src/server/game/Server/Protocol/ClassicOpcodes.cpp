@@ -137,10 +137,12 @@ uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
             classicOpcode = WithOpcodeGroup(classicOpcode, ClassicClientConnectionGroup);
         // client 70790 (the WoW Forever product) added two messages to the main client group: official 70532 vs 70790 sniffs have
         // SET_ACTION_BUTTON (0x62) unchanged and everything seen from QUERY_REALM_NAME (0xB5) on two higher.
-        // Classic.ClientMainGroupInsertIndex70790 = the 70790 index of the first new message; the two new ones stay unknown
+        // Classic.ClientMainGroupInsertIndex70790 = the 70790 index of the first new message; the two new ones stay unknown.
+        // Packet logs of the client: CREATE_CHARACTER (0x70, 96 bytes with the name) did not move and the name check (0x71) came
+        // at 0x73, so the new messages are 0x71 and 0x72. 0x63 would turn CREATE_CHARACTER into PET_BATTLE_REPLACE_FRONT_PET (0x6E).
         if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup - 1 && IsBuild70790OrLater())
         {
-            static uint32 const clientInsertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertIndex70790", 0x63));
+            static uint32 const clientInsertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertIndex70790", 0x71));
             uint32 index = classicOpcode & 0xFFFF;
             if (index >= clientInsertIndex70790 + 2)
                 classicOpcode -= 2;
