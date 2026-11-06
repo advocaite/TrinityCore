@@ -1524,7 +1524,10 @@ void Battleground::SetBracket(PVPDifficultyEntry const* bracketEntry)
 
 void Battleground::RewardXPAtKill(Player* killer, Player* victim)
 {
-    if (sWorld->getBoolConfig(CONFIG_BG_XP_FOR_KILL) && killer && victim)
+    // Honor from a battleground kill must not depend on Battleground.GiveXPForKills - that switch only
+    // decides whether kills also grant XP (see KillRewarder::_RewardPlayer). Before, the whole reward
+    // call was skipped when it was off, so a battleground kill paid no honor and counted no HK.
+    if (killer && victim)
     {
         Player* killers[] = { killer };
         KillRewarder(Trinity::IteratorPair(std::begin(killers), std::end(killers)), victim, true).Reward();
