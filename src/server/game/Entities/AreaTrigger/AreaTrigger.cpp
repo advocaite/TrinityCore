@@ -74,7 +74,7 @@ struct AreaTrigger::MovementUpdateLocalResult
 };
 
 AreaTrigger::AreaTrigger() : WorldObject(false), MapObject(), _spawnId(0), _aurEff(nullptr),
-    _duration(0), _totalDuration(0), _verticesUpdatePreviousRotation(),
+    _duration(0), _totalDuration(0), _verticesUpdatePreviousRotation(0.0f, 0.0f, 0.0f, 0.0f), // not a rotation, so the first UpdatePolygonVertices always fills the vertices
     _isRemoved(false), _reachedDestination(true),
     _areaTriggerCreateProperties(nullptr), _areaTriggerTemplate(nullptr)
 {
