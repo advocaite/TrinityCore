@@ -7261,8 +7261,8 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
         // apply honor multiplier from aura (not stacking-get highest)
         AddPct(honor_f, GetMaxPositiveAuraModifierByMiscMask(SPELL_AURA_MOD_HONOR_GAIN_PCT_FROM_SOURCE, 1 << AsUnderlyingType(source)));
         AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
-        // Classic 1.60 Legacy perk For Great Honor 1225501: currency gain aura on Honor (1792); honor is not credited as that currency here
-        AddPct(honor_f, GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_CURRENCY_GAIN, 1792));
+        // Classic 1.60 Legacy perk For Great Honor 1225501 (currency gain aura on Honor 1792) is applied by
+        // ModifyCurrency when the honor is credited below, for kills and battleground honor alike.
         honor_f += _restMgr->GetRestBonusFor(REST_TYPE_HONOR, honor_f);
     }
 
@@ -7283,6 +7283,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
     SendDirectMessage(data.Write());
 
     AddHonorXP(honor);
+
+    // Classic 1.60: honor is the Honor currency (1792). The PvP quartermasters (Lady Palanseer 12792, Brave Stonehide
+    // 12793, Sergeant Thunderhorn 14581) price their goods in it through ItemExtendedCost (11575-11706: 1792 plus marks),
+    // so honor that only fed the retail honor level bar could never be spent.
+    if (honor > 0 && sCurrencyTypesStore.HasRecord(CURRENCY_HONOR_CLASSIC))
+        ModifyCurrency(CURRENCY_HONOR_CLASSIC, honor, CurrencyGainSource::PvPHonorReward);
 
     if (InBattleground() && honor > 0)
     {
