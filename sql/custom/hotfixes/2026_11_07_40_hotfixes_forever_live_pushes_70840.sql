@@ -20,21 +20,9 @@ INSERT INTO `broadcast_text` (`ID`,`Text`,`Text1`,`LanguageID`,`ConditionID`,`Em
 (301837,'','You don''t understand. That forge is poisoning the farms of Westfall! If it isn''t destroyed, nothing will grow here for generations. You''re risking a major famine!',0,0,1155,256,0,4,0,0,0,0,0,0,0,0,70840),
 (301838,'Thank you for your concern, elf, but this is now a Stormwind internal matter. Your help is no longer needed at this time.','',0,0,274,256,0,4,0,0,0,0,0,0,0,0,70840),
 (305021,'You don''t look like much, but something tells me you are right. I think I''ll just sit here a bit longer. Thanks for the chat, stranger.','You don''t look like much, but something tells me you are right. I think I''ll just sit here a bit longer. Thanks for the chat, stranger.',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
-(307136,'This was once a part of Eldre''Thalas - the ancient city of my people that lies just over the southern mountains. Dire Maul, I believe it is commonly called these days. Perhaps you have heard of it.
-
-Over time, the elements have worn away at our marvelous structures and smothered our gardens. I yearn to return to the halls of Eldre''Thalas, but I am still haunted by memories of the past.
-
-For now, I am content merely watching over these lands and reminiscing over what once was.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
-(313610,'I''m inclined to agree. Despite our people coming together to survive the Great Sundering it seems as though the city was nonetheless doomed. How pedantic is it that its fall from grace would come from something so mundane as internal strife?
-
-My loyalty was unquestionable in those days, but in the years since I''ve come to realize that the rebellion was the moment that we truly lost Prince Tortheldrin. Everything that came after is but a consequence of that wound upon his soul.
- 
-For my part, I try to avoid dwelling on the past, particularly my role in those events.
-
-Try as I might though... it still haunts me.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
-(313613,'Celebrating my own life as I stare toward the mass grave of so many of my kin feels... selfish. Many among my order remain cloistered in Prince Tortheldrin''s inner sanctum, I suspect to hide from their own guilt. Seeing the city from this perspective makes it difficult to avoid painful truths.
-
-I still count myself among the Shen''dralar, but these days I am long estranged from the library I once called home.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
+(307136,'This was once a part of Eldre''Thalas - the ancient city of my people that lies just over the southern mountains. Dire Maul, I believe it is commonly called these days. Perhaps you have heard of it.\r\n\r\nOver time, the elements have worn away at our marvelous structures and smothered our gardens. I yearn to return to the halls of Eldre''Thalas, but I am still haunted by memories of the past.\r\n\r\nFor now, I am content merely watching over these lands and reminiscing over what once was.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
+(313610,'I''m inclined to agree. Despite our people coming together to survive the Great Sundering it seems as though the city was nonetheless doomed. How pedantic is it that its fall from grace would come from something so mundane as internal strife?\r\n\r\nMy loyalty was unquestionable in those days, but in the years since I''ve come to realize that the rebellion was the moment that we truly lost Prince Tortheldrin. Everything that came after is but a consequence of that wound upon his soul.\r\n \r\nFor my part, I try to avoid dwelling on the past, particularly my role in those events.\r\n\r\nTry as I might though... it still haunts me.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
+(313613,'Celebrating my own life as I stare toward the mass grave of so many of my kin feels... selfish. Many among my order remain cloistered in Prince Tortheldrin''s inner sanctum, I suspect to hide from their own guilt. Seeing the city from this perspective makes it difficult to avoid painful truths.\r\n\r\nI still count myself among the Shen''dralar, but these days I am long estranged from the library I once called home.','',0,0,0,256,0,4,0,0,0,0,0,0,0,0,70840),
 (317087,'Wanna join a battle out in Darkspear Islands?','Wanna join a battle out in Darkspear Islands?',0,0,0,257,0,4,0,0,0,0,0,0,0,0,70840);
 DELETE FROM `curve` WHERE `ID` IN (127981,127982,127983,127984,127985,127986,127987,127988,127989,127990,127991,127992,127993,127994,127995,127996,127997,127998,127999,128000,128001,128002,128003,128004,128006,128008,128009,128010,128011,128012,128013,128014,128296);
 INSERT INTO `curve` (`ID`,`Type`,`Flags`,`VerifiedBuild`) VALUES
