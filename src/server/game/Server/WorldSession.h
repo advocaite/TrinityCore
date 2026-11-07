@@ -1381,6 +1381,7 @@ class TC_GAME_API WorldSession
 
         void HandleSetSelectionOpcode(WorldPackets::Misc::SetSelection& packet);
         void HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateChange& packet);
+        void UpdateCampfireRest(uint8 standState);   // UnitStandStateType
         void HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet);
 
         // Social

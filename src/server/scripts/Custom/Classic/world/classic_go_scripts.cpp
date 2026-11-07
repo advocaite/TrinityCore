@@ -110,6 +110,14 @@ static constexpr CampFeature CampFeatures[] =
     { 651953, false, SPELL_BOOSTED_STAMINA },       // First Aid Kit
     { 651954, false, SPELL_BOOSTED_STATS_PCT },     // Fish Bowl
     { 651952, false, SPELL_BOOSTED_STATS_LUTE },    // Enchanted Lute
+    // tier 2/3 features that "provide all of the benefits of" the one they replace (70790 client texts of their placement spells;
+    // gameobjects from the spells' effect 50). Without these, placing one over the lower feature lost its buff.
+    { 612120, false, SPELL_BOOSTED_MANA_REGEN },    // Fermenter (1307242), over a Mana Well
+    { 612092, false, SPELL_BOOSTED_STATS_PCT },     // Fishing Hut (1307246), over a Fish Bowl
+    { 612090, false, SPELL_BOOSTED_STATS_PCT },     // Fishing Rack (1307247), over a Fish Bowl
+    { 612087, false, SPELL_BOOSTED_INTELLECT },     // Greenhouse (1307248), over an Incense Candle
+    { 612136, false, SPELL_EXTRA_STRENGTH },        // Master Forge (1307261), over a Sharpening Wheel
+    { 612110, false, SPELL_BOOSTED_STAMINA },       // Plague Doctor's Laboratory (1307265), over a First Aid Kit
 };
 
 // The buffs scale with level in steps (client tooltips: "$?$PL<12[3]?$PL<24[8]...[$1230124s1]"); the spell's own value is the
