@@ -21,6 +21,7 @@
 #include "BattlegroundScore.h"
 #include "BattlegroundScript.h"
 #include "ChatTextBuilder.h"
+#include "Config.h"
 #include "Creature.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
@@ -699,6 +700,14 @@ void Battleground::EndBattleground(Team winner)
         if (marks.MapId == GetBgMap()->GetId())
             classicMarks = &marks;
 
+    // Classic 1.60: PvP rank. The rank is the renown track of faction 2800 "PvP Rank Points" (renown currency 3473, rank 1 at 750
+    // points ... rank 14 at 24750 in all, RenownThresholdCurveID 103650). Battlegrounds are the main source of rank points on the
+    // official realm; nothing in the client data pays them (no spell or quest reward), so the server gives them when a battle ends.
+    static constexpr uint32 ClassicPvPRankFactionID = 2800;
+    FactionEntry const* classicPvPRankFaction = isBattleground() ? sFactionStore.LookupEntry(ClassicPvPRankFactionID) : nullptr;
+    int32 const classicRankPointsWin = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundWin", 250);
+    int32 const classicRankPointsLoss = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundLoss", 100);
+
     WorldPackets::Battleground::PVPMatchComplete pvpMatchComplete;
     pvpMatchComplete.Winner = GetWinner();
     pvpMatchComplete.Duration = std::chrono::duration_cast<Seconds>(Milliseconds(std::max<int32>(0, (GetElapsedTime() - BG_START_DELAY_2M))));
@@ -764,6 +773,11 @@ void Battleground::EndBattleground(Team winner)
             else if (GetInProgressDuration() >= 10min)
                 player->CastSpell(player, classicMarks->Lose, true);
         }
+
+        // Classic 1.60: rank points for the battle (winners more, losers less), see classicPvPRankFaction above
+        if (classicPvPRankFaction)
+            if (int32 rankPoints = team == winner ? classicRankPointsWin : classicRankPointsLoss; rankPoints > 0)
+                player->GetReputationMgr().ModifyReputation(classicPvPRankFaction, rankPoints, false, true);
 
         // Reward winner team
         if (team == winner)

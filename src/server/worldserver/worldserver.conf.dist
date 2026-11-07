@@ -4720,6 +4720,17 @@ Classic.Shop.BoostGold = 250
 
 Classic.Shop.VasTest = 0
 
+#    Classic.PvPRank.PointsBattlegroundWin
+#    Classic.PvPRank.PointsBattlegroundLoss
+#        Description: PvP rank points (reputation of the "PvP Rank Points" track, faction 2800) given to every player of the
+#                     winning / losing side when a battleground ends. Rank 1 needs 750 points, rank 14 needs 24750 in all.
+#                     Rate.Reputation.Gain also applies. 0 gives none.
+#        Default:     250 - (Win)
+#                     100 - (Loss)
+
+Classic.PvPRank.PointsBattlegroundWin = 250
+Classic.PvPRank.PointsBattlegroundLoss = 100
+
 #
 #    Discord.Channel.Enable
 #        Description: In-game chat channel of the Discord bot (contrib/discord_bot): players join it at login (unless they left
