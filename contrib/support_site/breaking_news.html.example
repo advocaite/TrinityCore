@@ -1,0 +1,12 @@
+<html><body>
+<!-- Breaking News box on the login and character screens. Rename to breaking_news.html (it wins over breaking_news.txt);
+     no file or an empty one = no box. The launcher points the game's news download at this site (plain http, port 80).
+     The box is the game's SimpleHTML frame, not a browser (tested on 70862, 2026-11-08):
+       works:   h1 h2 h3 p br a, align="left|center|right", &amp; entities,
+                colours |cffRRGGBB text|r, icons |TInterface\Icons\<name>:<size>|t or |T<file id>:<size>|t
+       doesn't: img (nothing shown), b and font (their text is dropped), CSS, buttons, scripts -->
+<h1 align="center">|cffffd100Welcome to our server!|r</h1>
+<p align="center">|TInterface\Icons\INV_Misc_QuestionMark:20|t Server news goes here. |T134400:20|t</p>
+<h3>|cff1eff00Up|r: the realm is online.</h3>
+<p>Join us: <a href="https://discord.gg/9GdBGrWPfj">|cff00ccff[Discord]|r</a></p>
+</body></html>
