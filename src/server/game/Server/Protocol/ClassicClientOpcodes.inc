@@ -521,8 +521,12 @@
     { 0x440026, 0x430026 }, // CMSG_SEND_MAIL (4.2)
     { 0x440028, 0x430028 }, // CMSG_REQUEST_CHAT_LOGIN (0.0)
     { 0x440029, 0x430029 }, // CMSG_ACCEPT_GUILD_INVITE (3.8)
-    { 0x440034, 0x430032 }, // CMSG_PARTY_INVITE_RESPONSE (1.0)
-    { 0x440035, 0x430034 }, // CMSG_GUILD_INVITE_BY_NAME (1.0)
+    // CMSG_GUILD_INVITE_BY_NAME is 0x440034, not 0x440035: the 70790 packet log of 2026-11-06 has three guild window "Invite Member"
+    // clicks at 0x440034, each 9 bits name length + 1 bit (no arena team) + "Avenaro " (the GuildInviteByName layout). They were read
+    // as PARTY_INVITE_RESPONSE, so no guild invite ever reached a player or bot. PARTY_INVITE_RESPONSE takes the other number of the
+    // swapped pair (not seen on the wire yet).
+    { 0x440034, 0x430034 }, // CMSG_GUILD_INVITE_BY_NAME (packet log 70790, 3 invites)
+    { 0x440035, 0x430032 }, // CMSG_PARTY_INVITE_RESPONSE (swapped pair, not seen yet)
     { 0x440036, 0x430035 }, // CMSG_DF_PROPOSAL_RESPONSE (1.0)
     { 0x440037, 0x430036 }, // CMSG_DF_CONFIRM_EXPAND_SEARCH (0.0)
     { 0x440038, 0x430038 }, // CMSG_LFG_LIST_LEAVE (ride ticket only; serializer rva 0x8B40C0)
