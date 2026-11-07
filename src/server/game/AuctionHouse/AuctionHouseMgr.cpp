@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseMgr.h"
+#include <limits>
 #include "AccountMgr.h"
 #include "AuctionHouseBot.h"
 #include "AuctionHousePackets.h"
@@ -1427,10 +1428,24 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     auto throttleItr = _replicateThrottleMap.find(player->GetGUID());
     if (throttleItr != _replicateThrottleMap.end())
     {
-        if (throttleItr->second.Global != global || throttleItr->second.Cursor != cursor || throttleItr->second.Tombstone != tombstone)
+        bool const sameScan = throttleItr->second.Global == global && throttleItr->second.Cursor == cursor && throttleItr->second.Tombstone == tombstone;
+        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) after an earlier scan
+        // got an empty answer until the cooldown ran out, so the add-on saw 0 items. A new scan may start again once the last
+        // one has finished and the cooldown is over; an unfinished scan is simply restarted from the beginning.
+        bool const freshScan = !global && !cursor && !tombstone;
+        if (!sameScan && !freshScan)
             return;
 
-        if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
+        if (freshScan && !sameScan)
+        {
+            if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
+                return;
+
+            throttleItr->second = PlayerReplicateThrottleData{};
+            throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
+            throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
+        }
+        else if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
             return;
     }
     else
@@ -1440,8 +1455,12 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
         throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
     }
 
-    if (_itemsByAuctionId.empty() || !count)
+    if (_itemsByAuctionId.empty())
         return;
+
+    // Classic 1.60: a count of 0 asks for everything at once (the answer was empty before).
+    if (!count)
+        count = std::numeric_limits<uint32>::max();
 
     auto itr = _itemsByAuctionId.upper_bound(cursor);
     for (; itr != _itemsByAuctionId.end(); ++itr)
@@ -1449,7 +1468,9 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
         AuctionPosting const& auction = itr->second;
 
         WorldPackets::AuctionHouse::AuctionItem& auctionItem = replicateResponse.Items.emplace_back();
-        auction.BuildAuctionItem(&auctionItem, false, true, true, auction.Bidder.IsEmpty());
+        // Classic 1.60 has no separate commodity scan, so stackable goods (cloth, herbs, potions: most of what the auction
+        // house bot sells) carry their item too; without it a scanning add-on could not tell what they were.
+        auction.BuildAuctionItem(&auctionItem, true, true, true, auction.Bidder.IsEmpty());
         if (!--count)
             break;
     }
