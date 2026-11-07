@@ -632,6 +632,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.armory(path)
             if path == '/favicon.ico':
                 return self.send(404, b'', 'text/plain')
+            if path.startswith('/service/'):
+                return self.breaking_news()
             if not self.session:
                 return self.page('Support', alert('info', 'Please open this page from the game: press <b>Help</b> (the question mark) '
                                                           'in the main menu.'), status=403)
@@ -644,6 +646,35 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             log('ERROR', traceback.format_exc())
             self.page('Error', alert('bad', 'Something went wrong on our side. Please try again in a moment.'), status=500)
+
+    # The "Breaking News" box on the login and character screens. The client downloads it from
+    # https://breaking-news.support.blizzard.com/service/<product>/<branch>/<region>/<locale>; the Forever Launcher (2.5.2+)
+    # points that URL at this site's plain http port (news_http_port, default 80: the download refuses our certificate). Answer
+    # like Blizzard's: "SERVERALERT:" and the message as HTML, from breaking_news.html or breaking_news.txt next to this file
+    # (read on every request, so editing needs no restart); missing or empty = no box.
+    def breaking_news(self):
+        log('breaking news requested:', self.path)
+        # breaking_news.html: sent as it is (the box is a game SimpleHTML frame, not a browser: see breaking_news.html.example)
+        try:
+            with open(os.path.join(HERE, 'breaking_news.html'), encoding='utf-8-sig') as f:
+                html = f.read().strip()
+            if html:
+                if not html.lower().startswith('<html'):
+                    html = '<html><body>%s</body></html>' % html
+                return self.send(200, ('SERVERALERT:\n' + html).encode('utf-8'), 'text/html; charset=UTF-8')
+        except OSError:
+            pass
+        text = ''
+        try:
+            with open(os.path.join(HERE, 'breaking_news.txt'), encoding='utf-8-sig') as f:
+                text = f.read().strip()
+        except OSError:
+            pass
+        if not text:
+            return self.send(200, b'', 'text/html; charset=utf-8')
+        paragraphs = ''.join('<p>%s</p>' % esc(p).replace('\n', '<br>') for p in text.replace('\r\n', '\n').split('\n\n') if p.strip())
+        body = 'SERVERALERT:\n<html><body>%s</body></html>' % paragraphs
+        return self.send(200, body.encode('utf-8'), 'text/html; charset=UTF-8')
 
     def send(self, status, body, content_type='text/html; charset=utf-8', headers=(), cache=False):
         self.send_response(status)
@@ -2075,6 +2106,34 @@ def make_token(bnet_account_id, realm_id):
                                   urlencode({'token': token, 'ref': 'test'})))
 
 
+class NewsHandler(Handler):
+    """Plain HTTP (news_http_port, default 80): only the Breaking News; the game refuses certificates outside the Windows root store."""
+
+    def route(self, method):
+        if method == 'GET' and urlsplit(self.path).path.startswith('/service/'):
+            return self.breaking_news()
+        return self.send(404, b'', 'text/plain')
+
+
+class TLSServer(ThreadingHTTPServer):
+    """TLS handshake per connection, in its thread: a failed handshake is logged (wrapping the listening socket drops it silently)."""
+
+    def __init__(self, address, handler, ctx):
+        super().__init__(address, handler)
+        self.ctx = ctx
+
+    def finish_request(self, request, client_address):
+        try:
+            conn = self.ctx.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError) as e:
+            log('TLS handshake from', client_address[0], 'failed:', e)
+            return
+        try:
+            super().finish_request(conn, client_address)
+        finally:
+            conn.close()
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == '--make-token':
@@ -2084,8 +2143,15 @@ def main():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CFG['cert'], CFG['key'])
     threading.Thread(target=ensure_armory_export, daemon=True).start()
-    srv = ThreadingHTTPServer((CFG.get('listen', '0.0.0.0'), int(CFG.get('port', 443))), Handler)
-    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    srv = TLSServer((CFG.get('listen', '0.0.0.0'), int(CFG.get('port', 443))), Handler, ctx)
+    news_port = int(CFG.get('news_http_port', 80))
+    if news_port:
+        try:
+            news = ThreadingHTTPServer((CFG.get('listen', '0.0.0.0'), news_port), NewsHandler)
+            threading.Thread(target=news.serve_forever, daemon=True).start()
+            log('breaking news (plain http) on port', news_port)
+        except OSError as e:
+            log('breaking news: port', news_port, 'not available:', e)
     log('support site on port', CFG.get('port', 443), '- RA', 'configured' if (CFG.get('ra') or {}).get('user') else 'not configured')
     srv.serve_forever()
 
