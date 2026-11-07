@@ -4845,9 +4845,10 @@ Classic.MainGroupInsertIndex70790 = 223
 #        Description: Client 70790+ (realmlist.gamebuild >= 70790): 70790 index (decimal) of the first of the two messages
 #                     added to the main client group; the client messages after them are two lower. The official sniffs
 #                     narrow it to 99..179 (0x63..0xB3): SET_ACTION_BUTTON (0x62) is unchanged, QUERY_REALM_NAME (0xB5) moved.
-#        Default:     99
+#                     Packet logs pin it to 113 (0x71): CREATE_CHARACTER (0x70) did not move, the name check came at 0x73.
+#        Default:     113
 
-Classic.ClientMainGroupInsertIndex70790 = 99
+Classic.ClientMainGroupInsertIndex70790 = 113
 
 #    Classic.ClientMainGroupInsertIndex
 #        Description: Client 70291+: 70291 index (decimal) of the message added to the main client group; the client messages
