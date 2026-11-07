@@ -7,4 +7,3 @@ DELETE FROM `build_info` WHERE `build`=70840;
 INSERT INTO `build_info` (`build`,`majorVersion`,`minorVersion`,`bugfixVersion`,`hotfixVersion`) VALUES
 (70840,1,60,1,NULL);
 
-UPDATE `realmlist` SET `gamebuild`=70840 WHERE `id` IN (70,71,72,73,74) AND `gamebuild`=70790;
