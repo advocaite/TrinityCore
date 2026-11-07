@@ -736,8 +736,15 @@ void WorldSession::HandleTextEmoteOpcode(WorldPackets::Chat::CTextEmote& packet)
 
     switch (emote)
     {
-        case EMOTE_STATE_SLEEP:
         case EMOTE_STATE_SIT:
+            // the sit emote sits the player down (the client may send it without a stand state change, see UpdateCampfireRest)
+            if (_player->GetStandState() == UNIT_STAND_STATE_STAND && !_player->IsMounted() && !_player->IsInCombat())
+            {
+                _player->SetStandState(UNIT_STAND_STATE_SIT);
+                UpdateCampfireRest(UNIT_STAND_STATE_SIT);
+            }
+            break;
+        case EMOTE_STATE_SLEEP:
         case EMOTE_STATE_KNEEL:
         case EMOTE_ONESHOT_NONE:
             break;
