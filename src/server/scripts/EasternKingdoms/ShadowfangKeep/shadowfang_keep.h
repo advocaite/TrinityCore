@@ -49,7 +49,10 @@ enum SFKCreatureIds
     NPC_BARON_SILVERLAINE       = 3887,
     NPC_COMMANDER_SPRINGVALE    = 4278,
     NPC_LORD_WALDEN             = 46963,
-    NPC_LORD_GODFREY            = 46964
+    NPC_LORD_GODFREY            = 46964,
+    // the Classic keep: Fenrus opens the Sorcerer's Gate, Wolf Master Nandos the way to Arugal
+    NPC_FENRUS_THE_DEVOURER     = 4274,
+    NPC_WOLF_MASTER_NANDOS      = 3927
 };
 
 enum SKGameObjectIds
