@@ -34,6 +34,27 @@
 
 namespace Battlenet
 {
+namespace
+{
+// the login screen sends what the player typed; accounts are stored as name@domain, so a plain name (no @) gets
+// "@" + LoginREST.DefaultAccountDomain added, which lets players type "name" instead of "name@local".
+// Names with an @ are left as they are, and an empty setting turns this off.
+void NormalizeLoginName(std::string& login)
+{
+    Utf8ToUpperOnlyLatin(login);
+    if (login.empty() || login.find('@') != std::string::npos)
+        return;
+
+    std::string domain = sConfigMgr->GetStringDefault("LoginREST.DefaultAccountDomain"sv, "local");
+    if (domain.empty())
+        return;
+
+    Utf8ToUpperOnlyLatin(domain);
+    login += '@';
+    login += domain;
+}
+}
+
 LoginRESTService& LoginRESTService::Instance()
 {
     static LoginRESTService instance;
@@ -290,7 +311,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLogin(std::sh
             return HandleAuthenticatorCode(std::move(session), context, loginForm->inputs(i).value());
 
     std::string login(getInputValue(loginForm.get(), "account_name"));
-    Utf8ToUpperOnlyLatin(login);
+    NormalizeLoginName(login);
 
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_AUTHENTICATION);
     stmt->setString(0, login);
@@ -309,7 +330,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLogin(std::sh
         }
 
         std::string login(getInputValue(loginForm.get(), "account_name"));
-        Utf8ToUpperOnlyLatin(login);
+        NormalizeLoginName(login);
         bool passwordCorrect = false;
         Optional<std::string> serverM2;
 
@@ -688,7 +709,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLoginSrpChall
         if (loginForm.inputs(i).input_id() == "account_name")
             login = loginForm.inputs(i).value();
 
-    Utf8ToUpperOnlyLatin(login);
+    NormalizeLoginName(login);
 
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_CHECK_PASSWORD_BY_EMAIL);
     stmt->setString(0, login);
