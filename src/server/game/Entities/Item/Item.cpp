@@ -599,6 +599,50 @@ void Item::UpdateDuration(Player* owner, uint32 diff)
     SetState(ITEM_CHANGED, owner);                          // save new time in database
 }
 
+// The client reads an effect's charges from SpellCharges[LegacySlotIndex], the item's old spell slot. Classic items keep their vanilla
+// slots: every healthstone and mana gem has its one use effect in slot 1, so a charge written to slot 0 showed them as 0 and grey on the
+// action bar. Each effect takes its own slot: the first effect naming a slot gets it, and an effect without a usable slot of its own
+// takes the lowest slot no other effect has. In the 70790 data one item, 239695, has two effects in slot 1 (charges -1 and 0); giving
+// the second one slot 1 as well wrote its 0 over the first one's charge when the item was made, and the item could not be used.
+static uint32 GetSpellChargesSlotForEffect(BonusData const& bonusData, uint32 effectIndex)
+{
+    static constexpr uint32 MaxSpellChargesSlot = UF::size<decltype(UF::ItemData::SpellCharges)>();
+    if (effectIndex >= MaxSpellChargesSlot)
+        return effectIndex;
+
+    uint32 const count = std::min<uint32>(uint32(bonusData.EffectCount), MaxSpellChargesSlot);
+    std::array<uint32, MaxSpellChargesSlot> slots;
+    std::array<bool, MaxSpellChargesSlot> taken = { };
+    slots.fill(MaxSpellChargesSlot);
+    for (uint32 i = 0; i < count; ++i)
+    {
+        ItemEffectEntry const* effect = bonusData.Effects[i];
+        if (effect && effect->LegacySlotIndex < MaxSpellChargesSlot && !taken[effect->LegacySlotIndex])
+        {
+            slots[i] = effect->LegacySlotIndex;
+            taken[slots[i]] = true;
+        }
+    }
+
+    for (uint32 i = 0; i < count; ++i)
+    {
+        if (slots[i] != MaxSpellChargesSlot)
+            continue;
+
+        for (uint32 slot = 0; slot < MaxSpellChargesSlot; ++slot)
+        {
+            if (!taken[slot])
+            {
+                slots[i] = slot;
+                taken[slot] = true;
+                break;
+            }
+        }
+    }
+
+    return effectIndex < count ? slots[effectIndex] : effectIndex;
+}
+
 static uint32 FindSpellChargesSlot(BonusData const& bonusData, ItemEffectEntry const* effect)
 {
     static constexpr uint32 MaxSpellChargesSlot = UF::size<decltype(UF::ItemData::SpellCharges)>();
@@ -608,14 +652,14 @@ static uint32 FindSpellChargesSlot(BonusData const& bonusData, ItemEffectEntry c
         // return fist effect that has charges
         for (uint32 i = 0; i < bonusData.EffectCount && i < MaxSpellChargesSlot; ++i)
             if (bonusData.Effects[i] && bonusData.Effects[i]->Charges != 0)
-                return i;
+                return GetSpellChargesSlotForEffect(bonusData, i);
 
         return MaxSpellChargesSlot;
     }
 
     for (uint32 i = 0; i < bonusData.EffectCount && i < MaxSpellChargesSlot; ++i)
         if (bonusData.Effects[i] == effect)
-            return i;
+            return GetSpellChargesSlotForEffect(bonusData, i);
 
     return MaxSpellChargesSlot;
 }
@@ -657,8 +701,9 @@ void Item::SaveToDB(CharacterDatabaseTransaction trans)
             stmt->setUInt32(++index, m_itemData->Expiration);
 
             std::ostringstream ssSpells;
+            // saved in effect order, as before; only the slot the client reads differs
             for (uint8 i = 0; i < m_itemData->SpellCharges.size() && i < _bonusData.EffectCount; ++i)
-                ssSpells << m_itemData->SpellCharges[i] << ' ';
+                ssSpells << m_itemData->SpellCharges[GetSpellChargesSlotForEffect(_bonusData, i)] << ' ';
             stmt->setString(++index, ssSpells.str());
 
             stmt->setUInt32(++index, m_itemData->DynamicFlags);
@@ -1002,7 +1047,8 @@ bool Item::LoadFromDB(ObjectGuid::LowType guid, ObjectGuid ownerGuid, Field* fie
     // load charges after bonuses, they can add more item effects
     std::vector<std::string_view> tokens = Trinity::Tokenize(fields[6].GetStringView(), ' ', false);
     for (uint8 i = 0; i < m_itemData->SpellCharges.size() && i < _bonusData.EffectCount && i < tokens.size(); ++i)
-        SetUpdateFieldValue(m_values.ModifyValue(&Item::m_itemData).ModifyValue(&UF::ItemData::SpellCharges, i), Trinity::StringTo<int32>(tokens[i]).value_or(0));
+        SetUpdateFieldValue(m_values.ModifyValue(&Item::m_itemData).ModifyValue(&UF::ItemData::SpellCharges, GetSpellChargesSlotForEffect(_bonusData, i)),
+            Trinity::StringTo<int32>(tokens[i]).value_or(0));
 
     SetModifier(ITEM_MODIFIER_TRANSMOG_APPEARANCE_ALL_SPECS, fields[20].GetUInt32());
     SetModifier(ITEM_MODIFIER_TRANSMOG_APPEARANCE_SPEC_1, fields[21].GetUInt32());
