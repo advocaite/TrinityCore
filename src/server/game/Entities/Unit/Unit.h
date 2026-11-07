@@ -325,6 +325,7 @@ enum UnitState : uint32
     UNIT_STATE_ALL_STATE           = 0xffffffff
 };
 
+TC_GAME_API extern float const defaultBaseMoveSpeed[MAX_MOVE_TYPE];
 TC_GAME_API extern float baseMoveSpeed[MAX_MOVE_TYPE];
 TC_GAME_API extern float playerBaseMoveSpeed[MAX_MOVE_TYPE];
 

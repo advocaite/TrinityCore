@@ -98,6 +98,21 @@
 #include <sstream>
 #include <cmath>
 
+// The real base speeds. baseMoveSpeed (NPCs, mobs) and playerBaseMoveSpeed (players, pets, bots) are these times
+// Rate.MoveSpeed.Creature and Rate.MoveSpeed, set again at every config load (World::LoadConfigSettings).
+float const defaultBaseMoveSpeed[MAX_MOVE_TYPE] =
+{
+    2.5f,                  // MOVE_WALK
+    7.0f,                  // MOVE_RUN
+    4.5f,                  // MOVE_RUN_BACK
+    4.722222f,             // MOVE_SWIM
+    2.5f,                  // MOVE_SWIM_BACK
+    3.141594f,             // MOVE_TURN_RATE
+    7.0f,                  // MOVE_FLIGHT
+    4.5f,                  // MOVE_FLIGHT_BACK
+    3.14f                  // MOVE_PITCH_RATE
+};
+
 float baseMoveSpeed[MAX_MOVE_TYPE] =
 {
     2.5f,                  // MOVE_WALK

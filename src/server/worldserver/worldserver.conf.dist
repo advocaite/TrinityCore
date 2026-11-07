@@ -2593,10 +2593,18 @@ Rate.Reputation.RecruitAFriendBonus = 0.1
 
 #
 #    Rate.MoveSpeed
-#        Description: Movement speed rate.
+#        Description: Movement speed rate of players, their pets and the bots (bots are players).
+#                     Rate.MoveSpeed.Player is the same setting under another name; it wins when both are set.
 #        Default:     1
 
 Rate.MoveSpeed = 1
+
+#
+#    Rate.MoveSpeed.Creature
+#        Description: Movement speed rate of NPCs and mobs.
+#        Default:     1
+
+Rate.MoveSpeed.Creature = 1
 
 #
 #    Rate.InstanceResetTime

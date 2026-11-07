@@ -1017,6 +1017,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.Honor"sv, .DefaultValue = 1.0f, .Index = RATE_HONOR },
         { .Name = "Rate.InstanceResetTime"sv, .DefaultValue = 1.0f, .Index = RATE_INSTANCE_RESET_TIME },
         { .Name = "Rate.MoveSpeed"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED, .Min = 0.01f },
+        { .Name = "Rate.MoveSpeed.Creature"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED_CREATURE, .Min = 0.01f },
         { .Name = "Rate.Corpse.Decay.Looted"sv, .DefaultValue = 0.5f, .Index = RATE_CORPSE_DECAY_LOOTED },
         { .Name = "DurabilityLoss.OnDeath"sv, .DefaultValue = 10.0f, .Index = RATE_DURABILITY_LOSS_ON_DEATH, .Min = 0.0f, .Max = 100.0f },
         { .Name = "DurabilityLossChance.Damage"sv, .DefaultValue = 0.5f, .Index = RATE_DURABILITY_LOSS_DAMAGE, .Min = 0.0f },
@@ -1045,8 +1046,20 @@ void World::LoadConfigSettings(bool reload)
     ///- Get string for new logins (newly created characters)
     SetNewCharString(sConfigMgr->GetStringDefault("PlayerStart.String"sv, ""sv));
 
+    // Forever: Rate.MoveSpeed.Player is the same setting as Rate.MoveSpeed (players, their pets and the bots, which are players
+    // too); a server owner who writes the .Player name gets it, and it wins when both are set. Rate.MoveSpeed.Creature is the
+    // speed of every other unit (NPCs and mobs). Both multiply the base speeds, so a reload never stacks them.
+    if (sConfigMgr->GetFloatDefault("Rate.MoveSpeed.Player"sv, -1.0f, true) >= 0.0f)
+    {
+        ConfigOptionLoadDefinition<float, Rates> const playerSpeed = { .Name = "Rate.MoveSpeed.Player"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED, .Min = 0.01f };
+        StoreConfigValue(rate_values[RATE_MOVESPEED], sConfigMgr->GetFloatDefault(playerSpeed.Name, playerSpeed.DefaultValue), playerSpeed, reload);
+    }
+
     for (uint8 i = 0; i < MAX_MOVE_TYPE; ++i)
-        playerBaseMoveSpeed[i] = baseMoveSpeed[i] * rate_values[RATE_MOVESPEED];
+    {
+        playerBaseMoveSpeed[i] = defaultBaseMoveSpeed[i] * rate_values[RATE_MOVESPEED];
+        baseMoveSpeed[i] = defaultBaseMoveSpeed[i] * rate_values[RATE_MOVESPEED_CREATURE];
+    }
 
     rate_values[RATE_DURABILITY_LOSS_ON_DEATH] /= 100.0f;
 
