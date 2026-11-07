@@ -2030,6 +2030,9 @@ void DB2Manager::InsertNewHotfix(uint32 tableHash, uint32 recordId)
     hotfixRecord.RecordID = recordId;
     hotfixRecord.ID.PushID = ++_maxHotfixId;
     hotfixRecord.ID.UniqueID = rand32();
+    // without this the record went out as Invalid and the client ignored the changed data (nothing used it with notifyClient
+    // until Rate.Talent)
+    hotfixRecord.HotfixStatus = HotfixRecord::Status::Valid;
     hotfixRecord.AvailableLocalesMask = 0xDFF;
 
     HotfixPush& push = _hotfixData[hotfixRecord.ID.PushID];

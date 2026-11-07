@@ -2499,6 +2499,16 @@ Rate.XP.Quest   = 1
 Rate.XP.Explore = 1
 
 #
+#    Rate.Talent
+#        Description: Classic 1.60: talent points per level. Talent points are the class talent currency (one point at
+#                     each level from 10 to 60); its level rows and its cap are multiplied by this and sent to the
+#                     client as hotfixes so its talent window shows the same number. Points are handed out level by
+#                     level (1.5 = 1, 2, 1, 2...). Lowering it below what a character spent asks for a talent reset.
+#        Default:     1 - (blizzlike, nothing changed or sent)
+
+Rate.Talent = 1
+
+#
 #    Rate.XP.BattlegroundKill
 #        Description: Experience rate for honorable kills in battlegrounds,
 #                     it works when Battleground.GiveXPForKills = 1
