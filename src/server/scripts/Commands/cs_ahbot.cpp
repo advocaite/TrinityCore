@@ -149,7 +149,7 @@ public:
             if (current)
                 sAuctionBot->SetItemsAmountForQuality(quality, current + extra);
         }
-        handler->PSendSysMessage("AuctionHouseBot: every active quality target raised by {} (until .ahbot reload).", extra);
+        handler->PSendSysMessage("AuctionHouseBot: every active quality target raised by %u (until .ahbot reload).", extra);
         return true;
     }
 
