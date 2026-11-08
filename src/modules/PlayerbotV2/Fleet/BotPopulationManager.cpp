@@ -4369,10 +4369,18 @@ void BotPopulationManager::DriveSetupPipelines()
     {
         live_ids.push_back(uint64(id));
     });
+    // Round robin: begin after the bot the last pass stopped at, so one bot whose setup eats the budget and never finishes
+    // cannot hold the head of the list and starve every other bot (2026-11-08).
+    static size_t s_drive_cursor = 0;
+    if (!live_ids.empty())
+        std::rotate(live_ids.begin(), live_ids.begin() + (s_drive_cursor % live_ids.size()), live_ids.end());
+    size_t drive_visited = 0;
+    struct DriveCursorAdvance { size_t& cursor; size_t& visited; ~DriveCursorAdvance() { cursor += visited; } } drive_cursor_advance{ s_drive_cursor, drive_visited };
     for (auto id : live_ids)
     {
         if (driven >= 10) break;  // throttle per tick
         if (getMSTimeDiff(pass_start_ms, getMSTime()) >= kPassBudgetMs) break;
+        ++drive_visited;
         ObjectGuid g = ObjectGuid::Create<HighGuid::Player>(id);
         Player* p = ObjectAccessor::FindConnectedPlayer(g);
         if (!p) continue;
