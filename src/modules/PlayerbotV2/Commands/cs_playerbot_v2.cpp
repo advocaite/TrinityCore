@@ -35,6 +35,8 @@
 #include "WorldSession.h"
 #include "TypeContainerVisitor.h"
 #include "PlayerbotAPI.h"
+#include "ClassicSpec.h"      // .playerbot questrun: spec override
+#include "DB2Stores.h"        // .playerbot questrun: sMapStore
 #include "PlayerbotV2.h"
 #include "LfgBotFill.h"
 #include "StringFormat.h"
@@ -592,6 +594,7 @@ public:
             { "levelall",      HandleLevelAll,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "delete",        HandleDelete,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "level",         HandleLevel,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "questrun",      HandleQuestRun,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "reset",         HandleReset,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "money",         HandleMoney,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "goto",          HandleGoto,          rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -2387,6 +2390,182 @@ public:
     // in-world (use `.playerbot login` first); level must be 1..MaxPlayerLevel.
     // GiveLevel handles stat/skill/talent/spell scaling in one shot â no
     // per-level loop needed. The packet it sends drops via BotSession::SendPacket.
+    // .playerbot questrun <bot> <questId> [specId]: stage a world bot on one quest for the quest protocol (operator 2026-11-08).
+    // One step per call, re-run until it says accepted: spec and talents, level up to the quest, repair, bags down to quest
+    // items, gear, teleport to the quest giver's spawn, accept. The bot's own quest rules do the rest.
+    static bool HandleQuestRun(ChatHandler* handler, std::string const& target_name, uint32 questId, Optional<uint32> specArg)
+    {
+        using namespace Playerbot;
+        if (!Services::Initialized())
+        { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
+        Player* p = ObjectAccessor::FindConnectedPlayerByName(target_name);
+        if (!p || !p->IsInWorld())
+        { handler->PSendSysMessage("questrun: '%s' is not in-world (.playerbot login %s first).", target_name.c_str(), target_name.c_str()); return false; }
+        const BotId id = p->GetGUID().GetCounter();
+        if (!Services::Lifecycle().is_bot(id))
+        { handler->PSendSysMessage("questrun: '%s' is not a V2 bot.", target_name.c_str()); return false; }
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!quest)
+        { handler->PSendSysMessage("questrun: no quest %u.", questId); return false; }
+
+        auto say = [&](char const* step, std::string const& detail)
+        {
+            handler->PSendSysMessage("questrun %s quest %u: %s %s", p->GetName().c_str(), questId, step, detail.c_str());
+            TC_LOG_INFO("playerbot.v2", "[questrun] {} quest={} step={} {}", p->GetName(), questId, step, detail);
+        };
+
+        // The quest giver's spawn: of every creature and game object that starts the quest, the first spawn on a map that is not
+        // instanceable; a spawn inside an instance only when there is nothing else. One scan of the spawn tables per quest.
+        struct Giver { uint32 entry = 0; bool go = false; bool open = false; WorldLocation where; };
+        static std::unordered_map<uint32, Giver> s_givers;
+        auto git = s_givers.find(questId);
+        if (git == s_givers.end())
+        {
+            Giver g;
+            auto consider = [&](uint32 mapId, Position const& at, uint32 entry, bool isGo)
+            {
+                MapEntry const* map = sMapStore.LookupEntry(mapId);
+                bool const open = map && !map->Instanceable();
+                if (!g.entry || (open && !g.open))
+                { g.entry = entry; g.go = isGo; g.open = open; g.where = WorldLocation(mapId, at); }
+            };
+            std::unordered_set<uint32> creatures, objects;
+            for (auto const& [entry, q] : *sObjectMgr->GetCreatureQuestRelationMapHACK())
+                if (q == questId) creatures.insert(entry);
+            for (auto const& [entry, q] : *sObjectMgr->GetGOQuestRelationMapHACK())
+                if (q == questId) objects.insert(entry);
+            if (!creatures.empty())
+                for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+                    if (creatures.count(data.id)) { consider(data.mapId, data.spawnPoint, data.id, false); if (g.open) break; }
+            if (!objects.empty() && !g.open)
+                for (auto const& [spawnId, data] : sObjectMgr->GetAllGameObjectData())
+                    if (objects.count(data.id)) { consider(data.mapId, data.spawnPoint, data.id, true); if (g.open) break; }
+            git = s_givers.emplace(questId, g).first;
+        }
+        Giver const& giver = git->second;
+        if (!giver.entry)
+        { say("no_giver", "no creature or game object spawn starts this quest"); return false; }
+
+        // Every call, so a bot that plays a long quest is never logged out by the shaper (the driver calls back while it plays).
+        Services::Population().ProtectFromKick(id, 60u * 60u * 1000u);
+        QuestStatus const status = p->GetQuestStatus(questId);
+        if (status != QUEST_STATUS_NONE)
+        { say("accepted", fmt::format("already in the log, status {}", uint32(status))); return true; }
+        if (p->GetQuestRewardStatus(questId))
+        { say("rewarded", "already rewarded"); return true; }
+        if (p->InBattleground() || p->InArena() || p->InBattlegroundQueue())
+        { say("in_battleground", "refused: leave the battleground first"); return false; }
+        if (Group* g = p->GetGroup())
+        { g->RemoveMember(p->GetGUID()); say("left_group", "a quest is tested alone"); return true; }
+
+        if (!p->IsAlive())
+        { p->ResurrectPlayer(1.0f); p->SpawnCorpseBones(); say("revived", ""); return true; }
+        if (p->IsInCombat())
+            p->CombatStop(true);
+
+        // Talents of the asked tree: the old ones go first, the build is walked until it says Ok (one walk per call). The level
+        // step below clears the mark, so new points are placed the same way.
+        static std::map<BotId, uint32> s_specDone;   // bot -> spec whose build was applied
+        uint32 const want = uint32(std::max<int32>(quest->GetClassicQuestLevel(), quest->GetClassicMinLevel()));
+        uint32 const cap = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+        bool const needsLevel = want > p->GetLevel() && want <= cap;
+        if (!needsLevel && specArg && *specArg && s_specDone[id] != *specArg)
+        {
+            if (Classic::GetSpecOverride(p->GetGUID()) != *specArg)
+            {
+                if (!Classic::SetSpecOverride(p, *specArg))
+                {
+                    // a chain runs through quests of every class on one bot: a spec of another class is simply not applied
+                    s_specDone[id] = *specArg;
+                    say("spec_skipped", fmt::format("{} is not a spec of this class, talents left as they are", *specArg));
+                    return true;
+                }
+                p->ResetTalents(true);
+            }
+            Result const r = API(p).apply_talent_build(0);
+            if (r != Result::Ok)
+            { say("spec_pending", fmt::format("override {} set, talent build result {}, run again", *specArg, int(r))); return false; }
+            s_specDone[id] = *specArg;
+            say("spec", fmt::format("override {} set, talents reset and the build applied", *specArg));
+            return true;
+        }
+
+        if (needsLevel)
+        {
+            p->GiveLevel(uint8(want));
+            p->InitTalentForLevel();
+            p->SetXP(0);
+            V2::Fleet::BotSetupPipeline::LearnLevelKit(p);
+            s_specDone.erase(id);   // the new points are placed by the spec step on the next call (gated on its result)
+            say("levelled", fmt::format("to {} (quest level {}, min {})", want, quest->GetClassicQuestLevel(), quest->GetClassicMinLevel()));
+            return true;
+        }
+
+        // Upkeep once per bot and quest: repair, bags, gear.
+        static std::set<std::pair<BotId, uint32>> s_prepared;
+        if (!s_prepared.count({ id, questId }))
+        {
+            p->DurabilityRepairAll(false, 0.f, false);
+            std::vector<std::pair<uint8, uint8>> slots;
+            p->ForEachItem(ItemSearchLocation::Inventory, [&](Item* item)
+            {
+                ItemTemplate const* tmpl = item->GetTemplate();
+                if (!item->IsBag() && tmpl && tmpl->GetClass() != ITEM_CLASS_QUEST)
+                    slots.emplace_back(item->GetBagSlot(), item->GetSlot());
+                return ItemSearchCallbackResult::Continue;
+            });
+            for (auto const& [bag, slot] : slots)
+                p->DestroyItem(bag, slot, true);
+            bool const regeared = Services::Population().RegearNow(p);
+            s_prepared.insert({ id, questId });
+            say("upkeep", fmt::format("repaired, {} bag items destroyed, regear changed items {}", slots.size(), int(regeared)));
+            return true;
+        }
+
+        if (p->GetMapId() != giver.where.GetMapId() || p->GetExactDist2d(giver.where.GetPositionX(), giver.where.GetPositionY()) > 40.f)
+        {
+            bool const ok = BotMovement::SafeTeleport(p, giver.where.GetMapId(), giver.where.GetPositionX(), giver.where.GetPositionY(), giver.where.GetPositionZ(), 0.f, 0);
+            say(ok ? "teleported" : "teleport_failed", fmt::format("to {} {} at map {} ({:.0f}, {:.0f}, {:.0f})", giver.go ? "object" : "creature", giver.entry,
+                giver.where.GetMapId(), giver.where.GetPositionX(), giver.where.GetPositionY(), giver.where.GetPositionZ()));
+            return ok;
+        }
+
+        // The bot's own travel runs it off the giver within seconds of the teleport (12 s between calls is 80 y of running), and
+        // quest talk needs 5 y: the giver is looked for within 250 y and the quest taken without the talk range. The test is
+        // about the quest, not the walk to its giver.
+        WorldObject* giverObj = nullptr;
+        if (giver.go)
+            giverObj = p->FindNearestGameObject(giver.entry, 250.f);
+        else
+            giverObj = p->FindNearestCreature(giver.entry, 250.f);
+        if (!giverObj)
+        { say("giver_not_here", fmt::format("{} {} not within 250 y (not spawned, or the grid is still loading: run again)", giver.go ? "object" : "creature", giver.entry)); return false; }
+        Result r = API(p).accept_quest(giverObj->GetGUID(), questId);
+        if (r == Result::OutOfRange && p->GetQuestStatus(questId) == QUEST_STATUS_NONE && p->CanTakeQuest(quest, false) && p->CanAddQuest(quest, false))
+        {
+            p->AddQuestAndCheckCompletion(quest, giverObj);
+            r = Result::Ok;
+        }
+        if (r == Result::Ok || p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+        { say("accepted", fmt::format("from {}", giver.entry)); return true; }
+        // which gate of CanTakeQuest refused, so the driver can act (run the previous quest first, level, skip a class quest)
+        std::string why;
+        if (!p->SatisfyQuestLevel(quest, false)) why += "level ";
+        if (!p->SatisfyQuestClass(quest, false)) why += "class ";
+        if (!p->SatisfyQuestRace(quest, false)) why += "race ";
+        if (!p->SatisfyQuestSkill(quest, false)) why += "skill ";
+        if (!p->SatisfyQuestReputation(quest, false)) why += "reputation ";
+        if (!p->SatisfyQuestPreviousQuest(quest, false)) why += fmt::format("prev={} ", quest->GetPrevQuestId());
+        if (!p->SatisfyQuestDependentQuests(quest, false)) why += "dependent ";
+        if (!p->SatisfyQuestBreadcrumbQuest(quest, false) || !p->SatisfyQuestDependentBreadcrumbQuests(quest, false)) why += "breadcrumb ";
+        if (!p->SatisfyQuestExclusiveGroup(quest, false)) why += "exclusive ";
+        if (!p->SatisfyQuestConditions(quest, false)) why += "conditions ";
+        if (!p->SatisfyQuestExpansion(quest, false)) why += "expansion ";
+        if (!p->SatisfyQuestLog(false)) why += "log_full ";
+        say("accept_refused", fmt::format("result {} gates: {}", int(r), why.empty() ? "none failed (see [accept_quest] reason=)" : why));
+        return false;
+    }
+
     static bool HandleLevel(ChatHandler* handler,
                             std::string const& target_name,
                             uint32 level)
@@ -4245,6 +4424,8 @@ public:
                 std::string note;
                 if (aura && aura->GetEffect(uint8(point->EffectIndex)))
                     live = aura->GetEffect(uint8(point->EffectIndex))->GetAmount();
+                else if (point->EffectIndex < 0 || size_t(point->EffectIndex) >= info->GetEffects().size())
+                    note = "DATA: trait points name effect index " + std::to_string(point->EffectIndex) + " the spell does not have";
                 else
                 {
                     live = info->GetEffect(SpellEffIndex(point->EffectIndex)).CalcValue(p);
