@@ -4982,16 +4982,17 @@ int32 Spell::GetSpellCastDataAmmo()
                 ammoDisplayID = pItem->GetDisplayId(playerCaster);
                 // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square.
                 if (!ammoDisplayID || ammoDisplayID >= 500000)
-                    ammoDisplayID = 23211;
+                    ammoDisplayID = 5996;      // plain arrow (23211 was the fire arrow of item 19082)
             }
             else if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(playerCaster->GetAmmoId()))   // Classic 1.60 ammo slot
             {
-                // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no model and the
-                // client draws a white box for it; bots take ammo that has its own display (Player::AutoSelectAmmo), so
+                // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no material and
+                // the client draws a white box for it; bots take ammo that has its own display (Player::AutoSelectAmmo), so
                 // this is the fallback only: an arrow model, for bullets too (every classic bullet has the generic display).
                 ammoDisplayID = Player::GetAmmoDisplayId(ammo);
                 if (!Player::HasDrawableAmmoDisplay(ammo))
-                    ammoDisplayID = 23211;   // an arrow display seen to draw (item 19082); no classic bullet has a display of its own
+                    ammoDisplayID = 5996;   // plain arrow: the arrow model of 737993 (17490) with a material (19706). 23211, used before, is
+                                            // item 19082 "Monster - Fire Arrow" (model 17481), so every Rough Arrow flew burning (Discord, 8 Nov)
                 ammoInventoryType = INVTYPE_AMMO;
             }
             else if (playerCaster->HasAura(46699))      // Requires No Ammo
