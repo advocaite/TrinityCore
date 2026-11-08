@@ -2287,6 +2287,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 GetClassicSpellPenetration(uint32 schoolMask) const;
         int32 GetClassicAttackPowerVersus(uint32 creatureTypeMask) const;
         int32 GetClassicSpellDamageVersus(uint32 creatureTypeMask) const;
+        // Classic 1.60 item stats ITEM_MOD_SPELL_HEALING_DONE / ITEM_MOD_SPELL_DAMAGE_DONE ("Increases healing done by up to X and damage
+        // done by up to Y for all magical spells and effects"): healing only / damage of every magic school only
+        int32 GetClassicSpellHealingDoneBonus() const { return m_classicSpellHealingDone; }
+        int32 GetClassicSpellDamageDoneBonus() const { return m_classicSpellDamageDone; }
         uint32 GetClassicShieldBlockValue() const override;
 
         bool CanApplyResilience() const override { return true; }
@@ -2621,6 +2625,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void ApplyAllAzeriteEmpoweredItemMods(bool apply);
         void _ApplyItemBonuses(Item* item, uint8 slot, bool apply);
         void _ApplyClassicItemMod(int32 statType, int32 val, bool apply);
+        void _ApplyClassicSpellHealingOrDamageMod(int32 statType, int32 val, bool apply);
         void _ApplyWeaponDamage(uint8 slot, Item* item, bool apply);
         bool EnchantmentFitsRequirements(uint32 enchantmentcondition, int8 slot) const;
         void ToggleMetaGemsActive(uint8 exceptslot, bool apply);
@@ -3349,6 +3354,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 m_spellPenetrationItemMod;
         std::array<int32, 140 - 83> m_classicItemMods = { };   // ItemModType 83 .. 139 (ITEM_MOD_CLASSIC_*), from equipped items
         int32 m_classicBlockValueBonus = 0;                    // ITEM_MOD_BLOCK_VALUE of equipped items
+        int32 m_classicSpellHealingDone = 0;                   // ITEM_MOD_SPELL_HEALING_DONE of equipped items and enchantments
+        int32 m_classicSpellDamageDone = 0;                    // ITEM_MOD_SPELL_DAMAGE_DONE of equipped items and enchantments
         mutable TimePoint _classicFreeHelpfulSpellsUntil;            // Legacy perk The Quick and the Dead: free helpful spells after resurrection
 
         SpellModContainer m_spellMods;

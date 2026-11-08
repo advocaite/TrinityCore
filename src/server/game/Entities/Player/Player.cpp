@@ -8626,6 +8626,10 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
             case ITEM_MOD_BLOCK_VALUE:                      // Classic 1.60: added to the shield block value
                 m_classicBlockValueBonus += apply ? int32(val) : -int32(val);
                 break;
+            case ITEM_MOD_SPELL_HEALING_DONE:               // Classic 1.60: "Increases healing done by up to X" (393 items, e.g. Truefaith Vestments)
+            case ITEM_MOD_SPELL_DAMAGE_DONE:                // Classic 1.60: "... and damage done by up to Y for all magical spells" (322 items)
+                _ApplyClassicSpellHealingOrDamageMod(statType, int32(val), apply);
+                break;
             default:
                 if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END)
                     _ApplyClassicItemMod(statType, int32(val), apply);
@@ -8682,6 +8686,17 @@ void Player::_ApplyClassicItemMod(int32 statType, int32 val, bool apply)
         for (UnitMods mod : { UNIT_MOD_RESISTANCE_FIRE, UNIT_MOD_RESISTANCE_NATURE, UNIT_MOD_RESISTANCE_FROST, UNIT_MOD_RESISTANCE_SHADOW, UNIT_MOD_RESISTANCE_ARCANE })
             HandleStatFlatModifier(mod, BASE_VALUE, float(val), apply);
     // penetration and the creature type bonuses are read when dealing damage
+}
+
+// Classic 1.60: the vanilla "Increases healing done by up to X and damage done by up to Y for all magical spells and effects" equip
+// spells became the pair ITEM_MOD_SPELL_HEALING_DONE (X, healing only) and ITEM_MOD_SPELL_DAMAGE_DONE (Y, damage of the magic schools
+// only), on items and on enchantments ("Healing Spells +$k1, Damage Spells +$k2"). Plain spell power (ITEM_MOD_SPELL_POWER) adds to both.
+// Read by Unit::SpellBaseDamageBonusDone / SpellBaseHealingBonusDone.
+void Player::_ApplyClassicSpellHealingOrDamageMod(int32 statType, int32 val, bool apply)
+{
+    int32& total = statType == ITEM_MOD_SPELL_HEALING_DONE ? m_classicSpellHealingDone : m_classicSpellDamageDone;
+    total += apply ? val : -val;
+    UpdateSpellDamageAndHealingBonus();
 }
 
 int32 Player::GetClassicSpellDamageDone(uint32 schoolMask) const
@@ -14458,7 +14473,15 @@ void Player::ApplyEnchantment(Item* item, EnchantmentSlot slot, bool apply, bool
                             ApplyRatingMod(CR_VERSATILITY_DAMAGE_TAKEN, enchant_amount, apply);
                             TC_LOG_DEBUG("entities.player.items", "+ {} VERSATILITY", enchant_amount);
                             break;
+                        case ITEM_MOD_SPELL_HEALING_DONE:   // Classic 1.60: "Healing Spells +$k1, Damage Spells +$k2" (8208, 8212, 8694 ...)
+                        case ITEM_MOD_SPELL_DAMAGE_DONE:
+                            _ApplyClassicSpellHealingOrDamageMod(int32(enchant_spell_id), enchant_amount, apply);
+                            break;
                         default:
+                            // Classic 1.60: school damage, skill and penetration enchantments ("Holy Damage +$k1" 7646, "Lesser Flame" 8700,
+                            // "Skinning +$k1" 8210, "Baleflame" 8706). 124 stays out: enchantment 8203 carries it under the name "Spirit +$k1".
+                            if (int32(enchant_spell_id) >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && int32(enchant_spell_id) <= ITEM_MOD_CLASSIC_ARCANE_PENETRATION)
+                                _ApplyClassicItemMod(int32(enchant_spell_id), enchant_amount, apply);
                             break;
                     }
                     break;
