@@ -518,9 +518,10 @@ local function DeleteTarget()
     if dialog then dialog.data = name end
 end
 
-local function AddBot(class, role)
+local function AddBot(class, role, anyClass)
     if role then
-        ServerCommand(".bot add " .. class .. " " .. role)
+        -- "anyclass" (Quick party only): with hired bots, a free one of that role may come in another class.
+        ServerCommand(".bot add " .. class .. " " .. role .. (anyClass and " anyclass" or ""))
     else
         ServerCommand(".bot add " .. class)
     end
@@ -1067,9 +1068,9 @@ local function SendGear()
     return g == "match"
 end
 
-local function AddBotWithGear(class, role)
+local function AddBotWithGear(class, role, anyClass)
     local sent = SendGear()
-    AddBot(class, role)
+    AddBot(class, role, anyClass)
     if not sent and C_Timer and C_Timer.After then
         -- no group yet: the first bot makes one, so the gear word follows once it exists (it applies to the next bots)
         C_Timer.After(2.5, function() Auto(SendGear) end)
@@ -1135,15 +1136,15 @@ local function QuickParty()
     -- The first bot is said straight from the click and makes the group; the rest follow a moment apart from a timer, where
     -- chat is blocked, so they run under Auto() and go out one by one as addon messages (ServerCommand, Cmd.Queue).
     local roster = QuickPartyRoster(size, free)
-    AddBotWithGear(roster[1][1], roster[1][2])
+    AddBotWithGear(roster[1][1], roster[1][2], true)
     if roster[2] and C_Timer and C_Timer.After then
         C_Timer.After(0.4, function()
             Auto(function()
-                for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
+                for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2], true) end
             end)
         end)
     else
-        for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
+        for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2], true) end
     end
 end
 
