@@ -362,6 +362,10 @@ class TC_GAME_API Spell
         void EffectChargeDest();
         void EffectProspecting();
         void EffectMilling();
+        void EffectSalvageItem();
+        void EffectLoot();
+        void StockClassicCrate();
+        void StoreClassicSpellLoot(Player* player, uint32 lootId);
         void EffectRenamePet();
         void EffectSendTaxi();
         void EffectKnockBack();
@@ -740,6 +744,7 @@ class TC_GAME_API Spell
         static bool CanIncreaseRangeByMovement(Unit const* unit);
 
         SpellRange GetMinMaxRange(bool strict) const;
+        static SpellRange CalcMinMaxRange(WorldObject const* caster, Unit const* target, bool corpseTarget, SpellInfo const* spellInfo, bool strict, Spell* spell = nullptr);
 
     protected:
         bool HasGlobalCooldown() const;

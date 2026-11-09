@@ -830,8 +830,25 @@ WorldPacket Quest::BuildQueryData(LocaleConstant loc, Player* player) const
 
         if (loc != LOCALE_enUS)
         {
+            std::string_view localeDescription;
             if (QuestObjectivesLocale const* questObjectivesLocale = sObjectMgr->GetQuestObjectivesLocale(questObjective.ID))
-                ObjectMgr::GetLocaleString(questObjectivesLocale->Description, loc, responseObjective.Description);
+                localeDescription = ObjectMgr::GetLocaleString(questObjectivesLocale->Description, loc);
+
+            if (!localeDescription.empty())
+                responseObjective.Description = localeDescription;
+            else if (questObjective.Type == QUEST_OBJECTIVE_ITEM && !questObjective.Description.empty())
+            {
+                // An item objective with no translation whose text is the item's name (the Forever quests, e.g. "Carved Centaur
+                // Totem") shows the item's name in the client's language instead of the English one. When the enUS name is
+                // loaded the text must match it, so a sentence such as "Obtain X from Y" keeps its English.
+                if (ItemSparseEntry const* itemSparse = sItemSparseStore.LookupEntry(questObjective.ObjectID))
+                {
+                    char const* localName = itemSparse->Display[loc];
+                    char const* englishName = itemSparse->Display[LOCALE_enUS];
+                    if (*localName && (!*englishName || questObjective.Description == englishName))
+                        responseObjective.Description = localName;
+                }
+            }
         }
     }
 

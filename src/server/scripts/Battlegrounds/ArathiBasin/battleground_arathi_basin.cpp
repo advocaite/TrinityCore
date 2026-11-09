@@ -25,7 +25,9 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "Map.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
+#include "Random.h"
 #include "ScriptMgr.h"
 
 struct battleground_arathi_basin : BattlegroundScript
@@ -714,6 +716,21 @@ namespace ClassicArathiBasin
 
     // NodeStatus -> offset from NodeInfo::StateWorldState (VMaNGOS plusArray)
     static constexpr std::array<int32, 5> StateWorldStateOffset = { 0, 2, 3, 0, 1 };
+
+    // Power-up runes, one at every node: a random one of Speed / Restoration / Berserking (Buff_Entries), and after each pickup a
+    // new random one 3 minutes later (TrinityCore 3.3.5 BattlegroundAB: BG_AB_BuffPositions, BUFF_RESPAWN_TIME, m_BuffChange).
+    // Map 529 has no rune spawns, so the script places them; a player who walks over one is found the way WSG finds its runes.
+    static constexpr Milliseconds BuffRespawnTime = 180s;
+    static constexpr Milliseconds BuffCheckInterval = 200ms;
+    static constexpr float BuffPickupRadius = 3.0f;
+    static constexpr std::array<Position, NodesCount> BuffPositions =
+    { {
+        { 1185.566f, 1184.629f, -56.36329f, 2.303831f },   // Stables
+        { 990.1131f, 1008.73f,  -42.60328f, 0.8203033f },  // Blacksmith
+        { 818.0089f, 842.3543f, -56.54062f, 3.176533f },   // Farm
+        { 808.8463f, 1185.417f,  11.92161f, 5.619962f },   // Lumber Mill
+        { 1147.091f, 816.8362f, -98.39896f, 6.056293f }    // Gold Mine
+    } };
 }
 
 struct battleground_classic_arathi_basin : BattlegroundScript
@@ -760,6 +777,9 @@ struct battleground_classic_arathi_basin : BattlegroundScript
             }
 
         battlegroundMap->SpawnGroupDespawn(ClassicArathiBasin::SPAWN_GROUP_GHOST_GATES);
+
+        for (uint8 node = 0; node < ClassicArathiBasin::NodesCount; ++node)
+            SpawnBuff(node);
     }
 
     void OnGameObjectCreate(GameObject* gameObject) override
@@ -780,6 +800,8 @@ struct battleground_classic_arathi_basin : BattlegroundScript
         using namespace ClassicArathiBasin;
         if (battleground->GetStatus() != STATUS_IN_PROGRESS)
             return;
+
+        UpdateBuffs(Milliseconds(diff));
 
         std::array<uint8, PVP_TEAMS_COUNT> occupied = { 0, 0 };
         for (uint8 node = 0; node < NodesCount; ++node)
@@ -882,6 +904,70 @@ struct battleground_classic_arathi_basin : BattlegroundScript
     }
 
 private:
+    void SpawnBuff(uint8 node)
+    {
+        using namespace ClassicArathiBasin;
+        Position const& pos = BuffPositions[node];
+        GameObject* buff = GameObject::CreateGameObject(Buff_Entries[urand(0, 2)], battlegroundMap, pos,
+            QuaternionData::fromEulerAnglesZYX(pos.GetOrientation(), 0.f, 0.f), 255, GO_STATE_READY);
+        if (!buff)
+            return;
+
+        // stays until it is picked up, with no respawn of its own: after a pickup the script places a new random one
+        buff->SetRespawnTime(0);
+        if (!battlegroundMap->AddToMap(buff))
+        {
+            delete buff;
+            return;
+        }
+        _buffs[node] = buff->GetGUID();
+        TC_LOG_INFO("bg.buffs", "[bg_buff] AB instance {} node {} rune {} ({}) in the world at ({:.1f}, {:.1f}, {:.1f})",
+            battleground->GetInstanceID(), node, buff->GetEntry(), buff->GetGOInfo()->name, pos.GetPositionX(), pos.GetPositionY(),
+            pos.GetPositionZ());
+    }
+
+    void UpdateBuffs(Milliseconds elapsed)
+    {
+        using namespace ClassicArathiBasin;
+        for (uint8 node = 0; node < NodesCount; ++node)
+        {
+            if (_buffRespawnTimers[node] <= 0ms)
+                continue;
+            _buffRespawnTimers[node] -= elapsed;
+            if (_buffRespawnTimers[node] <= 0ms)
+                SpawnBuff(node);
+        }
+
+        _buffCheckTimer -= elapsed;
+        if (_buffCheckTimer > 0ms)
+            return;
+        _buffCheckTimer = BuffCheckInterval;
+
+        for (auto const& [guid, bgPlayer] : battleground->GetPlayers())
+        {
+            Player* player = ObjectAccessor::GetPlayer(battlegroundMap, guid);
+            if (!player || !player->IsAlive())
+                continue;
+
+            GameObject* buff = player->FindNearestGameObjectWithOptions(BuffPickupRadius, { .StringId = "bg_buff_object" });
+            if (!buff)
+                continue;
+
+            auto const slot = std::ranges::find(_buffs, buff->GetGUID());
+            if (slot == _buffs.end())
+                continue;
+
+            TC_LOG_INFO("bg.buffs", "[bg_buff] AB instance {} {} takes rune {} ({}) at node {}, {:.1f} y (dz {:.1f}), next rune in {} s",
+                battleground->GetInstanceID(), player->GetName(), buff->GetEntry(), buff->GetGOInfo()->name,
+                std::distance(_buffs.begin(), slot), player->GetExactDist(buff), player->GetPositionZ() - buff->GetPositionZ(),
+                std::chrono::duration_cast<Seconds>(BuffRespawnTime).count());
+            buff->ActivateObject(GameObjectActions::Disturb, 0, player);
+            buff->DespawnOrUnsummon();
+            slot->Clear();
+            _buffRespawnTimers[std::distance(_buffs.begin(), slot)] = BuffRespawnTime;
+        }
+    }
+
     static int32 GetNodeForBanner(GameObject const* banner)
     {
         using namespace ClassicArathiBasin;
@@ -1038,8 +1124,10 @@ private:
         battleground->EndBattleground(winner);
     }
 
-    static constexpr uint32 PVP_STAT_BASES_ASSAULTED = 926;
-    static constexpr uint32 PVP_STAT_BASES_DEFENDED = 927;
+    // PVPStat ids of map 529 in the 1.60 client (926 / 927 are the 2107 remake's): a stat the map does not list is dropped, which left
+    // the Bases Assaulted / Bases Defended columns empty
+    static constexpr uint32 PVP_STAT_BASES_ASSAULTED = 122;
+    static constexpr uint32 PVP_STAT_BASES_DEFENDED = 123;
 
     std::array<uint8, ClassicArathiBasin::NodesCount> _nodes = { };
     std::array<uint8, ClassicArathiBasin::NodesCount> _prevNodes = { };
@@ -1052,6 +1140,9 @@ private:
     uint32 _honorTicks = ClassicArathiBasin::HonorTicksNormal;
     uint32 _reputationTicks = ClassicArathiBasin::ReputationTicksNormal;
     GuidSet _doors;
+    std::array<ObjectGuid, ClassicArathiBasin::NodesCount> _buffs = { };
+    std::array<Milliseconds, ClassicArathiBasin::NodesCount> _buffRespawnTimers = { { 0ms, 0ms, 0ms, 0ms, 0ms } };
+    Milliseconds _buffCheckTimer = 0ms;
 };
 
 // Classic 1.60: Arathi Basin banners on map 529 (180087 - 180091 neutral, 180058 - 180061 faction / contested)

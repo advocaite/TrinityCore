@@ -17,7 +17,11 @@
 
 #include "ScriptMgr.h"
 #include "shadowfang_keep.h"
+#include "Creature.h"
+#include "GameObject.h"
 #include "InstanceScript.h"
+#include "Unit.h"
+#include <set>
 
 static constexpr ObjectData creatureData[] =
 {
@@ -59,6 +63,94 @@ public:
             LoadObjectData(creatureData, gameobjectData);
             LoadDungeonEncounterData(encounters);
         }
+
+        // Open a progression door tracked via ObjectData. HandleGameObject
+        // tolerates a null GO (falls back to the guid, here Empty = no-op),
+        // so this is safe even before the GO has spawned.
+        // A door's grid can be unloaded when its boss dies (Springvale and Fenrus die far from their gates), and then there is no
+        // GameObject to open: the gate came up closed and stayed closed (Discord 2026-11-05, Sorcerer's Gate after Fenrus). The
+        // instance remembers which doors are open and opens each one again when its GameObject is created.
+        void OpenDoor(uint32 type)
+        {
+            _openDoors.insert(type);
+            if (GameObject* go = GetGameObject(type))
+                HandleGameObject(ObjectGuid::Empty, /*open=*/true, go);
+        }
+
+        void OnGameObjectCreate(GameObject* go) override
+        {
+            InstanceScript::OnGameObjectCreate(go);
+            uint32 type = 0;
+            switch (go->GetEntry())
+            {
+                case GO_COURTYARD_DOOR: type = DATA_COURTYARD_DOOR; break;
+                case GO_SORCERERS_DOOR: type = DATA_SORCERER_GATE;  break;
+                case GO_ARUGALS_LAIR:   type = DATA_ARUGAL_DOOR;    break;
+                default: return;
+            }
+            if (_openDoors.contains(type))
+                HandleGameObject(ObjectGuid::Empty, /*open=*/true, go);
+        }
+
+        // The five Cataclysm-revamp SFK bosses (Ashbury, Silverlaine,
+        // Springvale, Walden, Godfrey) run entirely on SmartAI and have no
+        // C++ BossAI, so nothing ever calls _JustDied()/SetBossState() when
+        // they are killed — the encounter stays NOT_STARTED and the instance
+        // never reads as progressed (pure-bot runs killed Baron Ashbury but
+        // stayed stuck 0/6 forever), AND the boss-gated progression doors this
+        // instance registers (Courtyard Door, Sorcerer's Gate, Arugal's Lair)
+        // never open, sealing the group in the entrance courtyard (live
+        // 2026-07-25: after Ashbury died the group could not reach Baron
+        // Silverlaine — the tank wedged AT the closed Courtyard Door at z90.6
+        // and pathing to Silverlaine returned Incomplete). Credit the encounter
+        // AND open the door that boss gated when a registered boss dies.
+        // Apothecary Hummel (index 5) has a real BossAI (boss_apothecary_hummel)
+        // that self-credits, so it is deliberately not handled here. Cheap
+        // entry switch; the default branch is a no-op for the flood of trash/
+        // pet deaths on the map. Door->boss gating: Courtyard Door after Ashbury
+        // is VERIFIED (the boss-2 blocker); the two upper gates are opened on
+        // their inferred preceding boss (Sorcerer's Gate after Springvale ->
+        // Walden's area, Arugal's Lair after Walden -> Godfrey's lair) — refine
+        // if a later run wedges at one of them.
+        void OnUnitDeath(Unit* unit) override
+        {
+            Creature* creature = unit->ToCreature();
+            if (!creature)
+                return;
+
+            switch (creature->GetEntry())
+            {
+                case NPC_BARON_ASHBURY:
+                    SetBossState(BOSS_BARON_ASHBURY, DONE);
+                    OpenDoor(DATA_COURTYARD_DOOR);
+                    break;
+                case NPC_BARON_SILVERLAINE:
+                    SetBossState(BOSS_BARON_SILVERLAINE, DONE);
+                    break;
+                case NPC_COMMANDER_SPRINGVALE:
+                    SetBossState(BOSS_COMMANDER_SPRINGVALE, DONE);
+                    OpenDoor(DATA_SORCERER_GATE);
+                    break;
+                case NPC_LORD_WALDEN:
+                    SetBossState(BOSS_LORD_WALDEN, DONE);
+                    OpenDoor(DATA_ARUGAL_DOOR);
+                    break;
+                case NPC_LORD_GODFREY:
+                    SetBossState(BOSS_LORD_GODFREY, DONE);
+                    break;
+                // Classic bosses (no Walden in this keep, so the lair door never opened)
+                case NPC_FENRUS_THE_DEVOURER:
+                    OpenDoor(DATA_SORCERER_GATE);
+                    break;
+                case NPC_WOLF_MASTER_NANDOS:
+                    OpenDoor(DATA_ARUGAL_DOOR);
+                    break;
+                default: break;
+            }
+        }
+
+    private:
+        std::set<uint32> _openDoors;
     };
 
     InstanceScript* GetInstanceScript(InstanceMap* map) const override

@@ -89,6 +89,7 @@ enum KelthuzadData
     SPELL_KT_CHAINS_OF_KELTHUZAD_EFFECTS   = 28410,
 
     SPELL_KT_MANA_DETONATION            = 27819,
+    SPELL_KT_MANA_DETONATION_DAMAGE     = 27820,
     SPELL_KT_SHADOW_FISSURE             = 27810,
     SPELL_KT_VOID_BLAST                 = 27812,
     SPELL_KT_FROST_BLAST                = 27808,
@@ -1165,6 +1166,38 @@ class classic_spell_kelthuzad_void_blast : public SpellScript
     }
 };
 
+// 27819 - Detonate Mana (Kel'Thuzad)
+// VMaNGOS SpellAuras.cpp (periodic trigger, 27819): each tick burns half of the carrier's current mana and deals that much as
+// Mana Detonation (27820) to everyone around the carrier. The stock TrinityCore script on this id burned a tenth of the maximum
+// mana and dealt ten times that (the whole pool); the vanilla aura carries no trigger spell of its own, so without a script
+// nothing happens at all.
+class classic_spell_kelthuzad_detonate_mana : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_KT_MANA_DETONATION_DAMAGE });
+    }
+
+    void HandleScript(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+
+        Unit* target = GetTarget();
+        if (int32 const mana = int32(target->GetPower(POWER_MANA) / 2))
+        {
+            int32 const burned = -target->ModifyPower(POWER_MANA, -mana);
+            CastSpellExtraArgs args(aurEff);
+            args.AddSpellBP0(burned);
+            target->CastSpell(target, SPELL_KT_MANA_DETONATION_DAMAGE, args);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_kelthuzad_detonate_mana::HandleScript, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_classic_boss_kelthuzad()
 {
     RegisterCreatureAI(classic_boss_kelthuzad);
@@ -1174,4 +1207,5 @@ void AddSC_classic_boss_kelthuzad()
     RegisterCreatureAI(classic_mob_guardian_icecrownAI);
     RegisterCreatureAI(classic_mob_shadow_fissure);
     RegisterSpellScript(classic_spell_kelthuzad_void_blast);
+    RegisterSpellScript(classic_spell_kelthuzad_detonate_mana);
 }

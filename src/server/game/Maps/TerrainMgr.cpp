@@ -16,11 +16,15 @@
  */
 
 #include "TerrainMgr.h"
+#include "Config.h"
 #include "DB2Stores.h"
 #include "DisableMgr.h"
 #include "DynamicTree.h"
 #include "GridMap.h"
+#include "HandcraftedRoadStorage.h"
 #include "Log.h"
+#include "Map.h"
+#include "MapManager.h"
 #include "Memory.h"
 #include "MMapManager.h"
 #include "PhasingHandler.h"
@@ -30,6 +34,210 @@
 #include "VMapManager.h"
 #include "World.h"
 #include <G3D/g3dmath.h>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+
+#if defined(TRINITY_HANDCRAFTED_ROADS)
+#include "RoadCorridor.h"
+#endif
+
+namespace
+{
+    // Tracks which (mapId, instanceId) pairs have already had their
+    // handcrafted-road segments applied to the navmesh, so we run the
+    // corridor scan exactly ONCE per Map instance. Option B from the
+    // hook design: apply on the FIRST tile load. New tiles loaded after
+    // the initial wave (e.g. a player crossing into a previously
+    // untouched grid) will not get retroactively tagged, but for the
+    // expected operator workflow (handcrafted segments are curated for
+    // hub/road areas that are warmed on startup or first player ingress)
+    // this is sufficient. A full per-tile overlap scan would be more
+    // correct (Option C) but requires extending RoadCorridor.h with a
+    // per-tile overload, which the contract for this change excludes.
+    std::mutex g_handcraftedRoadAppliedMutex;
+    std::unordered_set<uint64> g_handcraftedRoadApplied;
+    // Parallel record of how many detour polys were retagged for each
+    // (mapId, instanceId) pair on its apply pass. Surfaced by
+    // TerrainMgrDetail::GetHandcraftedRoadTaggedCount for the
+    // `.handcrafted_road status` chat command. Guarded by the same
+    // mutex as g_handcraftedRoadApplied for write-side simplicity.
+    std::unordered_map<uint64, std::size_t> g_handcraftedRoadTaggedCount;
+
+    constexpr uint64 MakeHandcraftedRoadKey(uint32 mapId, uint32 instanceId)
+    {
+        return (static_cast<uint64>(mapId) << 32) | static_cast<uint64>(instanceId);
+    }
+
+    // Apply HandcraftedRoadStorage segments to the navmesh of (mapId,
+    // instanceId). Idempotent — runs only the first time it's called for
+    // a given (mapId, instanceId) pair. Safe to call from any thread; the
+    // navmesh mutation is serialized by MMapManager's per-mapId loadLock
+    // (loadMap is holding it when this is reached from LoadMMapImpl).
+    void ApplyHandcraftedRoadsIfNeeded(uint32 mapId, uint32 instanceId)
+    {
+#if defined(TRINITY_HANDCRAFTED_ROADS)
+        if (!sConfigMgr->GetBoolDefault("HandcraftedRoads.Enable", false))
+            return;
+
+        std::vector<HandcraftedRoadSegment> const& segs = HandcraftedRoadStorage::GetForMap(mapId);
+        if (segs.empty())
+            return;
+
+        uint64 const key = MakeHandcraftedRoadKey(mapId, instanceId);
+        {
+            std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+            if (!g_handcraftedRoadApplied.insert(key).second)
+                return; // already applied
+        }
+
+        dtNavMesh* navMesh = MMAP::MMapManager::instance()->GetNavMesh(mapId, instanceId);
+        if (!navMesh)
+        {
+            // The navmesh disappeared between our load and now (rare race
+            // with unloadMap). Roll back the "applied" marker so a future
+            // load can retry.
+            std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+            g_handcraftedRoadApplied.erase(key);
+            return;
+        }
+
+        std::vector<Road::Segment> roadSegs;
+        roadSegs.reserve(segs.size());
+        for (HandcraftedRoadSegment const& s : segs)
+            roadSegs.push_back({ s.fromX, s.fromY, s.toX, s.toY, s.width });
+
+        std::size_t const tagged = Road::ApplyCorridorsToNavmesh(*navMesh, roadSegs);
+        {
+            std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+            g_handcraftedRoadTaggedCount[key] = tagged;
+        }
+        TC_LOG_INFO("server.loading",
+            "Applied {} handcrafted road segments to map {} (instance {}): tagged {} polys",
+            segs.size(), mapId, instanceId, tagged);
+#else
+        (void)mapId;
+        (void)instanceId;
+#endif
+    }
+}
+
+namespace TerrainMgrDetail
+{
+    // Public accessors for the reload command (cs_reload.cpp). The
+    // command-script translation unit calls these to retag a live map
+    // and to clear the per-Map "applied" cache after a DB reload.
+
+    void ClearAppliedHandcraftedRoads()
+    {
+        std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+        g_handcraftedRoadApplied.clear();
+        g_handcraftedRoadTaggedCount.clear();
+    }
+
+    bool IsHandcraftedRoadsApplied(uint32 mapId, uint32 instanceId)
+    {
+        std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+        return g_handcraftedRoadApplied.count(MakeHandcraftedRoadKey(mapId, instanceId)) != 0;
+    }
+
+    std::size_t GetHandcraftedRoadTaggedCount(uint32 mapId, uint32 instanceId)
+    {
+        std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+        auto it = g_handcraftedRoadTaggedCount.find(MakeHandcraftedRoadKey(mapId, instanceId));
+        return (it != g_handcraftedRoadTaggedCount.end()) ? it->second : std::size_t(0);
+    }
+
+    std::size_t ApplyHandcraftedRoadsToAllLoadedMaps()
+    {
+#if defined(TRINITY_HANDCRAFTED_ROADS)
+        if (!sConfigMgr->GetBoolDefault("HandcraftedRoads.Enable", false))
+            return 0;
+
+        // We collect mapIds first (deduplicated) so the inner apply pass
+        // doesn't run under MapManager's shared lock. DoForAllMaps holds
+        // _mapsLock for read while invoking the worker; ApplyCorridors-
+        // ToNavmesh is a heavy operation we don't want to hold that lock
+        // across, and the MMapManager mutation it does is serialised by
+        // its own per-mapId loadLock.
+        std::unordered_set<uint32> mapIds;
+        sMapMgr->DoForAllMaps([&mapIds](Map* m)
+        {
+            if (m)
+                mapIds.insert(m->GetId());
+        });
+
+        if (mapIds.empty())
+        {
+            TC_LOG_INFO("server.loading",
+                "Handcrafted road storage ready: no maps currently loaded — segments will apply on first tile touch.");
+            return 0;
+        }
+
+        std::size_t mapsTouched = 0;
+        for (uint32 mapId : mapIds)
+        {
+            std::vector<HandcraftedRoadSegment> const& segs = HandcraftedRoadStorage::GetForMap(mapId);
+            if (segs.empty())
+                continue;
+            std::size_t const tagged = ApplyHandcraftedRoadsToLiveMap(mapId);
+            TC_LOG_INFO("server.loading",
+                "Handcrafted road retag: map {} — {} segments, {} polys newly tagged.",
+                mapId, uint32(segs.size()), uint32(tagged));
+            if (tagged > 0)
+                ++mapsTouched;
+        }
+        return mapsTouched;
+#else
+        return 0;
+#endif
+    }
+
+    // Force-apply handcrafted segments to the currently-loaded navmesh
+    // for (mapId, instanceId=0 — the shared-mesh path used by all
+    // non-instanced maps and by InstanceMaps that route through
+    // GetInstanceIdForMeshLookup() == 0). Returns the number of polys
+    // newly tagged (0 if no navmesh or no segments). This DOES NOT clear
+    // previously tagged polys — removing a segment from the DB then
+    // running apply will not untag the old corridor. Full mmap reload
+    // (server restart or unload/reload the affected map) is required to
+    // revert tags.
+    std::size_t ApplyHandcraftedRoadsToLiveMap(uint32 mapId)
+    {
+#if defined(TRINITY_HANDCRAFTED_ROADS)
+        std::vector<HandcraftedRoadSegment> const& segs = HandcraftedRoadStorage::GetForMap(mapId);
+        if (segs.empty())
+            return 0;
+
+        dtNavMesh* navMesh = MMAP::MMapManager::instance()->GetNavMesh(mapId, 0);
+        if (!navMesh)
+        {
+            TC_LOG_DEBUG("misc", "[handcrafted-road] map {}: no navmesh loaded, {} segments not applied", mapId, uint32(segs.size()));
+            return 0;
+        }
+
+        std::vector<Road::Segment> roadSegs;
+        roadSegs.reserve(segs.size());
+        for (HandcraftedRoadSegment const& s : segs)
+            roadSegs.push_back({ s.fromX, s.fromY, s.toX, s.toY, s.width });
+
+        std::size_t const tagged = Road::ApplyCorridorsToNavmesh(*navMesh, roadSegs);
+        TC_LOG_DEBUG("misc", "[handcrafted-road] map {}: tagged {} polys across {} segments",
+            mapId, uint32(tagged), uint32(roadSegs.size()));
+
+        // Mark as applied so the next first-tile-load on this map
+        // doesn't re-walk the corridor for nothing.
+        std::lock_guard<std::mutex> lock(g_handcraftedRoadAppliedMutex);
+        uint64 const key = MakeHandcraftedRoadKey(mapId, 0);
+        g_handcraftedRoadApplied.insert(key);
+        g_handcraftedRoadTaggedCount[key] = tagged;
+        return tagged;
+#else
+        (void)mapId;
+        return 0;
+#endif
+    }
+}
 
 TerrainInfo::TerrainInfo(uint32 mapId) : _mapId(mapId), _parentTerrain(nullptr), _loadedGrids(), _cleanupTimer(randtime(CleanupInterval / 2, CleanupInterval))
 {
@@ -222,6 +430,12 @@ void TerrainInfo::LoadVMap(int32 gx, int32 gy)
     if (!VMAP::VMapFactory::createOrGetVMapManager()->isMapLoadingEnabled())
         return;
 
+    // PLAYERBOT FIX: Skip loading if we already know this tile failed
+    // Prevents repeated file access attempts and log spam for maps without VMAP data
+    // (e.g., Boost Experience maps, phased zones, newer dungeons)
+    if (_vmapLoadFailed[GetBitsetIndex(gx, gy)])
+        return;
+
     switch (VMAP::VMapFactory::createOrGetVMapManager()->loadMap(sWorld->GetDataPath() + "vmaps", GetId(), gx, gy))
     {
         case VMAP::LoadResult::Success:
@@ -261,8 +475,10 @@ void TerrainInfo::LoadMMapImpl(uint32 instanceId, int32 gx, int32 gy)
     {
         case MMAP::LoadResult::Success:
             TC_LOG_DEBUG("mmaps.tiles", "MMAP loaded name:{}, id:{}, x:{}, y:{} (mmap rep.: x:{}, y:{})", GetMapName(), GetId(), gx, gy, gx, gy);
+            ApplyHandcraftedRoadsIfNeeded(GetId(), instanceId);    // idempotent per (map, instance), see its comment
             return;
         case MMAP::LoadResult::AlreadyLoaded:
+            ApplyHandcraftedRoadsIfNeeded(GetId(), instanceId);    // a navmesh preloaded before the road storage loaded
             return;
         default:
             break;

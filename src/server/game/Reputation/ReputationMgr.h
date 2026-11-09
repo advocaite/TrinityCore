@@ -121,7 +121,7 @@ class TC_GAME_API ReputationMgr
         bool HasMaximumRenownReputation(FactionEntry const* factionEntry) const;
         bool IsRenownReputation(FactionEntry const* factionEntry) const;
         int32 GetRenownLevel(FactionEntry const* renownFactionEntry) const;
-        int32 GetRenownLevelThreshold(FactionEntry const* renownFactionEntry) const;
+        int32 GetRenownLevelThreshold(FactionEntry const* renownFactionEntry, int32 level = 1) const; // cost of reaching renown level `level`
         int32 GetRenownMaxLevel(FactionEntry const* renownFactionEntry) const;
 
     public:                                                 // modifiers

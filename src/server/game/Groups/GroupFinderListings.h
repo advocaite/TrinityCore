@@ -20,6 +20,9 @@
 
 #include "Define.h"
 
+#include <string>
+#include <vector>
+
 class Group;
 class Player;
 
@@ -29,6 +32,14 @@ namespace GroupFinderListings
 {
     TC_GAME_API void OnGroupChanged(Group const* group);
     TC_GAME_API void OnLogout(Player const* player);
+
+    // The module lists a group a bot leads (the same list a player's own listing goes in; no packet of its own). The play style is the
+    // Group Finder dropdown value: 1 Learning, 2 Relaxed, 3 Competitive, 4 Carry Offered.
+    TC_GAME_API void PostBotListing(Player const* leader, uint32 categoryId, std::vector<uint32> const& activities,
+                                    std::string const& name, std::string const& comment, uint8 playStyle);
+    TC_GAME_API void RemoveBotListing(Player const* leader);
+    // The category a player's own listing was posted in (0 = none): the module learns the dungeon category from it.
+    TC_GAME_API uint32 CategoryOf(Player const* leader);
 }
 
 #endif

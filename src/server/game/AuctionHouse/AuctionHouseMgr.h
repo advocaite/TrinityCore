@@ -28,6 +28,7 @@
 #include <map>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 class Item;
 class Player;
@@ -289,6 +290,11 @@ public:
     std::map<uint32, AuctionPosting>::iterator GetAuctionsEnd() { return _itemsByAuctionId.end(); }
 
     AuctionPosting* GetAuction(uint32 auctionId);
+    // Returns the auction ids the given player currently owns in this house.
+    // Read-only — does not mutate _playerOwnedAuctions / _itemsByAuctionId.
+    // Used by Playerbot V2 to drive bulk-cancel and snapshot enrichment
+    // without exposing the internal multimap.
+    std::vector<uint32> GetOwnedAuctionIds(ObjectGuid owner) const;
 
     void AddAuction(CharacterDatabaseTransaction trans, AuctionPosting auction);
 
@@ -337,8 +343,10 @@ private:
     std::map<AuctionsBucketKey, AuctionsBucketData> _buckets; // ordered for search by itemid only
     std::unordered_map<ObjectGuid, CommodityQuote> _commodityQuotes;
 
-    std::unordered_multimap<ObjectGuid, uint32> _playerOwnedAuctions;
-    std::unordered_multimap<ObjectGuid, uint32> _playerBidderAuctions;
+    // a set per player, not a multimap: removing one auction from a multimap walks every auction of that owner, and the
+    // auction bot sellers own thousands each, so expiring them all after a long stop took minutes (world thread freeze)
+    std::unordered_map<ObjectGuid, std::unordered_set<uint32>> _playerOwnedAuctions;
+    std::unordered_map<ObjectGuid, std::unordered_set<uint32>> _playerBidderAuctions;
 
     // Map of throttled players for GetAll, and throttle expiry time
     // Stored here, rather than player object to maintain persistence after logout

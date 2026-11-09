@@ -23,12 +23,14 @@
 #include "Pet.h"
 #include "GameTables.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "ObjectMgr.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
 #include "SpellAuraEffects.h"
 #include "World.h"
 #include <G3D/g3dmath.h>
+#include <atomic>
 #include <numeric>
 
 inline bool _ModifyUInt32(bool apply, uint32& baseValue, int32& amount)
@@ -595,8 +597,12 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     SpellShapeshiftFormEntry const* shapeshift = sSpellShapeshiftFormStore.LookupEntry(GetShapeshiftForm());
     if (shapeshift && shapeshift->CombatRoundTime)
     {
-        weaponMinDamage = weaponMinDamage * shapeshift->CombatRoundTime / 1000.0f / attackPowerMod;
-        weaponMaxDamage = weaponMaxDamage * shapeshift->CombatRoundTime / 1000.0f / attackPowerMod;
+        // Classic 1.60 (vanilla, VMaNGOS Player::CalculateMinMaxDamage): in cat and bear form the equipped weapon's damage is ignored; the
+        // range is level * 0.85 .. level * 1.25 (level capped at 60) times the form's speed. Rescaling the weapon kept a Forever staff's
+        // full swing damage in every cat hit (druid 156: about 350 per white swing against 91 from attack power).
+        float const formLevel = float(std::min<uint32>(GetLevel(), 60));
+        weaponMinDamage = formLevel * 0.85f * attackPowerMod;
+        weaponMaxDamage = formLevel * 1.25f * attackPowerMod;
     }
     else if (!CanUseAttackType(attType)) // check if player not in form but still can't use (disarm case)
     {
@@ -1083,6 +1089,19 @@ float Player::GetPowerRegen(Powers power) const
 
     float regen = interrupted ? powerType->RegenCombat + m_unitData->PowerRegenInterruptedFlatModifier[powerIndex] : powerType->RegenPeace + m_unitData->PowerRegenFlatModifier[powerIndex];
 
+    // Classic 1.60 (vanilla): combo points are only built by abilities and are never regenerated. A warrior in a damage_parity run held 1-5 of them
+    // with no dodge (a point every ~2 s, the regeneration tick), which made Overpower free; the client's own PowerType row for combo points or a
+    // flat regeneration modifier gives a positive rate, so it is logged once and not applied.
+    if (power == POWER_COMBO_POINTS && regen > 0.f)
+    {
+        static std::atomic<bool> logged{ false };
+        if (!logged.exchange(true))
+            TC_LOG_ERROR("scripts.classic", "Combo point regeneration {:.2f}/s ignored for class {}: PowerType RegenPeace {:.2f}, RegenCombat {:.2f}, flat {:.2f}, interrupted flat {:.2f}",
+                regen, GetClass(), powerType->RegenPeace, powerType->RegenCombat, float(m_unitData->PowerRegenFlatModifier[powerIndex]),
+                float(m_unitData->PowerRegenInterruptedFlatModifier[powerIndex]));
+        return 0.f;
+    }
+
     return regen;
 }
 
@@ -1154,7 +1173,9 @@ void Creature::UpdateArmor()
 {
     float baseValue = GetFlatModifierValue(UNIT_MOD_ARMOR, BASE_VALUE);
     float value = GetTotalAuraModValue(UNIT_MOD_ARMOR);
-    SetArmor(int32(baseValue), int32(value - baseValue));
+    // The total, as Player::UpdateArmor does: GetArmor() (damage reduction) reads this field, and with only the base in it a creature's Sunder Armor,
+    // Expose Armor and other armor auras never lowered the armor its damage taken is reduced by (damage_parity: Expose Armor on the dummy, armor unchanged).
+    SetArmor(int32(value), int32(value - baseValue));
 }
 
 void Creature::UpdateMaxHealth()
@@ -1302,6 +1323,21 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
     float totalValue       = GetFlatModifierValue(unitMod, TOTAL_VALUE);
     float totalPct         = addTotalPct ? GetPctModifierValue(unitMod, TOTAL_PCT) : 1.0f;
     float dmgMultiplier    = GetCreatureDifficulty()->DamageModifier; // = DamageModifier * GetDamageMod(rank);
+
+    // Classic 1.60 (vanilla): the VMaNGOS hit of the creature, per hit whatever its swing time (the client's damage per second table and the
+    // old damage modifiers are 0-60% off per creature, and scale the hit with the swing)
+    if (attType != RANGED_ATTACK && !IsPet() && !IsGuardian())
+        if (ObjectMgr::CreatureClassicMelee const* classic = sObjectMgr->GetCreatureClassicMelee(GetEntry()); classic && classic->DamageMax > 0.0f)
+        {
+            float const mainHand = CanUseAttackType(attType) ? 1.0f : 0.0f;
+            float const auraAttackPower = attackPower - baseAttackPower;
+            float const swingMs = float(GetBaseAttackTime(attType));
+            float const flat = GetFlatModifierValue(unitMod, BASE_VALUE);
+            float const pct = GetPctModifierValue(unitMod, BASE_PCT);
+            minDamage = ClassicSpellValue::CreatureClassicHit(classic->DamageMin * mainHand, auraAttackPower, variance, swingMs, flat, pct, totalValue, totalPct);
+            maxDamage = ClassicSpellValue::CreatureClassicHit(classic->DamageMax * mainHand, auraAttackPower, variance, swingMs, flat, pct, totalValue, totalPct);
+            return;
+        }
 
     // Classic 1.60: vanilla creatures (creature_classic_stats) hit for their per-hit weapon damage, which already holds their
     // damage multiplier (Creature::UpdateLevelDependantStats); only attack power changes from auras scale with attack time

@@ -136,6 +136,7 @@ enum ClassicBRDData
     GO_DWARF_RUNE_G01          = 170584,
     DWARF_RUNES_MAX            = 7,
     BURNING_SPIRIT_MAX         = 30, // What is a good maximum and should there be any?
+    SPELL_BURNING_SPIRIT       = 13489, // spirit kills itself and empowers Flamelash (his SmartAI casts 14744 on the hit)
 
     // Grim Guzzler
     NPC_PLUGGER_SPAZZRING      = 9499,

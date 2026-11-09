@@ -420,6 +420,21 @@ class TC_GAME_API ItemScript : public ScriptObject
         virtual bool OnCastItemCombatSpell(Player* player, Unit* victim, SpellInfo const* spellInfo, Item* item);
 };
 
+// The roll behind a swing or a spell hit, for UnitScript::OnHitOutcome
+enum HitOutcomeKind : uint8
+{
+    HIT_OUTCOME_HIT = 0,
+    HIT_OUTCOME_CRIT,
+    HIT_OUTCOME_MISS,
+    HIT_OUTCOME_DODGE,
+    HIT_OUTCOME_PARRY,
+    HIT_OUTCOME_BLOCK,
+    HIT_OUTCOME_GLANCING,
+    HIT_OUTCOME_CRUSHING,
+    HIT_OUTCOME_RESIST,
+    HIT_OUTCOME_OTHER
+};
+
 class TC_GAME_API UnitScript : public ScriptObject
 {
     protected:
@@ -433,11 +448,19 @@ class TC_GAME_API UnitScript : public ScriptObject
         // Called when a unit deals healing to another unit
         virtual void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
 
+        // Called after a heal landed: what the heal was worth before the target's missing health capped it (`raw`) and what it restored (`effective`);
+        // the difference is overheal. `spellId` is 0 for a heal without a spell.
+        virtual void OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective);
+
         // Called when a unit deals damage to another unit
         virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
 
         // Called just before OnDamage with the spell that dealt the damage (null for a melee swing)
         virtual void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+
+        // Called before the damage of a swing or a direct spell hit is dealt, and for a spell that missed, with what the roll gave. spellId is 0
+        // for a melee swing; outcome is a HitOutcomeKind
+        virtual void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage);
 
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
@@ -841,6 +864,16 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         // Called after a player joined the dungeon finder
         virtual void OnLfgJoin(Player* player, uint32 dungeonId, uint8 roles);
+
+        // Called when a player posts (listed) or removes (!listed) a Classic Group Finder listing
+        virtual void OnGroupFinderListing(Player* player, uint32 categoryId, std::vector<uint32> const& activities, bool listed);
+
+        // Called when `applicant` invites a player who is already in a group (the sign-up of the Group Finder list until its Apply
+        // button is answered). Return true when the script took the request: the usual "already in a group" answer is then not sent.
+        virtual bool OnGroupFinderJoinRequest(Player* member, Player* applicant);
+
+        // Called when a player searches the Classic Group Finder list, before the listings are read
+        virtual void OnGroupFinderSearch(Player* searcher);
 
         // Called when a dungeon finder proposal is sent to a player
         virtual void OnLfgProposal(Player* player, uint32 proposalId);
@@ -1317,6 +1350,9 @@ class TC_GAME_API ScriptMgr
         void OnPlayerBattlegroundInvite(Player* player, uint32 instanceId, uint32 bgTypeId);
         void OnPlayerBattlegroundPortFailed(Player* player, uint8 reason, uint32 instanceId);
         void OnPlayerLfgJoin(Player* player, uint32 dungeonId, uint8 roles);
+        void OnPlayerGroupFinderListing(Player* player, uint32 categoryId, std::vector<uint32> const& activities, bool listed);
+        bool OnPlayerGroupFinderJoinRequest(Player* member, Player* applicant);
+        void OnPlayerGroupFinderSearch(Player* searcher);
         void OnPlayerLfgProposal(Player* player, uint32 proposalId);
         void OnPlayerChoiceResponse(WorldObject* object, Player* player, PlayerChoice const* choice, PlayerChoiceResponse const* response, uint16 clientIdentifier);
 
@@ -1356,8 +1392,10 @@ class TC_GAME_API ScriptMgr
     public: /* UnitScript */
 
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
+        void OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
         void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+        void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);

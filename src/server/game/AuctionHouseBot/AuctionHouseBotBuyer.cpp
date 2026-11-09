@@ -85,6 +85,8 @@ bool AuctionBotBuyer::Update(AuctionHouseType houseType)
 
     BuyerConfiguration& config = _houseConfig[houseType];
     uint32 eligibleItems = GetItemInformation(config);
+    AuctionBotBuyerPolicy::NoteCycle(eligibleItems);
+    AuctionBotBuyerPolicy::LogCounters();
     if (eligibleItems)
     {
         // Prepare list of items to bid or buy - remove old items
@@ -110,7 +112,7 @@ uint32 AuctionBotBuyer::GetItemInformation(BuyerConfiguration& config)
         AuctionPosting* entry = &itr->second;
 
         if (entry->IsCommodity() && !AuctionBotBuyerPolicy::StacksEnabled())
-            continue; // stackable listings are only bought whole, and only with AuctionHouseBot.Buyer.Stacks = 1
+            continue; // stackable listings are only bought whole, and only with AuctionHouseBot.Buyer.Commodities = 1
 
         if (entry->Owner.IsEmpty() || sAuctionBotConfig->IsBotChar(entry->Owner))
             continue; // Skip auctions owned by AHBot
@@ -351,28 +353,39 @@ void AuctionBotBuyer::BuyAndBidItems(BuyerConfiguration& config)
         }
 
         // never pay above the price cap (AuctionHouseBot.Buyer.MaxPriceMultiplier)
+        bool capped = false;
         if (uint64 cap = AuctionBotBuyerPolicy::MaxUnitPrice(auction))
         {
             if (AuctionBotBuyerPolicy::PerItemPrice(auction, auction->BuyoutOrUnitPrice) > cap)
+            {
+                capped = capped || successBuy;
                 successBuy = false;
+            }
             if (AuctionBotBuyerPolicy::PerItemPrice(auction, bidPrice) > cap)
+            {
+                capped = capped || successBid;
                 successBid = false;
+            }
         }
 
-        // If roll bidding succesfully and bid price is above buyout -> buyout
-        // If roll for buying was successful but not for bid, buyout directly
-        // If roll bidding was also successful, buy the entry with 20% chance
-        // - Better bid than buy since the item is bought by bot if no player bids after
-        // Otherwise bid if roll for bid was successful
-        if ((auction->BuyoutOrUnitPrice && successBid && bidPrice >= auction->BuyoutOrUnitPrice) ||
-            (successBuy && (!successBid || urand(1, 5) == 1)))
+        // A player who sets a buyout wants the item sold now, so a won buyout roll always buys it out.
+        // (The stock rule bid instead 4 times in 5, and then the item only sold when its timer ran out,
+        // up to 48 hours later.) Buy out too when the bid would reach the buyout anyway.
+        // Bid only when the buyout roll lost or there is no buyout; the item then sells when the timer ends.
+        if ((auction->BuyoutOrUnitPrice && successBid && bidPrice >= auction->BuyoutOrUnitPrice) || successBuy)
         {
             AuctionBotBuyerPolicy::RecordBuy(auction, AuctionBotBuyerPolicy::TotalPrice(auction, auction->BuyoutOrUnitPrice),
                 AuctionBotConfig::GetHouseTypeName(config.GetHouseType()));
             BuyEntry(auction, auctionHouse); // buyout
+            AuctionBotBuyerPolicy::Note(AuctionBotBuyerPolicy::Outcome::Bought);
         }
         else if (successBid)
+        {
             PlaceBidToEntry(auction, auctionHouse, bidPrice); // bid
+            AuctionBotBuyerPolicy::Note(AuctionBotBuyerPolicy::Outcome::Bid);
+        }
+        else
+            AuctionBotBuyerPolicy::Note(capped ? AuctionBotBuyerPolicy::Outcome::OverCap : AuctionBotBuyerPolicy::Outcome::LostRoll);
 
         itr->second.LastChecked = now;
         --cycles;

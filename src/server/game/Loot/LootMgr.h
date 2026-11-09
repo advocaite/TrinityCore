@@ -35,6 +35,9 @@ struct MapDifficultyEntry;
 enum LootType : uint8;
 enum class ItemContext : uint8;
 
+// Classic 1.60: Alterac Valley player corpse loot, one creature_loot_template entry per victim race (this + race)
+#define CLASSIC_AV_CORPSE_LOOT_ENTRY 90000000
+
 struct TC_GAME_API LootStoreItem
 {
     enum class Type : int8

@@ -341,6 +341,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         // Classic 1.60: multi-open chests (mining veins): true if the chest was reset for another opening
         bool TryReopenChest();
         void RollChestOpens();
+        bool IsMiningVein() const;
         uint32 GetUniqueUseCount() const { return uint32(m_unique_users.size()); }
 
         void SaveRespawnTime(uint32 forceDelay = 0);
@@ -474,6 +475,9 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         UF::UpdateField<UF::GameObjectData, int32(WowCS::EntityFragment::CGObject), TYPEID_GAMEOBJECT> m_gameObjectData;
 
         TeamId GetControllingTeam() const;
+        // Live control-zone capture-bar value (0 horde .. 100 alliance);
+        // -1 when this GO is not a control zone. Diagnostic surface.
+        float GetControlZoneValue() const;
 
     protected:
         void CreateModel();

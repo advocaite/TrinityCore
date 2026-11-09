@@ -1865,8 +1865,9 @@ TransferAbortParams Map::PlayerCannotEnter(uint32 mapid, Player* player)
             if (TransferAbortParams denyReason = boundMap->CannotEnter(player))
                 return denyReason;
 
-        // players are only allowed to enter 10 instances per hour
-        if (!entry->GetFlags2().HasFlag(MapFlags2::IgnoreInstanceFarmLimit) && entry->IsDungeon() && !player->GetSession()->UpdateAndCheckInstanceCount(instanceIdToCheck) && !player->isDead())
+        // players are only allowed to enter 10 instances per hour; a bot follows its group, so the group's real player is the one counted
+        if (!entry->GetFlags2().HasFlag(MapFlags2::IgnoreInstanceFarmLimit) && entry->IsDungeon() && !player->GetSession()->IsBot()
+            && !player->GetSession()->UpdateAndCheckInstanceCount(instanceIdToCheck) && !player->isDead())
             return TRANSFER_ABORT_TOO_MANY_INSTANCES;
     }
 
@@ -1980,7 +1981,8 @@ void Map::SendUpdateTransportVisibility(Player* player)
 
     WorldPacket packet;
     transData.BuildPacket(&packet);
-    player->GetSession()->SendPacket(&packet);
+    if (WorldSession* sess = player->GetSession())
+        sess->SendPacket(&packet);
 }
 
 inline void Map::setNGrid(NGridType *grid, uint32 x, uint32 y)
@@ -2000,8 +2002,13 @@ void Map::SendObjectUpdates()
     while (!_updateObjects.empty())
     {
         BaseEntity* obj = *_updateObjects.begin();
-        ASSERT(obj->IsInWorld());
         _updateObjects.erase(_updateObjects.begin());
+
+        // Skipped instead of asserting: a bot being removed can still be in _updateObjects after RemoveFromWorld cleared m_inWorld,
+        // or after it was marked for destruction (SetDestroyedObject) and re-added
+        if (!obj->IsInWorld() || obj->IsDestroyedObject())
+            continue;
+
         obj->BuildUpdate(update_players);
     }
 
@@ -2218,7 +2225,7 @@ void Map::DeleteRespawnInfo(RespawnInfo* info, CharacterDatabaseTransaction dbTr
 
 void Map::DeleteRespawnInfoFromDB(SpawnObjectType type, ObjectGuid::LowType spawnId, CharacterDatabaseTransaction dbTrans)
 {
-    if (Instanceable())
+    if (!PersistsRespawnTimes())
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_RESPAWN);
@@ -2599,10 +2606,33 @@ void Map::DelayedUpdate(uint32 t_diff)
         for (GridRefManager<NGridType>::iterator i = GridRefManager<NGridType>::begin(); i != GridRefManager<NGridType>::end();)
         {
             NGridType *grid = i->GetSource();
-            GridInfo* info = i->GetSource()->getGridInfoRef();
             ++i;                                                // The update might delete the map and we need the next map before the iterator gets invalid
-            ASSERT(grid->GetGridState() >= 0 && grid->GetGridState() < MAX_GRID_STATE);
-            si_GridStates[grid->GetGridState()]->Update(*this, *grid, *info, t_diff);
+            // Defensive: under heavy bot load (V2 1000+ bots), the grid
+            // iteration occasionally sees a null grid pointer here —
+            // likely a race between grid unload and DelayedUpdate. Skip
+            // and log so we don't AV instead of crashing the world.
+            // Crash 2026-05-13 08:38: AV at Map.cpp:2595 with grid=null.
+            if (!grid)
+            {
+                TC_LOG_WARN("maps", "Map::DelayedUpdate: null grid in iterator (map={} inst={})",
+                            GetId(), GetInstanceId());
+                continue;
+            }
+            GridInfo* info = grid->getGridInfoRef();
+            if (!info)
+            {
+                TC_LOG_WARN("maps", "Map::DelayedUpdate: null GridInfo (map={} inst={})",
+                            GetId(), GetInstanceId());
+                continue;
+            }
+            int const state = int(grid->GetGridState());
+            if (state < 0 || state >= MAX_GRID_STATE)
+            {
+                TC_LOG_WARN("maps", "Map::DelayedUpdate: invalid grid state {} (map={} inst={})",
+                            state, GetId(), GetInstanceId());
+                continue;
+            }
+            si_GridStates[state]->Update(*this, *grid, *info, t_diff);
         }
     }
 }
@@ -2906,9 +2936,9 @@ InstanceMap::InstanceMap(uint32 id, time_t expiry, uint32 InstanceId, Difficulty
     {
         i_instanceLock->SetInUse(true);
         i_instanceExpireEvent = i_instanceLock->GetExpiryTime(); // ignore extension state for reset event (will ask players to accept extended save on expiration)
-        // an extended lock that has run out is still handed to the map: its expiry lies in the past, so the event would fire on the
-        // first update and tell everyone inside that their lock "has expired" the moment they enter. The instance lives until the
-        // next reset, as a fresh one would.
+        // an extended lock that has run out is still handed to the map (FindActiveInstanceLock keeps it): its expiry lies in
+        // the past, so the event would fire on the first update and tell everyone inside that their lock "has expired" the
+        // moment they enter. The instance lives until the next reset, as a fresh one would.
         if (i_instanceLock->IsExpired())
             i_instanceExpireEvent = sInstanceLockMgr.GetNextResetTime({ GetEntry(), GetMapDifficulty() });
     }
@@ -2953,8 +2983,9 @@ TransferAbortParams InstanceMap::CannotEnter(Player* player)
         return TRANSFER_ABORT_MAX_PLAYERS;
     }
 
-    // cannot enter while an encounter is in progress (unless this is a relog, in which case it is permitted)
-    if (!player->IsLoading() && IsRaid() && GetInstanceScript() && GetInstanceScript()->IsEncounterInProgress())
+    // cannot enter while an encounter is in progress (unless this is a relog, in which case it is permitted); a companion bot is let in:
+    // its owner calls it to the fight (otherwise the whole companion group stays outside "encounter in progress" while the owner is inside)
+    if (!player->IsLoading() && !player->GetSession()->IsBot() && IsRaid() && GetInstanceScript() && GetInstanceScript()->IsEncounterInProgress())
         return TRANSFER_ABORT_ZONE_IN_COMBAT;
 
     if (i_instanceLock)
@@ -2977,17 +3008,21 @@ TransferAbortParams InstanceMap::CannotEnter(Player* player)
 */
 bool InstanceMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
-    // increase current instances (hourly limit)
-    player->GetSession()->AddInstanceEnterTime(GetInstanceId(), GameTime::GetSystemTime());
+    // increase current instances (hourly limit); not for a bot, which is never checked against it
+    if (!player->GetSession()->IsBot())
+        player->GetSession()->AddInstanceEnterTime(GetInstanceId(), GameTime::GetSystemTime());
 
     MapDb2Entries entries{ GetEntry(), GetMapDifficulty() };
-    if (entries.MapDifficulty->HasResetSchedule() && i_instanceLock && !i_instanceLock->IsNew() && i_data)
+    if (entries.MapDifficulty->HasResetSchedule() && i_instanceLock && !i_instanceLock->IsNew() && i_data && !player->GetSession()->IsBot())
     {
         if (!entries.MapDifficulty->IsUsingEncounterLocks())
         {
             InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
-            if (!playerLock || (playerLock->IsExpired() && playerLock->IsExtended()) ||
-                playerLock->GetData()->CompletedEncountersMask != i_instanceLock->GetData()->CompletedEncountersMask)
+            // Instance.BindOnEntry saves the player as they enter (BindPlayerOnEntry) when they hold no active lock, or one that ran
+            // out (an expired lock that was not extended is not returned at all): no prompt then
+            bool const renewedOnEntry = (!playerLock || playerLock->IsExpired()) && IsRaid() && sWorld->getBoolConfig(CONFIG_INSTANCE_BIND_ON_ENTRY);
+            if (!renewedOnEntry && (!playerLock || (playerLock->IsExpired() && playerLock->IsExtended()) ||
+                playerLock->GetData()->CompletedEncountersMask != i_instanceLock->GetData()->CompletedEncountersMask))
             {
                 WorldPackets::Instance::PendingRaidLock pendingRaidLock;
                 pendingRaidLock.TimeUntilLock = 60000;
@@ -3014,7 +3049,43 @@ bool InstanceMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
     if (i_scenario)
         i_scenario->OnPlayerEnter(player);
 
+    BindPlayerOnEntry(player);
+
     return true;
+}
+
+// Instance.BindOnEntry: save the raid lockout the moment a real player enters, so the instance id,
+// boss states and (Instance.PersistRaidTrash) dead creatures survive logout, unload and restarts.
+void InstanceMap::BindPlayerOnEntry(Player* player)
+{
+    if (!sWorld->getBoolConfig(CONFIG_INSTANCE_BIND_ON_ENTRY) || !IsRaid() || !i_data || !i_instanceLock)
+        return;
+
+    if (player->GetSession()->IsBot())
+        return;
+
+    MapDb2Entries entries{ GetEntry(), GetMapDifficulty() };
+    if (!entries.MapDifficulty->HasResetSchedule())
+        return;
+
+    InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
+    if (playerLock && !playerLock->IsNew() && !playerLock->IsExpired())
+    {
+        i_respawnsPersisted = true; // already bound (re-entry after logout or restart)
+        return;
+    }
+
+    i_respawnsPersisted = true;
+
+    CreateInstanceLockForPlayer(player);
+}
+
+bool InstanceMap::PersistsRespawnTimes() const
+{
+    if (!IsRaid() || !sWorld->getBoolConfig(CONFIG_INSTANCE_PERSIST_RAID_TRASH) || !i_instanceLock || i_instanceLock->IsExpired())
+        return false;
+
+    return i_respawnsPersisted || !i_instanceLock->IsNew();
 }
 
 void InstanceMap::Update(uint32 t_diff)
@@ -3110,6 +3181,15 @@ void InstanceMap::TrySetOwningGroup(Group* group)
 */
 InstanceResetResult InstanceMap::Reset(InstanceResetMethod method)
 {
+    if (method == InstanceResetMethod::Expire && IsRaid() && sWorld->getBoolConfig(CONFIG_INSTANCE_PERSIST_RAID_TRASH))
+    {
+        // the lockout is over, forget the dead creatures kept for it
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ALL_RESPAWNS);
+        stmt->setUInt16(0, GetId());
+        stmt->setUInt32(1, GetInstanceId());
+        CharacterDatabase.Execute(stmt);
+    }
+
     // raids can be reset if no boss was killed
     if (method != InstanceResetMethod::Expire && i_instanceLock && !i_instanceLock->IsNew())
         return InstanceResetResult::CannotReset;
@@ -3193,6 +3273,17 @@ void InstanceMap::SetInstanceScenario(InstanceScenario* scenario)
     }
 }
 
+// A player whose active raid save names another instance of this map (a GM walks in regardless, see CannotEnter) keeps that save:
+// UpdateInstanceLockForPlayer asserts when handed a lock of a different instance.
+static bool HoldsLockOfOtherInstance(Player const* player, MapDb2Entries const& entries, uint32 instanceId)
+{
+    if (!entries.IsInstanceIdBound())
+        return false;
+
+    InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
+    return playerLock && playerLock->GetInstanceId() != instanceId;
+}
+
 void InstanceMap::UpdateInstanceLock(UpdateBossStateSaveDataEvent const& updateSaveDataEvent)
 {
     if (i_instanceLock)
@@ -3210,8 +3301,13 @@ void InstanceMap::UpdateInstanceLock(UpdateBossStateSaveDataEvent const& updateS
         for (MapReference& mapReference : m_mapRefManager)
         {
             Player* player = mapReference.GetSource();
-            // never instance bind GMs with GM mode enabled
-            if (player->IsGameMaster())
+            // bots follow their group's instance and never hold a raid save of their own (BindPlayerOnEntry skips them as well)
+            if (player->GetSession()->IsBot())
+                continue;
+            // never instance bind GMs with GM mode enabled (Instance.BindOnEntry binds them: a GM owner with a bot raid is the only real player)
+            if (player->IsGameMaster() && !sWorld->getBoolConfig(CONFIG_INSTANCE_BIND_ON_ENTRY))
+                continue;
+            if (HoldsLockOfOtherInstance(player, entries, GetInstanceId()))
                 continue;
 
             InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
@@ -3263,8 +3359,13 @@ void InstanceMap::UpdateInstanceLock(UpdateAdditionalSaveDataEvent const& update
         for (MapReference& mapReference : m_mapRefManager)
         {
             Player* player = mapReference.GetSource();
-            // never instance bind GMs with GM mode enabled
-            if (player->IsGameMaster())
+            // bots never hold a raid save (see above)
+            if (player->GetSession()->IsBot())
+                continue;
+            // never instance bind GMs with GM mode enabled (Instance.BindOnEntry binds them, see above)
+            if (player->IsGameMaster() && !sWorld->getBoolConfig(CONFIG_INSTANCE_BIND_ON_ENTRY))
+                continue;
+            if (HoldsLockOfOtherInstance(player, entries, GetInstanceId()))
                 continue;
 
             InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
@@ -3296,7 +3397,14 @@ void InstanceMap::UpdateInstanceLock(UpdateAdditionalSaveDataEvent const& update
 
 void InstanceMap::CreateInstanceLockForPlayer(Player* player)
 {
+    // bots never hold a raid save: a pending bind that confirms after the entry would give each its own instance
+    if (player->GetSession()->IsBot())
+        return;
+
     MapDb2Entries entries{ GetEntry(), GetMapDifficulty() };
+    if (HoldsLockOfOtherInstance(player, entries, GetInstanceId()))
+        return;
+
     InstanceLock const* playerLock = sInstanceLockMgr.FindActiveInstanceLock(player->GetGUID(), entries);
 
     bool isNewLock = !playerLock || playerLock->IsNew() || playerLock->IsExpired();
@@ -3333,6 +3441,11 @@ uint32 Map::GetId() const
 bool Map::Instanceable() const
 {
     return i_mapEntry && i_mapEntry->Instanceable();
+}
+
+bool Map::PersistsRespawnTimes() const
+{
+    return !Instanceable();
 }
 
 bool Map::IsWorldMap() const
@@ -3722,7 +3835,7 @@ void Map::SaveRespawnTime(SpawnObjectType type, ObjectGuid::LowType spawnId, uin
 
 void Map::SaveRespawnInfoDB(RespawnInfo const& info, CharacterDatabaseTransaction dbTrans)
 {
-    if (Instanceable())
+    if (!PersistsRespawnTimes())
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_RESPAWN);
@@ -3736,7 +3849,7 @@ void Map::SaveRespawnInfoDB(RespawnInfo const& info, CharacterDatabaseTransactio
 
 void Map::LoadRespawnTimes()
 {
-    if (Instanceable())
+    if (!PersistsRespawnTimes())
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_RESPAWNS);
@@ -3769,7 +3882,7 @@ void Map::LoadRespawnTimes()
 
 void Map::DeleteRespawnTimesInDB()
 {
-    if (Instanceable())
+    if (!PersistsRespawnTimes())
         return;
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ALL_RESPAWNS);

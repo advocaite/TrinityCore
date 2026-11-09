@@ -670,6 +670,11 @@ namespace
 			}
 		}
 
+		// A polygon whose detail mesh has no qualifying edge (no triangles, or none with a boundary flag in the boundary-only pass) leaves
+		// pmin/pmax unset; the caller has already put the position into `closest`, so keep that instead of reading through null.
+		if (!pmin || !pmax)
+			return;
+
 		dtVlerp(closest, pmin, pmax, tmin);
 	}
 }

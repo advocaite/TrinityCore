@@ -178,3 +178,23 @@ DisableIncrementalLinking(CMAKE_EXE_LINKER_FLAGS_DEBUG)
 DisableIncrementalLinking(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO)
 DisableIncrementalLinking(CMAKE_SHARED_LINKER_FLAGS_DEBUG)
 DisableIncrementalLinking(CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO)
+
+# Keep the machine's folder names out of the programs.
+# /d1trimfile cuts the source and build folders off the file names the compiler embeds (__FILE__, asserts, log macros),
+# /PDBALTPATH stores only the name of the .pdb in the program, /Brepro makes the output reproducible (no time stamp).
+# Release-type builds only: debug builds keep full paths so the debugger finds the sources.
+# The folders are put in quotes (a folder name may hold a space) and WITHOUT a trailing backslash (it would escape the closing quote).
+# The flags go into the global compiler flags, so the bundled libraries under dep/ are covered as well, not just our own targets.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" TRIM_SOURCE_DIR)
+  file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" TRIM_BINARY_DIR)
+  foreach(config RELEASE RELWITHDEBINFO MINSIZEREL)
+    foreach(lang C CXX)
+      set(CMAKE_${lang}_FLAGS_${config} "${CMAKE_${lang}_FLAGS_${config}} /d1trimfile:\"${TRIM_SOURCE_DIR}\" /d1trimfile:\"${TRIM_BINARY_DIR}\"")
+    endforeach()
+    foreach(kind EXE SHARED MODULE)
+      set(CMAKE_${kind}_LINKER_FLAGS_${config} "${CMAKE_${kind}_LINKER_FLAGS_${config}} /PDBALTPATH:%_PDB% /Brepro")
+    endforeach()
+  endforeach()
+  message(STATUS "MSVC: Release builds trim '${TRIM_SOURCE_DIR}' and '${TRIM_BINARY_DIR}' from embedded paths (/d1trimfile, /PDBALTPATH, /Brepro)")
+endif()

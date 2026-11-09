@@ -647,6 +647,11 @@ public:
         _value = RoundToInterval<float>(value, 0.0f, 100.0f);
     }
 
+    // Diagnostic read of the live capture-bar value (0 = horde captured,
+    // 100 = alliance captured, between = contested/neutral band). Consumed
+    // by GameObject::GetControlZoneValue for GM tooling.
+    float GetValue() const { return _value; }
+
     void HandleHeartbeat()
     {
         // update player list inside control zone
@@ -945,6 +950,11 @@ void GameObject::AddToWorld()
         GetMap()->GetObjectsStore().Insert<GameObject>(this);
         if (m_spawnId)
             GetMap()->GetGameObjectBySpawnIdStore().insert(std::make_pair(m_spawnId, this));
+
+        // Instance.AhnQirajGatesOpen: the Gate of Ahn'Qiraj stands open without the war effort and the Scarab Gong
+        // (176146 Doodad_Ahn_Qiraj_DoorPlug01, 176149 Gate of Ahn'Qiraj2)
+        if ((GetEntry() == 176146 || GetEntry() == 176149) && sWorld->getBoolConfig(CONFIG_AQ_GATES_OPEN))
+            SetGoState(GO_STATE_ACTIVE);
 
         // The state can be changed after GameObject::Create but before GameObject::AddToWorld
         bool toggledState = GetGoType() == GAMEOBJECT_TYPE_CHEST ? getLootState() == GO_READY : (GetGoState() == GO_STATE_READY || IsTransport());
@@ -1514,7 +1524,10 @@ void GameObject::Update(uint32 diff)
 
                     // Type 0 despawns after being triggered, type 1 does not.
                     /// @todo This is activation radius. Casting radius must be selected from spell data.
-                    float radius = goInfo->trap.radius / 2.f; // this division seems to date back to when the field was called diameter, don't think it is still relevant.
+                    // Vanilla object data (VMaNGOS) reads the field as a radius: the Rookery Egg (175124) hatches a whelp
+                    // at 3 yards, not 1.5. Keep the halving for owned (player-summoned) traps, whose templates come from
+                    // the client data.
+                    float radius = GetOwner() ? goInfo->trap.radius / 2.f : goInfo->trap.radius;
                     if (!radius)
                         break;
 
@@ -2720,6 +2733,12 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
             Player* player = user->ToPlayer();
             if (!player)
                 return;
+
+            // A player using this chest again while its loot window is still open: close that window first, as SendLoot would.
+            // Closing an emptied vein reopens it (TryReopenChest) and frees its loot, so doing it inside SendLoot below built the
+            // loot response from freed memory. Done here, the reopened vein also gets its new loot in this same use.
+            if (player->GetLootByWorldObjectGUID(GetGUID()))
+                player->GetSession()->DoLootReleaseAll();
 
             GameObjectTemplate const* info = GetGOInfo();
             if (!m_loot && info->GetLootId())
@@ -3977,10 +3996,29 @@ void GameObject::SetLootState(LootState state, Unit* unit)
     }
 }
 
+bool GameObject::IsMiningVein() const
+{
+    LockEntry const* lock = sLockStore.LookupEntry(GetGOInfo()->GetLockId());
+    if (!lock)
+        return false;
+
+    for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+        if (lock->Type[i] == LOCK_KEY_SKILL && (lock->Index[i] == LOCKTYPE_MINING || lock->Index[i] == LOCKTYPE_MINING_2))
+            return true;
+
+    return false;
+}
+
 void GameObject::RollChestOpens()
 {
     GameObjectTemplate const* goInfo = GetGOInfo();
     m_goValue.Chest.MaxOpens = urand(goInfo->chest.minRestock, std::max(goInfo->chest.minRestock, goInfo->chest.maxRestock));
+
+    // Rate.Mining.Amount (worldserver.conf, 1 = normal, 2 = double): how many times a mining vein can be mined before it is gone
+    float miningRate = sWorld->getRate(RATE_MINING_AMOUNT);
+    if (miningRate != 1.0f && IsMiningVein())
+        m_goValue.Chest.MaxOpens = std::max<uint32>(1, uint32(std::lround(std::max<uint32>(1, m_goValue.Chest.MaxOpens) * miningRate)));
+
     m_goValue.Chest.Opens = 0;
 }
 
@@ -4705,6 +4743,18 @@ TeamId GameObject::GetControllingTeam() const
         return TEAM_NEUTRAL;
 
     return controlZone->GetControllingTeam();
+}
+
+float GameObject::GetControlZoneValue() const
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_CONTROL_ZONE)
+        return -1.0f;
+
+    GameObjectType::ControlZone const* controlZone = dynamic_cast<GameObjectType::ControlZone const*>(m_goTypeImpl.get());
+    if (!controlZone)
+        return -1.0f;
+
+    return controlZone->GetValue();
 }
 
 void GameObject::CreateModel()

@@ -66,7 +66,19 @@ enum ClassicAQ20DataGuids : uint32
     // so SetGuidData(CLASSIC_AQ20_DATA_CRYSTAL, usedCrystal) / SetData(CLASSIC_AQ20_DATA_CRYSTAL_INIT, 0) forward to it.
     CLASSIC_AQ20_DATA_CRYSTAL            = 14,
     CLASSIC_AQ20_DATA_CRYSTAL_INIT       = 15,
-    CLASSIC_AQ20_DATA_YEGGETH_SHIELD     = 16
+    CLASSIC_AQ20_DATA_YEGGETH_SHIELD     = 16,
+
+    // SetData from classic_npc_andorov: a point of his walk was reached (value = ClassicAQ20AndorovPoint)
+    CLASSIC_AQ20_DATA_ANDOROV_POINT      = 17
+};
+
+// MovePoint ids of Lieutenant General Andorov's walks; classic_npc_andorov forwards every arrival as
+// SetData(CLASSIC_AQ20_DATA_ANDOROV_POINT, id) and the instance script orders the next point
+enum ClassicAQ20AndorovPoint : uint32
+{
+    CLASSIC_AQ20_ANDOROV_POINT_CAMP_PATH   = 100,   // + point index: VMaNGOS creature_movement_template 15471 (spawn -> camp)
+    CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH = 200,   // + point index: VMaNGOS creature_movement_special 15471 (camp -> valley)
+    CLASSIC_AQ20_ANDOROV_POINT_LEAVE_PATH  = 300    // + point index: VMaNGOS generic_scripts 1547105 (timed moves, arrivals are ignored)
 };
 
 enum ClassicAQ20Entries : uint32
@@ -99,6 +111,35 @@ enum ClassicAQ20Entries : uint32
 
     // VMaNGOS generic_scripts id
     CLASSIC_AQ20_ANDOROV_START_SCRIPT    = 154710,
+
+    // VMaNGOS creature_spells 154710 (Andorov) and 154730 (Kaldorei Elite)
+    CLASSIC_AQ20_SPELL_ANDOROV_STRIKE    = 22591,
+    CLASSIC_AQ20_SPELL_ANDOROV_BASH      = 25515,
+    CLASSIC_AQ20_SPELL_AURA_OF_COMMAND   = 25516,
+    CLASSIC_AQ20_SPELL_ELITE_MORTAL_STRIKE = 16856,
+    CLASSIC_AQ20_SPELL_ELITE_CLEAVE      = 26350,
+
+    // Broadcast texts and sounds of the wave event (VMaNGOS creature_movement_scripts 1547102 / 1547103, generic_scripts 1547105,
+    // 153921 .. 153851 and 153410; the sounds are the broadcast_text sound_ids set by migration 20221127232342)
+    CLASSIC_AQ20_SAY_ANDOROV_VALLEY      = 11012,
+    CLASSIC_AQ20_SAY_ANDOROV_READY       = 11032,
+    CLASSIC_AQ20_SAY_ANDOROV_LEAVE       = 11560,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_1     = 8637,
+    CLASSIC_AQ20_SAY_RAJAXX_WAVE_2       = 11440,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_2     = 8645,
+    CLASSIC_AQ20_SAY_RAJAXX_WAVE_3       = 11439,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_3     = 8644,
+    CLASSIC_AQ20_SAY_RAJAXX_WAVE_4       = 11438,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_4     = 8643,
+    CLASSIC_AQ20_SAY_RAJAXX_WAVE_5       = 11437,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_5     = 8642,
+    CLASSIC_AQ20_SAY_RAJAXX_WAVE_6       = 11436,
+    CLASSIC_AQ20_SOUND_RAJAXX_WAVE_6     = 8641,
+    CLASSIC_AQ20_SAY_RAJAXX_ENGAGE       = 11435,
+    CLASSIC_AQ20_SOUND_RAJAXX_ENGAGE     = 8638,
+
+    // VMaNGOS scripted map events 15391..15385: each wave has 180 s before the event fails
+    CLASSIC_AQ20_WAVE_TIME_LIMIT_MS      = 180 * 1000,
 
     // Crystal Weaknesses
     CLASSIC_AQ20_SPELL_FIRE_WEAKNESS     = 25177,

@@ -497,6 +497,17 @@ void WorldSession::HandleChatAddonMessageOpcode(WorldPackets::Chat::ChatAddonMes
 
 void WorldSession::HandleChatAddonMessageTargetedOpcode(WorldPackets::Chat::ChatAddonMessageTargeted& chatAddonMessageTargeted)
 {
+    // Classic 1.60 (70658, 2026-10-28): the ForeverBots add-on's whispers to itself (prefixes PBC and FBOTS) arrive as this opcode
+    // but never reached the whisper hooks. What the packet was read as, and its raw bytes, to find which field the client's layout
+    // disagrees on. Every packet, not just those two prefixes: a misread layout can garble the prefix too.
+    {
+        WorldPacket const* raw = chatAddonMessageTargeted.GetRawPacket();
+        TC_LOG_INFO("network", "[addon_targeted] {}: type {} prefix '{}' text {} bytes '{}' player '{}' guid {} realm {} channel '{}' raw {}",
+            GetPlayerInfo(), uint32(chatAddonMessageTargeted.Params.Type), chatAddonMessageTargeted.Params.Prefix,
+            chatAddonMessageTargeted.Params.Text.size(), chatAddonMessageTargeted.Params.Text.substr(0, 40), chatAddonMessageTargeted.PlayerName,
+            chatAddonMessageTargeted.PlayerGUID.ToString(), chatAddonMessageTargeted.PlayerVirtualRealmAddress, chatAddonMessageTargeted.ChannelName,
+            ByteArrayToHexStr(std::span(raw->data(), std::min<size_t>(raw->size(), 160))));
+    }
     switch (chatAddonMessageTargeted.Params.Type)
     {
         case CHAT_MSG_WHISPER:
@@ -520,12 +531,23 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
     if (prefix.empty() || prefix.length() > 16)
         return;
 
+    // the ForeverBots add-on's own messages: say why one is dropped (see HandleChatAddonMessageTargetedOpcode)
+    bool const ownAddon = prefix == "PBC" || prefix == "FBOTS";
+
     // Disabled addon channel?
     if (!sWorld->getBoolConfig(CONFIG_ADDON_CHANNEL))
+    {
+        if (ownAddon)
+            TC_LOG_INFO("network", "[addon_targeted] {}: dropped, AddonChannel is off", GetPlayerInfo());
         return;
+    }
 
     if (!CanSpeak())
+    {
+        if (ownAddon)
+            TC_LOG_INFO("network", "[addon_targeted] {}: dropped, the player may not speak (muted)", GetPlayerInfo());
         return;
+    }
 
     sender->UpdateSpeakTime(Player::ChatFloodThrottle::ADDON);
 
@@ -533,7 +555,11 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
         return;
 
     if (text.length() > 255)
+    {
+        if (ownAddon)
+            TC_LOG_INFO("network", "[addon_targeted] {}: dropped, text {} bytes", GetPlayerInfo(), text.length());
         return;
+    }
 
     switch (type)
     {
@@ -563,7 +589,12 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
                 receiver = ObjectAccessor::FindConnectedPlayerByName(extName.Name);
             }
             if (!receiver)
+            {
+                if (ownAddon)
+                    TC_LOG_INFO("network", "[addon_targeted] {}: whisper target '{}' (guid {}) not found", GetPlayerInfo(), target,
+                        targetGuid ? targetGuid->ToString() : std::string("none"));
                 break;
+            }
 
             sender->WhisperAddon(text, prefix, isLogged, receiver);
             sScriptMgr->OnPlayerAddonMessageSent(sender, type, prefix, text, receiver);
@@ -736,8 +767,15 @@ void WorldSession::HandleTextEmoteOpcode(WorldPackets::Chat::CTextEmote& packet)
 
     switch (emote)
     {
-        case EMOTE_STATE_SLEEP:
         case EMOTE_STATE_SIT:
+            // the sit emote sits the player down (the client may send it without a stand state change, see UpdateCampfireRest)
+            if (_player->GetStandState() == UNIT_STAND_STATE_STAND && !_player->IsMounted() && !_player->IsInCombat())
+            {
+                _player->SetStandState(UNIT_STAND_STATE_SIT);
+                UpdateCampfireRest(UNIT_STAND_STATE_SIT);
+            }
+            break;
+        case EMOTE_STATE_SLEEP:
         case EMOTE_STATE_KNEEL:
         case EMOTE_ONESHOT_NONE:
             break;

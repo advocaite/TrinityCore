@@ -1,0 +1,38 @@
+# Vanilla auction house bot preset. Paste into worldserver.conf (server-bot).
+# The AH bot is the core's AuctionHouseBot (src/server/game/AuctionHouseBot): the seller lists items
+# in all three houses, the buyer buys player listings. Everything is off by default.
+
+# Seller on, filtered to stock level-60 vanilla items (no gems/glyphs, no later expansions).
+AuctionHouseBot.Seller.Enabled = 1
+AuctionHouseBot.Vanilla.Only = 1
+AuctionHouseBot.Vanilla.MaxReqLevel = 60
+AuctionHouseBot.Vanilla.MaxItemLevel = 100
+
+# Buyer on in all houses (buys player listings; prices follow vendor price x ratios below).
+AuctionHouseBot.Buyer.Alliance.Enabled = 1
+AuctionHouseBot.Buyer.Horde.Enabled = 1
+AuctionHouseBot.Buyer.Neutral.Enabled = 1
+
+# Items per faction: Amount.<quality> is the target count per house; Ratio scales a house (0 = off).
+AuctionHouseBot.Alliance.Items.Amount.Ratio = 100
+AuctionHouseBot.Horde.Items.Amount.Ratio = 100
+AuctionHouseBot.Neutral.Items.Amount.Ratio = 100
+AuctionHouseBot.Items.Amount.Gray = 0
+AuctionHouseBot.Items.Amount.White = 1500
+AuctionHouseBot.Items.Amount.Green = 1500
+AuctionHouseBot.Items.Amount.Blue = 600
+AuctionHouseBot.Items.Amount.Purple = 100
+# How fast it fills: items per update cycle (Boost applies while a house is under-filled).
+AuctionHouseBot.Update.Interval = 20
+AuctionHouseBot.ItemsPerCycle.Boost = 1000
+AuctionHouseBot.ItemsPerCycle.Normal = 20
+# Buy interval: minutes between buyer passes (1..1440).
+AuctionHouseBot.Buyer.Recheck.Interval = 5
+
+# Vanilla has no gems/glyphs; keep the gear pool to dropped/crafted items plus vendor stock.
+AuctionHouseBot.Items.Vendor = 1
+AuctionHouseBot.Items.Loot = 1
+AuctionHouseBot.Bind.Pickup = 0
+
+# Optional: list as the characters of a bot account (shows real seller names). Set to an account id.
+# AuctionHouseBot.Account = 0

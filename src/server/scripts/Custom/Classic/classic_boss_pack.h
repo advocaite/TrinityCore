@@ -1,24 +1,9 @@
 /*
- * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program. If not, see <http://www.gnu.org/licenses/>.
+ * Classic raid boss packs: a boss that resets alive (wipe, evade) brings back the adds the raid killed during the failed
+ * attempt. Instance.PersistRaidTrash otherwise keeps every killed spawn dead until the lockout resets, and
+ * creature_formations is empty in this DB, so nothing links an add to its boss. Packs are plain spawns, found by entry
+ * within 80 y of the boss's home position.
  */
-
-// Classic raid boss packs: a boss that resets alive (wipe, evade) brings back the adds the raid killed during the failed
-// attempt. creature_formations does not link the adds to their boss, so packs are plain spawns, found by entry within
-// 80 y of the boss's home position.
-
 #ifndef CLASSIC_BOSS_PACK_H
 #define CLASSIC_BOSS_PACK_H
 

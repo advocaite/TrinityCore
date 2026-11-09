@@ -1,15 +1,28 @@
-# ![logo](https://community.trinitycore.org/public/style_images/1_trinitycore.png) TrinityCore (master)
+# TrinityCore Forever (forever)
 
-## This fork: WoW Classic beta 1.60.1.70338 ("Forever")
+## This fork: WoW Forever / Classic 1.60.1 (client 1.60.1.70862)
 
-> **Not an official TrinityCore branch.** This is a community fork run by the Forever project. It is not made, supported or
-> endorsed by the TrinityCore team, and it is up to them whether they support it or take any of it upstream. Please don't
-> ask the TrinityCore team for help with this fork: questions and bug reports go to the
-> [Forever Discord](https://discord.gg/9GdBGrWPfj).
+> **Blizzlike only.** Every change here matches Blizzard's own game: fixes come from real game data (packet captures,
+> live hotfixes, player caches, Wowhead and Questie data, VMaNGOS for the vanilla world) or fix the server itself
+> (crashes, packets, pathing, scripts). No custom items, no custom content, and every rate and option defaults to
+> Blizzard's behaviour. Anyone may copy and use it under the GPL-2.0.
 
-Branch `forever` runs TrinityCore master against the **WoW Forever client 1.60.1.70790** (`_forever_\Wow.exe`, Battle.net
-product `wowf`; until 70658 it was the Classic beta, `_classic_beta_\WowB.exe`) with a vanilla world (converted from
-VMaNGOS) and the Skyborne / Zephras Isle content. Client 1.60.1.70450 notes: see [doc/Classic70450.md](doc/Classic70450.md).
+> **Not an official TrinityCore branch.** This is a community fork. It is not made, supported or endorsed by the
+> TrinityCore team or by Blizzard Entertainment, and it ships no game files: you need your own client. Please don't ask
+> the TrinityCore team for help with it: questions and bug reports go to our [Discord](https://discord.gg/7kJH4YyvZf).
+
+Branches:
+- `forever`: the clean core (this branch).
+- `forever-bots`: the same core plus the optional player bots module (`src/modules/PlayerbotV2`). Bots stay off until
+  you turn them on (`Playerbot.Enable`, `Playerbot.World.Enable`).
+
+The ready-to-play Windows repack is built from a tagged `forever-bots` commit; you choose bots on or off when you start it.
+
+This fork was started by advocaite as the `forever` branch of TrinityCore and is now kept up to date here. Thanks to
+advocaite and to everyone who sent fixes.
+
+Branch `forever` runs TrinityCore master against the **WoW Forever client 1.60.1** (`_forever_\Wow.exe`, Battle.net
+product `wowf`) with a vanilla world (converted from VMaNGOS) and the Skyborne / Zephras Isle content.
 
 **Just want to play?** Use the Windows repack from the releases: extract, run `Setup.bat`, start the servers in the
 Forever Launcher, press Play. No MySQL or compiling needed.
@@ -22,7 +35,7 @@ Linux (Ubuntu 24.04) setup, tested on a fresh cloud server, is in [doc/LinuxServ
 Build the core as usual (see [Install](#install)), then:
 
 **1. Databases.** Download the Forever database release
-[forever-tdb-2026-10-14](https://github.com/advocaite/TrinityCore/releases/tag/forever-tdb-2026-10-14), unpack it and
+[forever-tdb-2026-10-14](https://github.com/Karrz1/TrinityCore/releases/tag/forever-tdb-2026-10-14), unpack it and
 put `TDB_full_world_forever_2026_10_14.sql` and `TDB_full_hotfixes_forever_2026_10_14.sql` in the worldserver folder
 (the folder you start worldserver from). On the first start worldserver's auto-setup imports them and then applies
 only the `sql/custom` files added after the release (`Updates.EnableDatabases = 15`); nothing else is needed. The
@@ -77,8 +90,7 @@ Then move `dbc`, `gt`, `maps`, `vmaps` and `mmaps` into the worldserver's `DataD
 - a certificate for `trinity.actual.battle.net` signed by a root CA that the client PC trusts. Create your **own** CA
   (restrict it with `nameConstraints = critical,permitted;DNS:actual.battle.net`) and never share its private key.
   The repack's `setup\Setup.ps1` shows the exact openssl commands.
-- start the client with the [Forever Launcher](https://github.com/advocaite/foreverlauncher-releases/releases), which sets the portal and
-  the server's public key.
+- start the client with `repack/Play-WoWForever.ps1`, which sets the portal and writes the server's public key into the running client.
 
 ### Hosting for other players
 
@@ -104,98 +116,15 @@ it. For internet play, forward TCP 1119, 8081, 8085, 8095, 8105, 8115 in your ro
 
 Never open MySQL (3306/3317), Remote Access (3443) or SOAP (7878) to the internet.
 
+### Player bots
+
+Want bots? Use the `forever-bots` branch: this core plus the optional `src/modules/PlayerbotV2` module.
+
 [![Average time to resolve an issue](https://isitmaintained.com/badge/resolution/TrinityCore/TrinityCore.svg)](https://isitmaintained.com/project/TrinityCore/TrinityCore "Average time to resolve an issue") [![Percentage of issues still open](https://isitmaintained.com/badge/open/TrinityCore/TrinityCore.svg)](https://isitmaintained.com/project/TrinityCore/TrinityCore "Percentage of issues still open")
 
---------------
-
-
-* [Build Status](#build-status)
-* [Introduction](#introduction)
-* [Requirements](#requirements)
-* [Install](#install)
-* [Reporting issues](#reporting-issues)
-* [Submitting fixes](#submitting-fixes)
-* [Copyright](#copyright)
-* [Authors &amp; Contributors](#authors--contributors)
-* [Links](#links)
-
-
-
-## Build Status
-
-master | 3.3.5 | cata_classic
-:------------: | :------------: | :------------:
-[![master Build Status](https://circleci.com/gh/TrinityCore/TrinityCore/tree/master.svg?style=shield)](https://circleci.com/gh/TrinityCore/TrinityCore/tree/master) | [![3.3.5 Build Status](https://circleci.com/gh/TrinityCore/TrinityCore/tree/3.3.5.svg?style=shield)](https://circleci.com/gh/TrinityCore/TrinityCore/tree/3.3.5) | [![cata_classic Build Status](https://circleci.com/gh/TrinityCore/TrinityCore/tree/cata_classic.svg?style=shield)](https://circleci.com/gh/TrinityCore/TrinityCore/tree/cata_classic)
-[![master Build status](https://ci.appveyor.com/api/projects/status/54d0u1fxe50ad80o/branch/master?svg=true)](https://ci.appveyor.com/project/DDuarte/trinitycore/branch/master) | [![Build status](https://ci.appveyor.com/api/projects/status/54d0u1fxe50ad80o/branch/3.3.5?svg=true)](https://ci.appveyor.com/project/DDuarte/trinitycore/branch/3.3.5) | [![Build status](https://ci.appveyor.com/api/projects/status/54d0u1fxe50ad80o/branch/cata_classic?svg=true)](https://ci.appveyor.com/project/DDuarte/trinitycore/branch/cata_classic)
-[![master Windows Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/win-x64-build.yml/badge.svg?branch=master&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22Windows%20x64%22+branch%3Amaster+event%3Apush) | [![3.3.5 Windows Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/win-x64-build.yml/badge.svg?branch=3.3.5&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22Windows%20x64%22+branch%3A3.3.5+event%3Apush) | [![cata_classic GCC Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/gcc-build.yml/badge.svg?branch=cata_classic&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3AGCC+branch%3Acata_classic+event%3Apush)
-[![master Ubuntu Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/linux-build.yml/badge.svg?branch=master&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22Ubuntu%20x64%22+branch%3Amaster+event%3Apush) | [![3.3.5 Ubuntu Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/linux-build.yml/badge.svg?branch=3.3.5&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22Ubuntu%20x64%22+branch%3A3.3.5+event%3Apush) | [![cata_classic GCC Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/gcc-build.yml/badge.svg?branch=cata_classic&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3AGCC+branch%3Acata_classic+event%3Apush)
-[![master macOS arm64 Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/macos-arm-build.yml/badge.svg?branch=master&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22macOS%20arm64%22+branch%3Amaster+event%3Apush) | [![3.3.5 macOS arm64 Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/macos-arm-build.yml/badge.svg?branch=3.3.5&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22macOS%20arm64%22+branch%3A3.3.5+event%3Apush) | [![cata_classic macOS arm64 Build status](https://github.com/TrinityCore/TrinityCore/actions/workflows/macos-arm-build.yml/badge.svg?branch=cata_classic&event=push)](https://github.com/TrinityCore/TrinityCore/actions?query=workflow%3A%22macOS%20arm64%22+branch%3Acata_classic+event%3Apush)
-[![Coverity Scan Build Status](https://scan.coverity.com/projects/435/badge.svg)](https://scan.coverity.com/projects/435) | [![Coverity Scan Build Status](https://scan.coverity.com/projects/4656/badge.svg)](https://scan.coverity.com/projects/4656) |
-
-## Introduction
-
-TrinityCore is a *MMORPG* Framework based mostly in C++.
-
-It is derived from *MaNGOS*, the *Massive Network Game Object Server*, and is
-based on the code of that project with extensive changes over time to optimize,
-improve and cleanup the codebase at the same time as improving the in-game
-mechanics and functionality.
-
-It is completely open source; community involvement is highly encouraged.
-
-If you wish to contribute ideas or code, please visit our site linked below or
-make pull requests to our [Github repository](https://github.com/TrinityCore/TrinityCore/pulls).
-
-For further information on the TrinityCore project, please visit our project
-website at [TrinityCore.org](https://www.trinitycore.org).
-
-## Requirements
-
-
-Software requirements are available in the [wiki](https://trinitycore.info/en/install/requirements) for
-Windows, Linux and macOS.
-
-
-## Install
-
-Detailed installation guides are available in the [wiki](https://trinitycore.info/en/home) for
-Windows, Linux and macOS.
-
-
-## Reporting issues
-
-Issues can be reported via the [Github issue tracker](https://github.com/TrinityCore/TrinityCore/labels/Branch-master).
-
-Please take the time to review existing issues before submitting your own to
-prevent duplicates.
-
-In addition, thoroughly read through the [issue tracker guide](https://community.trinitycore.org/topic/37-the-trinitycore-issuetracker-and-you/) to ensure
-your report contains the required information. Incorrect or poorly formed
-reports are wasteful and are subject to deletion.
-
-
-## Submitting fixes
-
-C++ fixes are submitted as pull requests via Github. For more information on how to
-properly submit a pull request, read the [how-to: maintain a remote fork](https://community.trinitycore.org/topic/9002-howto-maintain-a-remote-fork-for-pull-requests-tortoisegit/).
-For SQL only fixes, open a ticket; if a bug report exists for the bug, post on an existing ticket.
-
-
-## Copyright
-
-License: GPL 2.0
-
-Read file [COPYING](COPYING).
-
-
-## Authors &amp; Contributors
-
-Read file [AUTHORS](AUTHORS).
-
-
-## Links
+## Setup
 
 * [Website](https://www.trinitycore.org)
 * [Wiki](https://www.trinitycore.info)
 * [Forums](https://talk.trinitycore.org/)
-* [Discord (Forever)](https://discord.gg/9GdBGrWPfj)
+* [Discord](https://discord.gg/7kJH4YyvZf)

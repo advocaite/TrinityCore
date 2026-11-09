@@ -383,7 +383,9 @@ namespace WorldPackets
             ObjectGuid Guid;
             TaggedPosition<Position::XY> Pos;
             int8 IconID = 0;
-            int8 ArenaSlot = 0;
+            // The 70291 client draws a battleground flag carrier only for slot 1 (PLAYER_POSITION_ARENA_SLOT_NONE) and treats 2..6 as
+            // arena team slots, so slot 0 is never drawn.
+            int8 ArenaSlot = 1;
         };
 
         class BattlegroundPlayerPositions final : public ServerPacket

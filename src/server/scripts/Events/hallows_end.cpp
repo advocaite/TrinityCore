@@ -121,7 +121,8 @@ class spell_hallow_end_trick_initial : public SpellScript
 
     void HandleScript(SpellEffIndex /*effIndex*/)
     {
-        GetHitUnit()->CastSpell(GetHitUnit(), SPELL_TRICK_INITIAL);
+        // Triggered: the player only clicked the innkeeper's gossip, so a cooldown or cast in progress must not swallow the trick
+        GetHitUnit()->CastSpell(GetHitUnit(), SPELL_TRICK_INITIAL, true);
     }
 
     void Register() override
@@ -134,13 +135,15 @@ enum TrickSpells
 {
     SPELL_PIRATE_COSTUME_MALE           = 24708,
     SPELL_PIRATE_COSTUME_FEMALE         = 24709,
-    SPELL_NINJA_COSTUME_MALE            = 24710,
-    SPELL_NINJA_COSTUME_FEMALE          = 24711,
+    SPELL_NINJA_COSTUME_MALE            = 24711, // Classic client: 24710 turns into Female Dark Assassin (5947), 24711 into the male one
+    SPELL_NINJA_COSTUME_FEMALE          = 24710,
     SPELL_LEPER_GNOME_COSTUME_MALE      = 24712,
     SPELL_LEPER_GNOME_COSTUME_FEMALE    = 24713,
     SPELL_SKELETON_COSTUME              = 24723,
     SPELL_GHOST_COSTUME_MALE            = 24735,
     SPELL_GHOST_COSTUME_FEMALE          = 24736,
+    SPELL_BAT_COSTUME                   = 24732,
+    SPELL_WISP_COSTUME                  = 24740,
     SPELL_TRICK_BUFF                    = 24753,
 };
 
@@ -160,6 +163,8 @@ class spell_hallow_end_trick : public SpellScript
             SPELL_SKELETON_COSTUME,
             SPELL_GHOST_COSTUME_MALE,
             SPELL_GHOST_COSTUME_FEMALE,
+            SPELL_BAT_COSTUME,
+            SPELL_WISP_COSTUME,
             SPELL_TRICK_BUFF
         });
     }
@@ -171,7 +176,8 @@ class spell_hallow_end_trick : public SpellScript
         {
             uint8 gender = target->GetNativeGender();
             uint32 spellId = SPELL_TRICK_BUFF;
-            switch (urand(0, 5))
+            // Vanilla pool (1.12): the six costumes, bat, wisp or the critter trick, each as likely
+            switch (urand(0, 7))
             {
                 case 1:
                     spellId = gender == GENDER_FEMALE ? SPELL_LEPER_GNOME_COSTUME_FEMALE : SPELL_LEPER_GNOME_COSTUME_MALE;
@@ -187,6 +193,12 @@ class spell_hallow_end_trick : public SpellScript
                     break;
                 case 5:
                     spellId = SPELL_SKELETON_COSTUME;
+                    break;
+                case 6:
+                    spellId = SPELL_BAT_COSTUME;
+                    break;
+                case 7:
+                    spellId = SPELL_WISP_COSTUME;
                     break;
                 default:
                     break;
@@ -296,6 +308,10 @@ class spell_hallow_end_wand : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
+
+        // Hallowed Wands do not work on a target in combat (vanilla)
+        if (target->IsInCombat())
+            return;
 
         uint32 spellId = 0;
         uint8 gender = target->GetNativeGender();

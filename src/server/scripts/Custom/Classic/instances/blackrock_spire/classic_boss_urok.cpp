@@ -65,6 +65,8 @@ namespace
 
         UROK_POINT_BANNER       = 2
     };
+
+    constexpr float UROK_CHALLENGER_RANGE = 60.0f;   // players this close to the pile are the challengers the adds attack
 }
 
 void ClassicBrsUrokDefineGoChallenge(Creature* creature, ObjectGuid gobjGUID);
@@ -134,10 +136,14 @@ struct classic_go_urok_challenge : public GameObjectAI
                     ClassicBrsUrokDefineGoChallenge(invoc, me->GetGUID());
                     invoc->CastSpell(invoc, SPELL_UROK_ADD_SUMMONED, true);
                 }
-                // Put in combat with everyone
-                me->GetMap()->DoOnPlayers([invoc](Player* player)
+                // Put in combat with the challengers: the players at the pile, not everyone in the instance. Players elsewhere in
+                // Blackrock Spire were held in combat by adds that could never reach them, for the 400 s despawn timer that never
+                // runs out while they are in combat (UBRS 2026-10-26: every bot healing or helping them joined that combat too).
+                GameObject* pile = me;
+                me->GetMap()->DoOnPlayers([invoc, pile](Player* player)
                 {
-                    if (player->IsAlive() && !invoc->IsFriendlyTo(player) && invoc->AI())
+                    if (player->IsAlive() && !invoc->IsFriendlyTo(player) && invoc->AI() &&
+                        player->IsWithinDist(pile, UROK_CHALLENGER_RANGE))
                         invoc->AI()->AttackStart(player);
                 });
             }
