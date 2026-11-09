@@ -18,6 +18,10 @@
 //   timeout       the success condition was not met in time
 //   boss_reset    the goal boss was engaged and then evaded / reset
 //   dps_hold      a DPS bot sat in a threat hold for dps_hold_ms while the raid was fighting
+//   group_idle    a non-healer did nothing for more than group_idle_ms while its group fought (Bot/GroupFight.h; the bot measures it)
+//   water         in deep water: the head under water for water_under_ms, under and back up water_flips times in a minute, or
+//                 no swimming flag for water_noswim_ms (standing on top of the water or on the lake bed). Off unless the scenario
+//                 sets the limits (lake_swim).
 
 #pragma once
 
@@ -48,9 +52,13 @@ struct ScenarioSample
     float mana_pct = -1.f;                 // -1 = no mana bar (warrior, rogue)
     std::uint32_t group_size = 0;          // members of the group this bot is in; 0 = in none
     std::string rule;                      // the rule the bot logic fired last (BotAI::last_rule_fired); empty = none
+    std::uint32_t group_idle_ms = 0;       // how long it has been idle in its group's fight (BotAI::group_idle_ms); 0 = acting / no fight
+    bool deep_water = false;               // over water deeper than its height (BotMovement::SwimLevel)
+    bool head_under = false;               // its head is under the water (LIQUID_MAP_UNDER_WATER)
+    bool swim_flag = false;                // it has the swimming movement flag
 };
 
-enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing };
+enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing, GroupIdle, FollowLost, Water };
 
 inline char const* ToString(ScenarioFailKind k)
 {
@@ -71,6 +79,9 @@ inline char const* ToString(ScenarioFailKind k)
         case ScenarioFailKind::BossReset:    return "boss_reset";
         case ScenarioFailKind::DpsHold:      return "dps_hold";
         case ScenarioFailKind::SupportMissing: return "support_missing";
+        case ScenarioFailKind::GroupIdle:    return "group_idle";
+        case ScenarioFailKind::FollowLost:   return "follow_lost";
+        case ScenarioFailKind::Water:        return "water";
     }
     return "?";
 }
@@ -136,6 +147,9 @@ struct ScenarioLimits
     std::uint32_t tolerated_deaths = 0;
     // A DPS bot in a threat hold (combat:threat_hold / threat_wait_tank / raid:threat_hold) this long while the raid fights. 0 = off.
     std::uint32_t dps_hold_ms = 0;
+    // A non-healer idle this long while its group fights (the owner, 2026-10-28: "if anyone in the group is in combat, every bot fights").
+    // 0 = off.
+    std::uint32_t group_idle_ms = 5000;   // GroupFight::kIdleFaultMs
     // Raid: every tank dead is a wipe, whoever else lives.
     bool tanks_dead_is_wipe = false;
     // A boss kill passes the run however many die. The run then stops only on a full wipe, a boss reset, a stall, a timeout or a setup failure;
@@ -145,6 +159,12 @@ struct ScenarioLimits
     // Tranquilizing Shots on an enrage, curse removals by mages / druids.
     std::uint32_t min_tranq_shots = 0;
     std::uint32_t min_decurses = 0;
+    // Water (lake_swim): the head under water this long in one go; this many changes between under and not under in
+    // water_flip_window_ms; in deep water without the swimming flag this long. 0 = that check is off.
+    std::uint32_t water_under_ms = 0;
+    std::uint32_t water_flips = 0;
+    std::uint32_t water_flip_window_ms = 60000;
+    std::uint32_t water_noswim_ms = 0;
 };
 
 class ScenarioMonitor
@@ -281,6 +301,8 @@ public:
                 Fail(ScenarioFailKind::GroupBroken, s.name, "sees a group of " + std::to_string(s.group_size) + ", expected " + std::to_string(limits_.expected_group), now_ms);
             }
 
+            CheckWater(s, b, now_ms);
+
             // idle
             bool const recovering = !s.in_combat && (s.hp_pct < limits_.recover_hp_pct || (s.mana_pct >= 0.f && s.mana_pct < limits_.recover_mana_pct));
             // The tank's pull waits for the healer's mana (Classic::kPullReadyHealerManaPct): a squad standing for its drinking
@@ -343,6 +365,19 @@ public:
                         b.hold_reported = true;
                         Fail(ScenarioFailKind::DpsHold, s.name, "held back (" + s.rule + ") for " + std::to_string((now_ms - b.hold_since_ms) / 1000u) + " s", now_ms);
                     }
+                }
+            }
+
+            // idle in the group's fight
+            if (limits_.group_idle_ms && s.role != ScenarioRoleKind::Healer)
+            {
+                if (s.group_idle_ms == 0)
+                    b.group_idle_reported = false;
+                else if (!b.group_idle_reported && s.group_idle_ms > limits_.group_idle_ms)
+                {
+                    b.group_idle_reported = true;
+                    Fail(ScenarioFailKind::GroupIdle, s.name, "idle " + Trim(s.group_idle_ms / 1000.f) + " s while the group fought (" +
+                         (s.rule.empty() ? std::string("no rule") : s.rule) + ") at " + Pos(s), now_ms);
                 }
             }
 
@@ -464,6 +499,8 @@ public:
     }
 
     void NoteSetupFailure(std::uint32_t now_ms, std::string const& bot, std::string const& why) { Fail(ScenarioFailKind::SetupFailed, bot, why, now_ms); }
+    // FollowRoute: a member that did not reach the stand-in at a route point in time.
+    void NoteFollowLost(std::uint32_t now_ms, std::string const& bot, std::string const& why) { Fail(ScenarioFailKind::FollowLost, bot, why, now_ms); }
     void NoteTimeout(std::uint32_t now_ms, std::string const& what) { Fail(ScenarioFailKind::Timeout, "", what, now_ms); }
     // A support job the content calls for (a Tranquilizing Shot on Magmadar's Frenzy, a curse removed in Lucifron's room) was never done.
     void NoteSupportMissing(std::uint32_t now_ms, std::string const& what) { Fail(ScenarioFailKind::SupportMissing, "", what, now_ms); }
@@ -496,6 +533,24 @@ public:
         return lines;
     }
     bool passed(bool goal_reached) const { return goal_reached && failures_.empty(); }
+    // A run that reached its goal passes (the owner, 2026-11-02: "if the dungeon is completed then it's a pass, not a fail because a bot ran
+    // oom or died"): what the bots did wrong on the way (deaths, mana, holds, strays) moves to the warnings. The ends of a run (wipe, timeout,
+    // setup, broken group, boss reset, stall) stay failures.
+    void DemoteToWarningsOnGoal()
+    {
+        std::vector<ScenarioFailure> kept;
+        for (ScenarioFailure& f : failures_)
+        {
+            bool const ends_run = f.kind == ScenarioFailKind::Wipe || f.kind == ScenarioFailKind::Timeout || f.kind == ScenarioFailKind::SetupFailed ||
+                                  f.kind == ScenarioFailKind::GroupBroken || f.kind == ScenarioFailKind::BossReset || f.kind == ScenarioFailKind::GroupStalled ||
+                                  f.kind == ScenarioFailKind::WrongMap || f.kind == ScenarioFailKind::SupportMissing;   // a wrong map or an unmet support check is not about the bots' play
+            if (ends_run)
+                kept.push_back(std::move(f));
+            else
+                warnings_.push_back(std::move(f));
+        }
+        failures_ = std::move(kept);
+    }
     // The run cannot usefully go on: enough members have died.
     // A run whose pass bar is the kill is never ended by a death count, whatever max_deaths says.
     bool terminal() const { return boss_reset_ || (!limits_.kill_is_pass && limits_.max_deaths != 0 && deaths_ >= limits_.max_deaths); }
@@ -560,6 +615,13 @@ private:
         std::uint32_t hold_since_ms = 0;
         bool hold_active = false;
         bool hold_reported = false;
+        bool group_idle_reported = false;
+        bool was_under = false;
+        std::uint32_t under_since_ms = 0;
+        std::vector<std::uint32_t> water_flips;   // run_ms of each change between under and not under, within the window
+        std::uint32_t noswim_since_ms = 0;
+        bool noswim_active = false;
+        bool water_reported = false;              // once per bot per run
         std::string name;
         std::vector<std::pair<std::uint32_t, std::string>> trace;   // (ms, rule) at each change
 
@@ -570,12 +632,54 @@ private:
             oom_active = false; oom_reported = false;
             rest_active = false; rest_reported = false;
             hold_active = false; hold_reported = false;
+            group_idle_reported = false;
         }
     };
 
     static constexpr std::uint32_t kBossResetMs = 5000;
     static constexpr std::uint32_t kEffectiveWipeMs = 15000;
     static constexpr std::uint32_t kFewAliveMs = 30000;
+
+    void CheckWater(ScenarioSample const& s, BotState& b, std::uint32_t now_ms)
+    {
+        if (!limits_.water_under_ms && !limits_.water_flips && !limits_.water_noswim_ms)
+            return;
+        bool const under = s.head_under;
+        if (under != b.was_under)
+        {
+            b.water_flips.push_back(now_ms);
+            b.was_under = under;
+            if (under)
+                b.under_since_ms = now_ms;
+        }
+        while (!b.water_flips.empty() && now_ms - b.water_flips.front() > limits_.water_flip_window_ms)
+            b.water_flips.erase(b.water_flips.begin());
+        if (s.deep_water && !s.swim_flag)
+        {
+            if (!b.noswim_active) { b.noswim_active = true; b.noswim_since_ms = now_ms; }
+        }
+        else
+            b.noswim_active = false;
+        if (b.water_reported)
+            return;
+        if (limits_.water_under_ms && under && now_ms - b.under_since_ms >= limits_.water_under_ms)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "head under water for " + std::to_string((now_ms - b.under_since_ms) / 1000u) + " s at " + Pos(s), now_ms);
+        }
+        else if (limits_.water_flips && b.water_flips.size() >= limits_.water_flips)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "went under the water and back up " + std::to_string(b.water_flips.size()) + " times in " +
+                 std::to_string(limits_.water_flip_window_ms / 1000u) + " s, at " + Pos(s), now_ms);
+        }
+        else if (limits_.water_noswim_ms && b.noswim_active && now_ms - b.noswim_since_ms >= limits_.water_noswim_ms)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "in deep water without swimming for " + std::to_string((now_ms - b.noswim_since_ms) / 1000u) +
+                 " s at " + Pos(s) + " (on top of the water or on the lake bed)", now_ms);
+        }
+    }
 
     static bool IsThreatHold(std::string const& rule)
     {

@@ -21,6 +21,7 @@
 
 #include "WorldSession.h"
 #include "ObjectGuid.h"
+#include <vector>
 
 // V2's BotSession lives in `Playerbot::V2`.
 namespace Playerbot::V2 {
@@ -54,6 +55,14 @@ public:
 
     // Bots have no client — drop outbound packets. Base method is virtual.
     void SendPacket(WorldPacket const* packet, bool forced = false) override;
+
+private:
+    // Guild charters a real player offered to this bot ("Request
+    // Signature"). The core answers an offer by sending the charter to
+    // the target's client (SMSG_PETITION_SHOW_SIGNATURES) and waits for
+    // the client to press Sign. A bot has no client, so SendPacket keeps
+    // the charter guid here and Update signs it on the next tick.
+    std::vector<ObjectGuid> _offeredCharters;
 };
 
 } // namespace Playerbot::V2

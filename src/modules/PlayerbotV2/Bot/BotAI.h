@@ -7,6 +7,8 @@
 #include "ClassicBuffLedger.h"
 
 #include "IdleWatch.h"
+#include "Dungeon/TankStill.h"
+#include "GroupFight.h"
 #include "WalkOrder.h"
 #include "TownErrand.h"
 #include "Travel/ReachMemory.h"
@@ -16,6 +18,8 @@
 #include "Battleground/BgTactics.h"          // BgTactics::StallWatch (bg_stall_ member)
 #include "Battleground/BattlegroundScript.h"  // BattlegroundAdvice — bg_advice_cache_ member needs full type
 #include "Formation.h"
+#include "PackPullGate.h"
+#include "RecoverRules.h"   // Classic::LeaderStillTracker (the rest rule's "has the player stopped")
 #include "BotPersonality.h"
 #include "BotArchetype.h"
 #include "BotRng.h"
@@ -470,6 +474,10 @@ public:
     // equip-upgrade rule leaves the worn pieces alone (it would put the better scoring own piece straight back).
     uint8  resist_gear_school() const { return resist_gear_school_; }
     void   set_resist_gear_school(uint8 v) { resist_gear_school_ = v; }
+    // Whether this bot was last ordered to wear the Onyxia Scale Cloak of Blackwing Lair (idle:classic_onyxia_cloak). While set, the
+    // equip-upgrade rule leaves the worn pieces alone, as for the resistance gear.
+    bool   fight_cloak() const { return fight_cloak_; }
+    void   set_fight_cloak(bool v) { fight_cloak_ = v; }
 
     // Mailbox-open hesitation slot.
     uint32 pending_mail_open_at_ms() const { return pending_mail_open_at_ms_; }
@@ -541,6 +549,10 @@ public:
     // Owner "aoe off" (AoeDeny.h): no spell that hits more than one enemy until "aoe on". Mirrored into the snapshot.
     bool       aoe_denied() const { return aoe_denied_; }
     void       set_aoe_denied(bool b) { aoe_denied_ = b; }
+    // Owner "focus heal <name>, <name>": a healer heals only these players (and itself) until "focus heal off". Empty = everyone.
+    // Memory only. Written by the whisper handler (world thread), copied into the snapshot by the builder.
+    std::vector<ObjectGuid> heal_only() const { std::lock_guard<std::mutex> lk(heal_only_mtx_); return heal_only_; }
+    void       set_heal_only(std::vector<ObjectGuid> g) { std::lock_guard<std::mutex> lk(heal_only_mtx_); heal_only_ = std::move(g); }
 
     // The owner's spell picks for this bot ("prefer blessing might", "pet off", "stealth off"; OwnerPicks.h). Memory only: a relog
     // clears them. Written by the whisper handler (world thread), mirrored into the snapshot and the group member summary.
@@ -616,8 +628,11 @@ public:
         orders_.until_ms = now_ms + (ttl_ms == 0 ? 30000u : ttl_ms);
         orders_.last_ms  = now_ms;
         use_stay_.store(false, std::memory_order_relaxed);   // any new order replaces the use's Stay
+        stay_return_set_.store(false, std::memory_order_relaxed);   // and the spot an old Stay walks back to
+        stay_return_pinned_.store(false, std::memory_order_relaxed);
     }
-    // The Stay a "use <object>" leaves after the use: ends when the bot's fight starts (DispatchInCombat), a two-minute backstop otherwise.
+    // The Stay a "use <object>" leaves after the use: ends once the use is done (no channel 5 s after it, idle:owner_stay), when the
+    // bot's or the group's fight starts (DispatchInCombat, idle:owner_stay), a two-minute backstop otherwise.
     // Set by the use rule after its enter_manual, cleared by every enter_manual.
     void set_use_stay() { use_stay_.store(true, std::memory_order_relaxed); }
     bool use_stay() const { return use_stay_.load(std::memory_order_relaxed); }
@@ -666,6 +681,15 @@ public:
         clear_follow_drop();
     }
     bool follow_drop_blocked(uint32 now_ms) const { return now_ms < follow_drop_block_until_ms_.load(std::memory_order_relaxed); }
+
+    // Owner's steps (Fleet/OwnerTrail.h, PlayerbotV2.cpp DriveOwnerTrail): the world tick is walking the bot along the way its player went
+    // (the run up the Blackrock Mountain chains and the jumps to the Spire ledge, where the navmesh has no route). Each move renews the
+    // hold; while it lasts the bot's own tick moves nothing, so the follow does not pull it back under the chain. Written on the world
+    // thread, read by the bot worker.
+    static constexpr uint32 kOwnerStepsHoldMs = 1500;
+    bool owner_steps_active(uint32 now_ms) const { return now_ms < owner_steps_until_ms_.load(std::memory_order_relaxed); }
+    void hold_for_owner_steps(uint32 now_ms) { owner_steps_until_ms_.store(now_ms + kOwnerStepsHoldMs, std::memory_order_relaxed); }
+    void clear_owner_steps() { owner_steps_until_ms_.store(0, std::memory_order_relaxed); }
 
     // Owner said flee: run to them without fighting back until the window ends (DispatchInCombat).
     static constexpr uint32 kFleeMs = 8000;
@@ -830,13 +854,21 @@ public:
     //   Passive    - the bot starts nothing on its own (no autopilot pull, no assist on the owner's, the skull's or a member's
     //                target); it defends itself and the group (a mob already on a member) and fights on the owner's
     //                attack / pull order (release_owner_lead opens a window);
-    //   Aggressive - besides the group's own fights it attacks any hostile within kAggressiveRadiusYd of the owner.
+    //   Aggressive - besides the group's own fights it attacks any hostile within kAggressiveRadiusYd of the owner;
+    //   NoFight    - the panel's "Passive" (the word "passive"): the bot attacks nothing at all, not to defend itself or the group,
+    //                not on the group's fight and not on an attack / pull order, until the stance changes. Heals, buffs and other
+    //                friendly spells go on. The builder sets BotSnapshot::no_fight; the emitter drops every attack and harmful spell
+    //                and the snapshot shows the bot no enemy (a hunter player tames a beast while the bots stand by, 2026-11-03).
+    // Passive is shown as "Defensive" on the panel (the word "defensive"): it starts nothing but defends and joins the group's fight.
     // Written by the chat handlers (world thread), read by the bot worker.
-    enum class OwnerStance : uint8_t { Auto = 0, Passive = 1, Aggressive = 2 };
+    enum class OwnerStance : uint8_t { Auto = 0, Passive = 1, Aggressive = 2, NoFight = 3 };
     static constexpr float kAggressiveRadiusYd = 10.0f;   // Aggressive: hostiles this close to the owner are attacked
     OwnerStance owner_stance() const { return OwnerStance(orders_.stance.load(std::memory_order_relaxed)); }
     bool set_owner_stance(OwnerStance st) { return orders_.stance.exchange(uint8_t(st), std::memory_order_relaxed) != uint8_t(st); }
-    bool owner_passive() const { return owner_stance() == OwnerStance::Passive; }
+    // Starts no fight on its own: Defensive (Passive) or the full Passive (NoFight).
+    bool owner_passive() const { OwnerStance const st = owner_stance(); return st == OwnerStance::Passive || st == OwnerStance::NoFight; }
+    // The full Passive: fights nothing at all (see OwnerStance::NoFight).
+    bool owner_no_fight() const { return owner_stance() == OwnerStance::NoFight; }
     // The owner's last attack / pull / assist order is fresh (15 s): a passive bot fights during it.
     bool owner_order_window_open() const
     {
@@ -848,6 +880,7 @@ public:
     // Starts no fight on its own right now (stance Passive, or Auto in an instance led by a human), outside an order window.
     bool passive_now(bool human_led_instance) const
     {
+        if (owner_no_fight()) return true;   // no order window opens the full Passive
         if (owner_order_window_open()) return false;
         OwnerStance const st = owner_stance();
         return st == OwnerStance::Passive || (st == OwnerStance::Auto && human_led_instance);
@@ -940,6 +973,7 @@ public:
         bool   opener_unavail = false;        // ranged opener unusable (NO_AMMO) - taunt / plain engage instead
         bool   opener_failed_logged = false;  // the "[pull_back] opener did not engage" line went out
         bool   stand_pull     = false;        // approach abandoned: pull from where the tank stands
+        bool   spot_refused   = false;        // the pull spot on the line to the return point has no path: the straight line is used
         uint8  retakes        = 0;            // Hold: re-taunt / run-back attempts
         uint32 retake_ms      = 0;            // Hold: last attempt
     };
@@ -1427,7 +1461,11 @@ public:
     bool       dungeon_cross_direct() const { return dungeon_cross_direct_; }
     void       set_dungeon_cross_direct(bool d) { dungeon_cross_direct_ = d; }
     void       clear_dungeon_cross() { dungeon_cross_until_ms_ = 0; cross_episode_since_ms_ = 0;
-                                       dungeon_cross_direct_ = false; }
+                                       dungeon_cross_direct_ = false; cross_fight_yield_ = false; }
+    // A crossing that stalled while mobs hit the bot gives way to the fight until combat ends (DungeonHonorCross); the
+    // commitment itself is kept, so the hop resumes (or its out-of-combat recovery fires) after the fight.
+    bool       cross_fight_yield() const { return cross_fight_yield_; }
+    void       set_cross_fight_yield(bool y) { cross_fight_yield_ = y; }
 
     // ── Tank chase-commit latch (2026-07-02, stage 4) ──────────────────────
     // Once a tank in combat chooses to walk a genuinely LONG-but-complete
@@ -1852,7 +1890,9 @@ public:
     bool       opener_victim_is_boss() const { return opener_victim_is_boss_; }
     void       set_opener_victim_is_boss(bool b) { opener_victim_is_boss_ = b; }
     uint32     cast_oor_count() const { return cast_oor_count_; }
-    void       note_cast_out_of_range() { ++cast_oor_count_; }
+    void       note_cast_out_of_range(uint32 now_ms) { ++cast_oor_count_; last_cast_oor_ms_ = now_ms ? now_ms : 1u; }
+    // When a cast last came back OutOfRange / LoS (0 = never); not cleared by an Ok cast or a step, unlike the count.
+    uint32     last_cast_oor_ms() const { return last_cast_oor_ms_; }
     void       reset_cast_oor() { cast_oor_count_ = 0; }
 
     // Per-objective stuck-detection bookkeeping. Tracks (quest_id, obj_id) of
@@ -2300,6 +2340,19 @@ public:
         if (it == equip_try_until_ms_.end()) return false;
         return now_ms < it->second;
     }
+    // A piece a player chose for the bot: gear it took in a trade as an upgrade, or an "equip <item>" order. While that entry is
+    // still worn in that slot, the auto-equip rules leave the slot alone, so the old piece in the bags is not put back on a few
+    // minutes later. Memory only (cleared by a restart); a slot is free again once something else is worn there. The order sets it
+    // from the command thread, the rules read it on the worker: atomics.
+    void keep_worn(uint8 slot, uint32 entry)
+    {
+        if (slot < kept_worn_.size()) kept_worn_[slot].store(entry, std::memory_order_relaxed);
+    }
+    bool worn_is_kept(uint8 slot, uint32 worn_entry) const
+    {
+        if (slot >= kept_worn_.size() || worn_entry == 0) return false;
+        return kept_worn_[slot].load(std::memory_order_relaxed) == worn_entry;
+    }
     void prune_equip_try_cache(uint32 now_ms)
     {
         for (auto it = equip_try_until_ms_.begin(); it != equip_try_until_ms_.end();)
@@ -2694,6 +2747,8 @@ public:
         BgFormHold      = 57,  // target = 0. A bot clicking a battleground flag / banner: no druid shapeshift cast
                                // for 6s (the click leaves the form; the rotation shifted straight back in).
         AlwaysBuff      = 58,  // target = kAlwaysBuffLockKey. idle:always_buff (Playerbot.AlwaysBuffs): 10s between passes.
+        BgCaptureHold   = 59,  // target = the node key of BgTryUseObjectiveGo. A bot that started a banner capture stands still at the
+                               // banner for 7s, so the 5s channel completes on its next click instead of being broken by another rule's move.
     };
     static constexpr uint32 kActionRetryLockoutMs = 5u * 60u * 1000u;
     // Per-kind cooldown override — most actions use the 5 min default, but
@@ -2825,6 +2880,9 @@ public:
             case ActionKind::BgFormHold:
                 // Past the 3 s BgUseGo retry, so the second click lands out of form.
                 return 6u * 1000u;
+            case ActionKind::BgCaptureHold:
+                // The 5 s capture channel plus the 3 s click that completes it, less the click already made at its start.
+                return 7u * 1000u;
             case ActionKind::AlwaysBuff:
                 // The gate fires only when an aura is out of step with where the bot stands, so a short pace is enough. It shared the
                 // potion's 5 min lockout once: a bot that got its gold floor in the world and joined a raid group a few seconds later
@@ -3228,9 +3286,18 @@ private:
     void dispatch_layers(BotSnapshotView, GroupSnapshotView,
                          BotIntentEmitter&);
 
+    // [tank_still]: a bot tank standing in one place out of combat in a dungeon or raid logs why, once every 30 s
+    // (Dungeon/TankStill.h). Log only; it changes nothing the tank does.
+    void note_tank_still(BotSnapshotView, GroupSnapshotView);
+
+    // Gear a player traded the bot as an upgrade (TradeShop::TakeGiftGear) goes on as soon as the snapshot shows it in the bags,
+    // one piece per tick, out of combat; a piece for a later level goes on at that level. The slot is then kept (keep_worn).
+    void wear_gift_gear(BotSnapshotView const&, BotIntentEmitter&);
+
     // Recompute raid_map_party_hold_ and release the owner follow order when the owner
     // engages a mob himself. Runs every tick before the state dispatch.
     void update_dungeon_autopilot_hold(BotSnapshotView, GroupSnapshotView);
+    void update_group_fight(BotSnapshotView, GroupSnapshotView);
 
     BotId          bot_id_;
     BotPersonality personality_;
@@ -3263,11 +3330,69 @@ public:
         uint32 anchor_ms     = 0;
     };
     CombatIdleState& combat_idle() { return combat_idle_; }
+    // GroupFight gate (Bot/GroupFight.h): settled once per tick before the state pick (BotAI::update_group_fight). Fight = the bot's
+    // human-led group fights outside a raid boss fight and no fresh order holds it: every hold that can keep it from fighting steps aside.
+    GroupFight::Mode group_fight_mode() const { return group_fight_mode_.load(std::memory_order_relaxed); }
+    bool  group_fight() const { return group_fight_mode() == GroupFight::Mode::Fight; }
+    uint32 group_fight_since_ms() const { return group_fight_since_ms_; }
+    // [group_idle] streak of a bot in Fight mode (any role but healer): first tick with nothing done, last report.
+    uint32 group_idle_since_ms() const { return group_idle_since_ms_.load(std::memory_order_relaxed); }
+    void   set_group_idle_since_ms(uint32 ms) { group_idle_since_ms_.store(ms, std::memory_order_relaxed); }
+    uint32& group_idle_logged_ms() { return group_idle_logged_ms_; }
+    uint32& group_fight_pick_ms() { return group_fight_pick_ms_; }
+    // A scenario squad plays as a player's group would (Diagnostics/ScenarioRunner.cpp refreshes it every sample): its leader stands in
+    // for the player, so the group's fight runs the same gate and the scenario's group_idle check measures it.
+    void   note_scenario_player_lead(uint32 now_ms) { scenario_lead_until_ms_.store(now_ms + 5000u, std::memory_order_relaxed); }
+    bool   scenario_player_lead(uint32 now_ms) const { return now_ms < scenario_lead_until_ms_.load(std::memory_order_relaxed); }
+    // How long this bot has been idle in the group's fight (0 = acting, or not in Fight mode).
+    uint32 group_idle_ms(uint32 now_ms) const
+    {
+        uint32 const since = group_idle_since_ms();
+        return group_fight() && since != 0 && now_ms >= since ? now_ms - since : 0u;
+    }
+    // An owner Stay the group's fight lifted (GroupFight.h rule 6): where the bot stood, so it walks back once the fight is over (the
+    // owner, 2026-10-28: fight, then go back to the spot). Cleared by any new order and on arrival (idle:owner_stay).
+    bool stay_return(float& x, float& y, float& z, uint32& map) const
+    {
+        if (!stay_return_set_.load(std::memory_order_relaxed)) return false;
+        x = stay_return_x_; y = stay_return_y_; z = stay_return_z_; map = stay_return_map_;
+        return true;
+    }
+    // pinned: a Positions tab spot (BotCommandParser::PlaceBots). It is kept on arrival, so the bot goes back to it after every fight
+    // until a new order (enter_manual) or the map changes.
+    void set_stay_return(float x, float y, float z, uint32 map, bool pinned = false)
+    {
+        stay_return_x_ = x; stay_return_y_ = y; stay_return_z_ = z; stay_return_map_ = map;
+        stay_return_pinned_.store(pinned, std::memory_order_relaxed);
+        stay_return_set_.store(true, std::memory_order_relaxed);
+    }
+    void clear_stay_return()
+    {
+        stay_return_set_.store(false, std::memory_order_relaxed);
+        stay_return_pinned_.store(false, std::memory_order_relaxed);
+    }
+    bool stay_return_pinned() const { return stay_return_pinned_.load(std::memory_order_relaxed); }
     // Game time of the last damage this bot itself dealt (world thread writes from the damage hook, the bot worker reads); 0 = none yet.
     void   note_damage_done(uint32 now_ms) { last_damage_done_ms_.store(now_ms ? now_ms : 1u, std::memory_order_relaxed); }
     uint32 last_damage_done_ms() const { return last_damage_done_ms_.load(std::memory_order_relaxed); }
 private:
     CombatIdleState combat_idle_;
+    std::atomic<GroupFight::Mode> group_fight_mode_{GroupFight::Mode::Off};   // the bot worker writes, the scenario sample reads
+    uint32 group_fight_since_ms_ = 0;
+    uint32 leader_flag_only_since_ms_ = 0;   // the leader in combat with nothing near him to fight since (GroupFight::kLeaderFlagOnlyMs)
+    std::atomic<uint32> group_idle_since_ms_{0};
+    uint32 group_idle_logged_ms_ = 0;
+    uint32 group_fight_pick_ms_ = 0;
+    std::atomic<uint32> scenario_lead_until_ms_{0};
+    bool   was_resting_ = false;
+    uint32 rest_stood_ms_ = 0;
+    uint32 last_resting_ms_ = 0;
+    std::vector<std::pair<ObjectGuid, uint32>> chase_unreachable_;   // target, until (ms)
+    int32  rest_aura_left_ms_ = -1;
+    std::atomic<bool> stay_return_set_{false};
+    std::atomic<bool> stay_return_pinned_{false};
+    float  stay_return_x_ = 0.f, stay_return_y_ = 0.f, stay_return_z_ = 0.f;
+    uint32 stay_return_map_ = 0;
     std::atomic<uint32> last_damage_done_ms_{0};
 
     // [cast_fail] window (world thread only; see note_cast_outcome).
@@ -3432,6 +3557,7 @@ private:
     // BG), so a fresh upgrade after exit gets a fresh window.
     uint32         pending_equip_upgrade_at_ms_ = 0;
     uint8          resist_gear_school_ = 0;
+    bool           fight_cloak_ = false;
     // Mailbox-open hesitation: real humans click the mailbox, see the
     // list, hover one row, click "Take All". 1.5–4s before the first
     // take packet lands. Reset when the bot walks out of mailbox range.
@@ -3454,6 +3580,8 @@ private:
     uint8          last_train_level_ = 0;
     bool           aoe_preference_   = false;
     bool           aoe_denied_       = false;
+    mutable std::mutex      heal_only_mtx_;
+    std::vector<ObjectGuid> heal_only_;
     OwnerPicks::Picks owner_picks_;
     // Owner-squad-control state (Phase C of OWNER_SQUAD_CONTROL_PLAN.md).
     // The owner's orders to this bot, all in one place. Written by the chat handlers (world thread), read by the bot worker.
@@ -3486,6 +3614,7 @@ private:
     std::atomic<uint32_t> follow_drop_since_ms_{0};
     std::atomic<uint32_t> follow_drop_fine_until_ms_{0};
     std::atomic<uint32_t> follow_drop_block_until_ms_{0};
+    std::atomic<uint32_t> owner_steps_until_ms_{0};
     bool           raid_map_party_hold_   = false;
     bool           owner_hold_            = false;   // an owner Stay / Hold is on: the autopilot walks nobody (update_dungeon_autopilot_hold)
     bool           human_lead_hold_       = false;   // see human_lead_hold()
@@ -3612,6 +3741,10 @@ private:
     uint64_t     last_whisper_hash_       = 0;
     uint32       last_whisper_ms_         = 0;
     uint32       last_bag_room_ms_        = 0;   // when idle:make_bag_room last fired
+    // Traded gear still to put on (wear_gift_gear): the entry, when it is given up on if it never shows in the bags, and whether
+    // it was seen there (a piece for a later level waits in the bags until the bot has the level, and is dropped once it is gone).
+    struct GiftWear { uint32 entry = 0; uint32 until_ms = 0; bool seen = false; };
+    std::vector<GiftWear> gift_wear_;
 public:
     uint32 last_bag_room_ms() const { return last_bag_room_ms_; }
     void   note_bag_room(uint32 now_ms) { last_bag_room_ms_ = now_ms; }
@@ -3908,6 +4041,7 @@ private:
     // cross_frozen_ms) — kept separate from frozen_x_/y_/z_ which the strand
     // recovery owns and resets on cohesion.
     uint32         cross_frozen_since_ms_ = 0;
+    bool           cross_fight_yield_ = false;
     float          cross_frozen_x_ = 0.f;
     float          cross_frozen_y_ = 0.f;
     float          cross_frozen_z_ = 0.f;
@@ -3927,6 +4061,7 @@ private:
     uint32         opener_last_seen_ms_ = 0;
     bool           opener_victim_is_boss_ = false;
     uint32         cast_oor_count_ = 0;
+    uint32         last_cast_oor_ms_ = 0;
     ObjectiveTrack objective_track_{0, 0, 0, 0, 0, 0, 0};
     // Committed lateral-reroute side (see commit_lateral_side). 0 = none/cleared,
     // -1 = left, +1 = right. lateral_side_ms_ is the GameTime ms the side was
@@ -4166,6 +4301,7 @@ private:
     ::Playerbot::BgTactics::StallWatch bg_stall_;   // battleground stand-still watchdog (State_Idle bg_stall)
     ::Playerbot::V2::WalkOrder walk_order_;
     ::Playerbot::V2::IdleWatch idle_watch_;   // world-wide standing-still detector (DispatchIdle)
+    ::Playerbot::TankStill::Watch tank_still_;   // a dungeon tank standing out of combat: [tank_still] why (dispatch_layers)
     ::Playerbot::V2::TownErrand::State town_errand_;
     ::Playerbot::V2::GoalProgress goal_progress_;   // idle:town_errand (Bot/States/Rules/AmbientRules.cpp)
     // Cached corpse → graveyard distance. Recomputing every snapshot tick
@@ -4924,6 +5060,8 @@ private:
     std::atomic<uint32> mana_break_until_ms_{0};
     // Per-item-entry equip retry cooldown — see kEquipTryLockoutMs above.
     std::unordered_map<uint32, uint32> equip_try_until_ms_;
+    // Worn pieces a player chose, per equipment slot (keep_worn).
+    std::array<std::atomic<uint32>, 19> kept_worn_{};
     // Per-hub blacklist for unproductive arrivals — see kHubTriedLockoutMs.
     std::unordered_map<uint32, uint32> tried_hub_until_ms_;
     // A4 per-corpse loot first-seen timestamp — see loot_corpse_overdue.
@@ -4932,6 +5070,8 @@ private:
     std::unordered_map<uint64, uint32> loot_walk_first_ms_;
     // Per-target start_attack lockout — see kStartAttackLockoutMs.
     std::unordered_map<uint64, uint32> start_attack_until_ms_;
+    // Idle packs the tank can only walk to the long way round: see pack_pull_gate().
+    PackPullGate pack_pull_gate_;
     // Raid damage-school rule bookkeeping (see RaidSchoolState).
     RaidSchoolState raid_school_{};
     // critical-repair futility backoff — see crit_repair_note_adjacent() above.
@@ -5087,6 +5227,9 @@ public:
     }
     RaidSchoolState&       raid_school()       { return raid_school_; }
     RaidSchoolState const& raid_school() const { return raid_school_; }
+    // The dungeon pack stop's per-pack walk verdicts (PackPullGate.h). Bot worker only: the tank's own idle tick.
+    PackPullGate&       pack_pull_gate()       { return pack_pull_gate_; }
+    PackPullGate const& pack_pull_gate() const { return pack_pull_gate_; }
     void prune_start_attack_cache(uint32 now_ms)
     {
         for (auto it = start_attack_until_ms_.begin(); it != start_attack_until_ms_.end();)
@@ -5315,6 +5458,7 @@ private:
     uint32 hub_walk_id_ = 0, hub_walk_since_ms_ = 0, hub_walk_seen_ms_ = 0;
     float  hub_walk_x_ = 0.f, hub_walk_y_ = 0.f;
     uint32 anchor_seen_ms_ = 0, anchor_move_ms_ = 0;
+    Classic::LeaderStillTracker leader_still_;
     float  anchor_x_ = 0.f, anchor_y_ = 0.f;
 public:
     void   note_path_blocked(uint32 now_ms)
@@ -5501,6 +5645,70 @@ public:
     // Whether the follow anchor (leader or owner) has moved in the last second, seen from successive ticks. A follower that waits for the
     // full recall slack (13-15 yd for a caster) before it starts runs 2-4 s behind a leader who sets off; while he moves it starts at the
     // follow distance instead.
+    // How long ago the follow anchor last moved (~0u: not seen moving); read by the rest rule (Classic::LedMaySitDown).
+    // The more recent of the follow's anchor and the player who leads the bot (Classic::LeaderStillTracker, noted every tick).
+    uint32 since_anchor_moved_ms(uint32 now_ms) const
+    {
+        uint32 const anchor = anchor_move_ms_ != 0 && now_ms >= anchor_move_ms_ ? now_ms - anchor_move_ms_ : ~0u;
+        return Classic::SinceLeaderMovedMs(anchor, leader_still_.since_moved_ms(now_ms));
+    }
+    // Every tick (BotAI::update): where the player leading the bot is now (0: no such player on its map).
+    void note_leader_position(uint64 leader_counter, float x, float y, uint32 now_ms)
+    {
+        leader_still_.note(leader_counter, x, y, now_ms);
+    }
+    // Rest tracking for the rest rule (Classic::LedMaySitDown), noted every tick (BotAI::update): whether the bot was eating / drinking at
+    // the last look, how long its aura still had, and when it last got up from a rest it broke off. A rest whose aura ran out ended on its
+    // own (a second item may follow at once); one that went with time left was broken off by a move, a cast or a stand. A fight that got it
+    // up does not count either: after the fight a bot that is low sits straight down.
+    static constexpr int32 kRestRanOutMs = 2000;
+    void note_resting(bool resting, int32 aura_left_ms, bool fight_broke_it, uint32 now_ms)
+    {
+        if (was_resting_ && !resting && !fight_broke_it && rest_aura_left_ms_ > kRestRanOutMs)
+            rest_stood_ms_ = now_ms ? now_ms : 1u;
+        if (resting)
+            last_resting_ms_ = now_ms ? now_ms : 1u;
+        was_resting_ = resting;
+        rest_aura_left_ms_ = resting ? aura_left_ms : -1;
+    }
+    // Targets the bot's chase could not path to (two NoPath builds in a row, BotSnapshot combat.chase_nopath_target): the group fight
+    // picks the next mob instead of standing beside the fight (UBRS 2026-10-29: two bots stood on the Dragonspire Hall dais through a
+    // pull). Kept kChaseUnreachableMs, then the mob may be tried again (it or the bot has moved).
+    static constexpr uint32 kChaseUnreachableMs = 10000;
+    // Returns true when the target is newly noted (the caller logs it).
+    bool note_chase_unreachable(ObjectGuid target, uint32 now_ms)
+    {
+        if (target.IsEmpty())
+            return false;
+        for (auto& e : chase_unreachable_)
+            if (e.first == target)
+            {
+                bool const fresh = now_ms >= e.second;
+                e.second = now_ms + kChaseUnreachableMs;
+                return fresh;
+            }
+        if (chase_unreachable_.size() >= 8)
+            chase_unreachable_.erase(chase_unreachable_.begin());
+        chase_unreachable_.emplace_back(target, now_ms + kChaseUnreachableMs);
+        return true;
+    }
+    bool chase_unreachable(ObjectGuid target, uint32 now_ms) const
+    {
+        for (auto const& e : chase_unreachable_)
+            if (e.first == target)
+                return now_ms < e.second;
+        return false;
+    }
+    // Since the bot last broke off a rest (~0u: never).
+    uint32 since_rest_broken_ms(uint32 now_ms) const
+    {
+        return rest_stood_ms_ != 0 && now_ms >= rest_stood_ms_ ? now_ms - rest_stood_ms_ : ~0u;
+    }
+    // Since the bot was last seen eating / drinking (~0u: never). The "drinking" line is said once per rest (Classic::SayDrinkingIfDue).
+    uint32 since_resting_ms(uint32 now_ms) const
+    {
+        return last_resting_ms_ != 0 && now_ms >= last_resting_ms_ ? now_ms - last_resting_ms_ : ~0u;
+    }
     bool anchor_moving(float x, float y, uint32 now_ms)
     {
         if (anchor_seen_ms_ == 0 || now_ms - anchor_seen_ms_ > 3000u)

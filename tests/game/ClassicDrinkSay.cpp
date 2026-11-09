@@ -33,6 +33,14 @@ TEST_CASE("DrinkSay: a bot led by a player announces a real drink once per quiet
     CHECK_FALSE(ShouldSayDrinking(true, true, 30, true));                      // said within the quiet time
 }
 
+TEST_CASE("DrinkSay: once per rest, not for the next item or a sit again after a step", "[DrinkSay]")
+{
+    CHECK(SameRest(0));
+    CHECK(SameRest(kDrinkSayRestGapMs - 1));
+    CHECK_FALSE(SameRest(kDrinkSayRestGapMs));
+    CHECK_FALSE(SameRest(~0u));   // never rested
+}
+
 TEST_CASE("DrinkSay: only mana users in a player's group say it", "[DrinkSay]")
 {
     CHECK_FALSE(ShouldSayDrinking(false, true, 30, false));   // a world bot or a bot-only group

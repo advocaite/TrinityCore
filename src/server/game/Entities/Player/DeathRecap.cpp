@@ -296,7 +296,7 @@ namespace
             ChatHandler(victim->GetSession()).SendSysMessage(text);
             return;
         }
-        // A bot's death is never announced (Karrz: the chat was flooded with every bot death, first in Arathi Basin, then in
+        // A bot's death is never announced (playtest: the chat was flooded with every bot death, first in Arathi Basin, then in
         // Molten Core). The recap is still recorded and `.recap <n>` still works.
         if (victim->GetSession() && victim->GetSession()->IsBot())
             return;

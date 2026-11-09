@@ -278,10 +278,12 @@ void DispatchDead(BotAI& ai,
             if (group.exists() && Services::Config().behavior_party_banter())
             {
                 // Gated, rare and varied (cooldowns, 1-in-2 roll, never in a big raid or when chatter is off).
-                std::string line = BotChatter::BanterLine(BotChatter::Banter::Thanks, ai, snapshot);
+                bool to_program = false;   // the bot bridge's program says it (BotChatter moments)
+                std::string line = BotChatter::BanterLine(BotChatter::Banter::Thanks, ai, snapshot, &to_program);
+                bool const spoke = !line.empty() || to_program;
                 if (!line.empty())
                     emit.say(std::move(line));
-                if (Services::Config().behavior_social_emotes() && !line.empty())
+                if (Services::Config().behavior_social_emotes() && spoke)
                     emit.perform_emote(2 /*EMOTE_ONESHOT_BOW*/, ObjectGuid::Empty);
             }
             else if (group.exists())

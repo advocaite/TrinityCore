@@ -27,12 +27,15 @@
 #include "Fleet/BotGuildMgr.h"
 #include "Fleet/BotGuildEvent.h"
 #include "Bot/BotArchetype.h"
+#include "Bot/BotRegistry.h"
+#include "Util/ConfigReader.h"
 #include "Config.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "Player.h"
 #include "UnitDefines.h"
 
+#include <cmath>
 #include <fmt/format.h>
 
 namespace Playerbot {
@@ -373,6 +376,8 @@ bool RecruitNearbyFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     {
         if (!u.is_player) continue;
         if (u.guild_id != 0) continue;
+        // Real players only with PlayerbotV2.Guilds.InvitePlayers = 1 (owner decision 2026-11-03: a setting, off by default).
+        if (!Services::Config().guilds_invite_players() && !Services::Registry().has(u.guid.GetCounter())) continue;
         if (u.level < 10) continue;
         const uint64 tgt_low = u.guid.GetCounter();
         if (tgt_low == s.raw().guid.GetCounter()) continue;
@@ -684,32 +689,109 @@ bool EventAnnounceFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     return true;
 }
 
-// ---------- idle:guild_event:tavern (walk / dance / chat / idle) ----------
+// ---------- guild events: who goes, and where each bot stands ----------
+// A guild event gathers the members who are already in the capital (TavernSpot::zone_id): it never pulls a bot out of its questing
+// zone. Raid / dungeon / BG nights take the level brackets their group forming uses (BotGuildEventScheduler: 60 / 15 / 10).
+// Each bot has its own place in a ring round the spot, by its id, so the guild stands about the square (and out of the fountain)
+// instead of in one heap.
+//
+// Two rules per event. The hold rule (no throttle) owns the bot's movement while the event runs: it walks the bot to its place and
+// keeps it there every tick. Before, the one rule was looked at every 5 s, and in between the bot's own town errand walked it away
+// again, so it ran to and fro across the square (Stormwind BG night 2026-11-06). The throttled rule only adds the emotes and the
+// guild chat once the bot is in its place, at the rates they always had.
+struct EventPlace
+{
+    ::Playerbot::V2::TavernSpot const* spot = nullptr;
+    float x = 0.f, y = 0.f, z = 0.f;
+    float dist = 0.f;   // from the bot to its place, 2D
+};
+
+bool GuildEventPlace(BotSnapshotView const& s, bool tavern, EventPlace& out)
+{
+    using ::Playerbot::V2::GuildEventKind;
+    uint8 const kind = s.guild_active_event_kind();
+    uint8 min_level = 0;
+    if (tavern)
+    {
+        if (kind != static_cast<uint8>(GuildEventKind::TavernParty)) return false;
+    }
+    else if (kind == static_cast<uint8>(GuildEventKind::RaidNight))    min_level = 60;
+    else if (kind == static_cast<uint8>(GuildEventKind::DungeonNight)) min_level = 15;
+    else if (kind == static_cast<uint8>(GuildEventKind::BgNight))      min_level = 10;
+    else return false;
+    if (s.level() < min_level) return false;
+
+    int const faction = static_cast<int>(FactionOf(s));
+    auto const& spot = tavern ? ::Playerbot::V2::kFactionTavern[faction] : ::Playerbot::V2::kFactionStaging[faction];
+    if (s.map_id() != spot.map_id || s.zone_id() != spot.zone_id) return false;
+
+    // Inside the tavern the ring is small; the square takes a wider one.
+    float const r_min = tavern ? 1.5f : 6.0f, r_max = tavern ? 6.0f : 14.0f;
+    uint64 h = (uint64(s.bot_id()) + 1u) * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 32;
+    float const angle = float(h % 3600u) * (6.2831853f / 3600.0f);
+    float const r = r_min + float((h >> 20) % 1000u) * ((r_max - r_min) / 1000.0f);
+    out.spot = &spot;
+    out.x = spot.x + r * std::cos(angle);
+    out.y = spot.y + r * std::sin(angle);
+    out.z = spot.z;
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    out.dist = std::hypot(out.x - bx, out.y - by);
+    return true;
+}
+
+constexpr float kEventPlaceReach = 2.5f;
+
+// ---------- idle:guild_event:tavern_hold / staging_hold ----------
+bool EventTavernHoldGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    EventPlace p;
+    return GuildChatQuietGate(s, ai, g, now_ms) && GuildEventPlace(s, /*tavern*/ true, p);
+}
+
+bool EventStagingHoldGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    EventPlace p;
+    return GuildChatQuietGate(s, ai, g, now_ms) && GuildEventPlace(s, /*tavern*/ false, p);
+}
+
+bool EventHoldMove(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit, bool tavern)
+{
+    EventPlace p;
+    if (!GuildEventPlace(s, tavern, p)) return false;
+    if (p.dist > kEventPlaceReach)
+    {
+        emit.move_to(p.x, p.y, p.z, /*run=*/p.dist > 30.0f);
+        ai.set_last_rule_fired(tavern ? "idle:guild_event:tavern_walk" : "idle:guild_event:staging_walk");
+        return true;
+    }
+    ai.set_last_rule_fired(tavern ? "idle:guild_event:tavern_hold" : "idle:guild_event:staging_hold");
+    return true;
+}
+
+bool EventTavernHoldFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    return EventHoldMove(s, ai, emit, /*tavern*/ true);
+}
+
+bool EventStagingHoldFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    return EventHoldMove(s, ai, emit, /*tavern*/ false);
+}
+
+// ---------- idle:guild_event:tavern (dance / chat, in its place) ----------
 bool EventTavernGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
     if (!GuildChatQuietGate(s, ai, g, now_ms)) return false;
-    if (s.guild_active_event_kind() !=
-        static_cast<uint8>(::Playerbot::V2::GuildEventKind::TavernParty))
-        return false;
-    const auto kEvFaction = FactionOf(s);
-    auto const& spot = ::Playerbot::V2::kFactionTavern[static_cast<int>(kEvFaction)];
-    return s.map_id() == spot.map_id;
+    EventPlace p;
+    return GuildEventPlace(s, /*tavern*/ true, p) && p.dist <= kEventPlaceReach;
 }
 
-bool EventTavernFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, BotIntentEmitter& emit, uint32)
+bool EventTavernFire(BotSnapshotView const&, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
 {
-    const auto kEvFaction = FactionOf(s);
-    auto const& spot = ::Playerbot::V2::kFactionTavern[static_cast<int>(kEvFaction)];
-    float bx5, by5, bz5; s.position(bx5, by5, bz5);
-    const float tdx = spot.x - bx5, tdy = spot.y - by5, tdz = spot.z - bz5;
-    const float dist_sq = tdx*tdx + tdy*tdy + tdz*tdz;
-    constexpr float kPartyRadius = 12.0f;
-    if (dist_sq > kPartyRadius * kPartyRadius)
-    {
-        emit.move_to(spot.x, spot.y, spot.z, /*run=*/true);
-        ai.set_last_rule_fired("idle:guild_event:tavern_walk");
-        return true;
-    }
     static constexpr uint32 kPartyEmotes[] = {
         10, 4, 3, 5, 71,
     };
@@ -735,40 +817,20 @@ bool EventTavernFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
         ai.set_last_rule_fired("idle:guild_event:tavern_chat");
         return true;
     }
-    ai.set_last_rule_fired("idle:guild_event:tavern_idle");
-    return true;
+    return false;   // nothing to add this time: the hold rule keeps the bot in its place
 }
 
-// ---------- idle:guild_event:staging (walk / chat / idle) ----------
+// ---------- idle:guild_event:staging (chat, in its place) ----------
 bool EventStagingGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
     if (!GuildChatQuietGate(s, ai, g, now_ms)) return false;
-    const uint8 active_kind = s.guild_active_event_kind();
-    const bool is_staging =
-        active_kind == static_cast<uint8>(::Playerbot::V2::GuildEventKind::RaidNight) ||
-        active_kind == static_cast<uint8>(::Playerbot::V2::GuildEventKind::DungeonNight) ||
-        active_kind == static_cast<uint8>(::Playerbot::V2::GuildEventKind::BgNight);
-    if (!is_staging) return false;
-    const auto kEvFaction2 = FactionOf(s);
-    auto const& staging = ::Playerbot::V2::kFactionStaging[static_cast<int>(kEvFaction2)];
-    return s.map_id() == staging.map_id;
+    EventPlace p;
+    return GuildEventPlace(s, /*tavern*/ false, p) && p.dist <= kEventPlaceReach;
 }
 
-bool EventStagingFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, BotIntentEmitter& emit, uint32)
+bool EventStagingFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
 {
     const uint8 active_kind = s.guild_active_event_kind();
-    const auto kEvFaction2 = FactionOf(s);
-    auto const& staging = ::Playerbot::V2::kFactionStaging[static_cast<int>(kEvFaction2)];
-    float bx6, by6, bz6; s.position(bx6, by6, bz6);
-    const float sdx = staging.x - bx6, sdy = staging.y - by6, sdz = staging.z - bz6;
-    const float dist_sq = sdx*sdx + sdy*sdy + sdz*sdz;
-    constexpr float kStagingRadius = 20.0f;
-    if (dist_sq > kStagingRadius * kStagingRadius)
-    {
-        emit.move_to(staging.x, staging.y, staging.z, /*run=*/true);
-        ai.set_last_rule_fired("idle:guild_event:staging_walk");
-        return true;
-    }
     if (ai.rng().int_range(0, 30) == 0)
     {
         char const* line = "anyone joining?";
@@ -803,8 +865,7 @@ bool EventStagingFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
         ai.set_last_rule_fired("idle:guild_event:staging_chat");
         return true;
     }
-    ai.set_last_rule_fired("idle:guild_event:staging_idle");
-    return true;
+    return false;   // nothing to add this time: the hold rule keeps the bot in its place
 }
 
 // ---------- idle:guild_recruit_channel ----------
@@ -1015,6 +1076,23 @@ void RegisterGuildRules(IdleRuleRegistry& r)
         rule.gate     = &EventStagingGate;
         rule.fire     = &EventStagingFire;
         rule.min_interval_ms = 5000;
+        r.register_rule(std::move(rule));
+    }
+    // Below the emote / chat rules above, unthrottled: they own the bot's movement while an event runs (see GuildEventPlace).
+    {
+        IdleRule rule;
+        rule.name     = "idle:guild_event:tavern_hold";
+        rule.priority = 321;
+        rule.gate     = &EventTavernHoldGate;
+        rule.fire     = &EventTavernHoldFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:guild_event:staging_hold";
+        rule.priority = 321;
+        rule.gate     = &EventStagingHoldGate;
+        rule.fire     = &EventStagingHoldFire;
         r.register_rule(std::move(rule));
     }
     // ----- Recruit channel -----

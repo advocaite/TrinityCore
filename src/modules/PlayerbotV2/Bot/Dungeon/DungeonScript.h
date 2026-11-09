@@ -279,6 +279,10 @@ public:
     // is needed. Returns the number of waypoints loaded.
     size_t LoadGeneratedRoutes();
 
+    // The DB route of a map (the difficulty's rows, else the any-difficulty ones); empty when it has none. The scenario runner's
+    // stand-in player walks it.
+    std::vector<DungeonAdvice::ProgressionPoint> RouteFor(uint32_t map_id, uint32_t difficulty) const;
+
     // Load DB-authored traversal links ({SharedDb()}.playerbot_nav_links).
     // Same hot-reload pattern as the routes (build off-lock, swap under
     // routes_mutex_); called at init + from `.playerbot reloadroutes`.

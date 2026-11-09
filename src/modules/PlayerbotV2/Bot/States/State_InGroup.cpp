@@ -517,7 +517,7 @@ void DispatchInGroup(BotAI& ai,
     {
         auto const stance = ai.owner_stance();
         bool const aggressive = stance == BotAI::OwnerStance::Aggressive;
-        bool const leashed = aggressive || stance == BotAI::OwnerStance::Passive || stance == BotAI::OwnerStance::Auto;
+        bool const leashed = aggressive || ai.owner_passive() || stance == BotAI::OwnerStance::Auto;
         float const reach = aggressive ? Services::Config().behavior_aggressive_radius_yd() : Services::Config().behavior_passive_leash_yd();
         auto const* grp_members = group.members();
         NearbyUnit const* tgt = snapshot.victim_info();
@@ -570,6 +570,27 @@ void DispatchInGroup(BotAI& ai,
     if (!leader_member) return;
 
     if (leader_member->map_id != snapshot.map_id()) return;
+
+    // A player on a flight is not followed on the ground: the bots by him board it with him and the others are brought to him when
+    // he lands (Fleet/OwnerCatchUp.h, the module's world tick). Chasing him mounted under the route ran them through every camp below it.
+    if (leader_member->in_flight && !leader_member->is_bot && Services::Config().behavior_fly_with_owner())
+    {
+        if (snapshot.raw().movement.is_moving && !snapshot.raw().movement.is_in_taxi)
+            emit.stop_movement(/*clear_generators=*/true);   // the follow generator would re-aim at him
+        ai.set_last_rule_fired("ingroup:owner_in_flight");
+        return;
+    }
+
+    // Nor a player on a ship or zeppelin: his x,y is a moving deck over the sea (11-08, Orgrimmar -> Undercity: three bots tried to walk to
+    // him across the water). The bots by him ride with him and step off with him, the others are brought to him when he steps off
+    // (PlayerbotV2.cpp DriveRideWithOwner). A bot on the deck keeps still: a passenger's walk is relative to the moving deck.
+    if (!leader_member->is_bot && !leader_member->ship_guid.IsEmpty() && Services::Config().behavior_ride_with_owner())
+    {
+        if (snapshot.raw().movement.is_moving)
+            emit.stop_movement(/*clear_generators=*/true);
+        ai.set_last_rule_fired(snapshot.on_transport() ? "ingroup:rides_with_owner" : "ingroup:owner_on_ship");
+        return;
+    }
 
     // Bot's current world position — needed for both anchor sanity checks
     // and the follow-recall distance test further below. Computed once and
@@ -753,18 +774,30 @@ void DispatchInGroup(BotAI& ai,
     // are the group's fight, joined without the passive leash or a line of sight from where the bot stands (the in-combat
     // positioning walks it to a spot that sees the mob).
     const bool leader_fighting = !leader_member->is_bot && leader_member->in_combat && leader_member->is_alive;
+    // The group's fight releases Passive as the player's own does (GroupControl::PassiveHolds): a member by him in combat. A caster
+    // who lets his tank pull is not in combat himself.
+    bool group_fighting = false;
+    for (auto const& m : *members)
+    {
+        if (!m.online || !m.is_alive || !m.in_combat || m.map_id != snapshot.map_id() || m.guid == snapshot.raw().guid) continue;
+        if (std::hypot(m.x - leader_member->x, m.y - leader_member->y) <= GroupControl::kFightJoinYd) { group_fighting = true; break; }
+    }
     const bool owner_passive = GroupControl::PassiveHolds(owner_passive_stance, !leader_member->is_bot, leader_member->is_alive,
-                                                          leader_member->in_combat);
+                                                          leader_member->in_combat, group_fighting);
+    const bool group_fight_on = !GroupControl::PassiveHolds(true, !leader_member->is_bot, leader_member->is_alive,
+                                                            leader_member->in_combat, group_fighting);
     // A Passive bot inside an order window (every Attack / Pull / assist order opens 15 s of it) joins the owner's own target and
     // nothing wider: no skull, no kill focus, no other member's victim, no creature outside its scan or far from the owner (the owner,
     // Deadmines 2026-10-15: "the bots were attacking willy-nilly, hitting things that weren't close to me"; with Attack pressed every few
     // seconds the window never closed and the whole assist chain ran, the tank opening on mobs 32-43 y away).
-    const bool window_limited = !owner_passive_stance &&
-        (ai.owner_stance() == BotAI::OwnerStance::Passive ||
-         (ai.owner_stance() == BotAI::OwnerStance::Auto && auto_passive));
-    // A Passive bot the player's fight released joins only that fight (GroupControl::LeaderFightMayJoin): his target, a mob near him,
+    // Once the group fights, the window limits nothing: the owner pressing Attack through a pull kept his rogue and cat druid on his own
+    // target only, and a warlock's is a spell's, not a melee victim; they stood beside him (UBRS 2026-10-28 22:10, Attack every 4-8 s).
+    const bool passive_kind = ai.owner_passive() ||
+                              (ai.owner_stance() == BotAI::OwnerStance::Auto && auto_passive);
+    const bool window_limited = !owner_passive_stance && passive_kind && !group_fight_on;
+    // A Passive bot the group's fight released joins only that fight (GroupControl::LeaderFightMayJoin): his target, a mob near him,
     // or a mob on a member by him that is fighting that member there. A mob on the bot itself is always fought.
-    const bool fight_released = owner_passive_stance && !owner_passive;
+    const bool fight_released = passive_kind && group_fight_on;
     auto fight_join_ok = [&](ObjectGuid mob) -> bool
     {
         if (!fight_released || mob.IsEmpty())
@@ -814,7 +847,9 @@ void DispatchInGroup(BotAI& ai,
         owner_passive || ai.owner_stance() == BotAI::OwnerStance::Aggressive || !staying;
     // Not in a battleground: BgDispatch (State_Idle) and the in-combat BG layer own movement and targets there. This chain trusts
     // creature victims at any range, so a teammate's fight with a mob pulled a bot off its ordered march (AV tower runs).
-    if (engage_allowed && !snapshot.in_battleground())
+    // In the group's fight the target is GroupFightPick's (State_InCombat): this chain's Passive, leash and tank-first gates are its
+    // out-of-combat half, and a second start_attack here on the same tick fought the pick.
+    if (engage_allowed && !snapshot.in_battleground() && !ai.group_fight())
     {
     if (snapshot.victim().IsEmpty())
     {
@@ -973,7 +1008,7 @@ void DispatchInGroup(BotAI& ai,
             float best_dsq = std::numeric_limits<float>::max();
             for (auto const& u : snapshot.raw().combat.nearby_enemies)
             {
-                if (u.hp <= 0 || u.victim.IsEmpty() || (!u.in_los && !leader_fighting)) continue;
+                if (u.hp <= 0 || u.victim.IsEmpty() || (!u.in_los && !group_fight_on)) continue;
                 bool attacks_member = (u.victim == snapshot.raw().guid);
                 GroupMemberSummary const* victim_member = nullptr;
                 if (!attacks_member)
@@ -1296,11 +1331,35 @@ void DispatchInGroup(BotAI& ai,
         (ai.pull_back_active() ||
          (ai.is_manual_mode(snapshot.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Engage)) &&
         dist < kDetourMaxRange;
-    // A bot fighting its victim: the chase / gap-close moves it, not the follow (GroupControl::FightOwnsMovement).
+    // A bot fighting the group's fight near its leader: the chase / gap-close moves it, not the follow (GroupControl::FightOwnsMovement).
     bool fight_owns_movement = false;
     if (NearbyUnit const* fv = snapshot.victim().IsEmpty() ? nullptr : snapshot.victim_info(); fv && fv->hp > 0)
-        fight_owns_movement = GroupControl::FightOwnsMovement(true, fv->unit_in_combat || !fv->victim.IsEmpty() || snapshot.in_combat(),
-            ai.is_manual_mode(snapshot.published_at_ms()) && ai.owner_command() == BotAI::OwnerCommand::Engage, dist);
+    {
+        ThreatVictim const on = ThreatVictim(fv->victim_kind);
+        GroupMemberSummary const* mt = group.tank();
+        bool const leader_target = fv->guid == leader_member->victim || (leader_member->is_casting && fv->guid == leader_member->casting_target);
+        bool const group_fight = (mt && mt->guid != snapshot.raw().guid && fv->guid == mt->victim) ||
+            on == ThreatVictim::Tank || on == ThreatVictim::Member || on == ThreatVictim::MemberPet;
+        float member_to_leader = -1.f, mob_to_member = -1.f;
+        if (!fv->victim.IsEmpty())
+            for (auto const& m : *members)
+            {
+                if (!m.online || m.map_id != snapshot.map_id()) continue;
+                bool const on_member = m.guid == fv->victim;
+                bool const on_pet = m.pet_alive && m.pet_guid == fv->victim;
+                if (!on_member && !on_pet) continue;
+                float const vx = on_member ? m.x : m.pet_x, vy = on_member ? m.y : m.pet_y;
+                member_to_leader = DistanceXY(vx, vy, leader_member->x, leader_member->y);
+                mob_to_member = DistanceXY(fv->x, fv->y, vx, vy);
+                break;
+            }
+        fight_owns_movement = GroupControl::FightOwnsMovement(true, leader_target, group_fight, on == ThreatVictim::Me,
+            DistanceXY(fv->x, fv->y, leader_member->x, leader_member->y), dist, member_to_leader, mob_to_member);
+    }
+    // In the group's fight (GroupFight.h) the fight moves every bot, healers included (their in-combat rules keep the tank in sight):
+    // follow, formation and follow distance are out-of-combat behaviour (rule 6). Not for a bot far off, which still rejoins.
+    if (ai.group_fight() && dist < kDetourMaxRange)
+        fight_owns_movement = true;
     // The one answer to "does another layer own this bot's movement right now": the follow, the slot move and the recall all stand
     // down for it (a rooted bot cannot follow either).
     bool const movement_owned_elsewhere =

@@ -111,7 +111,8 @@ constexpr SupplyFamily kFamilies[] = {
 // Flask of the Titans 13510, Flask of Supreme Power 13512, Flask of Distilled Wisdom 13511, Elixir of Fortitude 3825,
 // Elixir of Superior Defense 13445, Elixir of the Mongoose 13452, Elixir of the Giants 9206, Greater Arcane Elixir 13454,
 // Mageblood Potion 20007, Smoked Desert Dumplings 20452, Grilled Squid 13928, Runn Tum Tuber Surprise 18254,
-// Nightfin Soup 13931, Tender Wolf Steak 18045, Greater Fire / Frost / Nature / Shadow Protection Potion 13457 / 13456 / 13458 / 13459.
+// Nightfin Soup 13931, Tender Wolf Steak 18045, Greater Fire / Frost / Nature / Shadow Protection Potion 13457 / 13456 / 13458 / 13459,
+// Hourglass Sand 19183.
 // Stock: how many a bot is topped up to before every pull (flasks, elixirs and potions 5, food 20), so a raid night does not run them out.
 constexpr RaidConsumable kTankKit[] = {
     { 13510, false, 5, true }, { 13445, false, 5 }, { 3825, false, 5 }, { 18045, true, 20 },
@@ -119,6 +120,7 @@ constexpr RaidConsumable kTankKit[] = {
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley
     { 13456, false, 5, false, true },   // Greater Frost Protection Potion: Naxxramas Sapphiron
+    { 19183, false, 5, false, true },   // Hourglass Sand: the cure for Chromaggus' Brood Affliction: Bronze (RaidRules::cureItem)
 };
 constexpr RaidConsumable kMeleeKit[] = {
     { 13452, false, 5 }, { 9206, false, 5 }, { 20452, true, 20 },
@@ -126,6 +128,7 @@ constexpr RaidConsumable kMeleeKit[] = {
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley
     { 13456, false, 5, false, true },   // Greater Frost Protection Potion: Naxxramas Sapphiron
+    { 19183, false, 5, false, true },   // Hourglass Sand: the cure for Chromaggus' Brood Affliction: Bronze (RaidRules::cureItem)
 };
 constexpr RaidConsumable kCasterKit[] = {
     { 13512, false, 5, true }, { 13454, false, 5 }, { 18254, true, 20 },
@@ -139,6 +142,7 @@ constexpr RaidConsumable kCasterKit[] = {
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley
     { 13456, false, 5, false, true },   // Greater Frost Protection Potion: Naxxramas Sapphiron
+    { 19183, false, 5, false, true },   // Hourglass Sand: the cure for Chromaggus' Brood Affliction: Bronze (RaidRules::cureItem)
 };
 constexpr RaidConsumable kHealerKit[] = {
     { 13511, false, 5, true }, { 20007, false, 5 }, { 13931, true, 20 },
@@ -146,6 +150,7 @@ constexpr RaidConsumable kHealerKit[] = {
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley
     { 13456, false, 5, false, true },   // Greater Frost Protection Potion: Naxxramas Sapphiron
+    { 19183, false, 5, false, true },   // Hourglass Sand: the cure for Chromaggus' Brood Affliction: Bronze (RaidRules::cureItem)
 };
 constexpr RaidConsumable kHunterKit[] = {
     { 13452, false, 5 }, { 9206, false, 5 }, { 13928, true, 20 },
@@ -153,6 +158,7 @@ constexpr RaidConsumable kHunterKit[] = {
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley
     { 13456, false, 5, false, true },   // Greater Frost Protection Potion: Naxxramas Sapphiron
+    { 19183, false, 5, false, true },   // Hourglass Sand: the cure for Chromaggus' Brood Affliction: Bronze (RaidRules::cureItem)
 };
 
 } // namespace

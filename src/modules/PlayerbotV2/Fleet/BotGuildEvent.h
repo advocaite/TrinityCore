@@ -79,14 +79,15 @@ struct TavernSpot
 {
     uint32 map_id;
     float  x, y, z;
+    uint32 zone_id;   // the capital: only bots already in it go (a guild event never pulls a bot out of its questing zone)
 };
 
 inline constexpr TavernSpot kFactionTavern[2] =
 {
     /* FACTION_ALLIANCE (Stormwind Pig & Whistle) */
-    { /*map*/ 0, -8503.0f, 423.0f, 103.0f },
+    { /*map*/ 0, -8503.0f, 423.0f, 103.0f, /*Stormwind City*/ 1519 },
     /* FACTION_HORDE    (Orgrimmar Wyvern's Tail)  */
-    { /*map*/ 1,  1654.0f, -4439.0f, 16.0f },
+    { /*map*/ 1,  1654.0f, -4439.0f, 16.0f, /*Orgrimmar*/ 1637 },
 };
 
 // Phase D.2 staging points — where bots converge for Raid / Dungeon /
@@ -96,9 +97,9 @@ inline constexpr TavernSpot kFactionTavern[2] =
 inline constexpr TavernSpot kFactionStaging[2] =
 {
     /* FACTION_ALLIANCE (Stormwind Trade District fountain) */
-    { /*map*/ 0, -8829.0f, 626.0f, 94.0f },
+    { /*map*/ 0, -8829.0f, 626.0f, 94.0f, /*Stormwind City*/ 1519 },
     /* FACTION_HORDE    (Orgrimmar Valley of Strength)       */
-    { /*map*/ 1,  1633.0f, -4382.0f, 16.0f },
+    { /*map*/ 1,  1633.0f, -4382.0f, 16.0f, /*Orgrimmar*/ 1637 },
 };
 
 } // namespace Playerbot::V2

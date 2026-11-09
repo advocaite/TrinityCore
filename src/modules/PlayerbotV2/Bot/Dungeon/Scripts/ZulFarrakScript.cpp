@@ -53,16 +53,17 @@ public:
         a.dangerous_auras = {
         };
         // Boss progression — Zul'Farrak has 7+ encounters.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             8127,   // Antu'sul
             7272,   // Theka the Martyr
             7271,   // Witch Doctor Zum'rah
             7604,   // Sergeant Bly (Pyramid event lead)
-            7796,   // Nekrum Gutchewer (Pyramid event)
             7795,   // Hydromancer Velratha
             7797,   // Ruuzlu (gladiator boss)
             7267,   // Chief Ukorz Sandscalp (final)
-            7273,   // Gahz'rilla (summonable rare)
         };
         // Progression waypoints — Zul'Farrak is an outdoor desert
         // dungeon (no roof in most sections). Linear walk: entry →

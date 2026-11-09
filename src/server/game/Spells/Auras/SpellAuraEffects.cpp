@@ -631,7 +631,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
     &AuraEffect::HandleNULL,                                      //559
     &AuraEffect::HandleNULL,                                      //560
     &AuraEffect::HandleNULL,                                      //561
-    &AuraEffect::HandleNULL,                                      //562
+    &AuraEffect::HandleNoImmediateEffect,                         //562 Classic 1.60: Blessing of Sacrifice flat damage split, implemented in Unit::CalcAbsorbResist
     &AuraEffect::HandleNULL,                                      //563
     &AuraEffect::HandleNULL,                                      //564
     &AuraEffect::HandleNULL,                                      //565
@@ -1448,6 +1448,11 @@ bool AuraEffect::CheckEffectProc(AuraApplication* aurApp, ProcEventInfo& eventIn
                     // Patch 1.12.0(?) extra attack abilities can no longer chain proc themselves
                     if (lastExtraAttackSpell == triggerSpellId)
                         return false;
+
+                    // Classic 1.60 (vanilla, VMaNGOS HandleProcTriggerSpell): no extra attack proc at all while the extra attacks of another one
+                    // are pending or running (Windfury cannot start Sword Specialization or Hand of Justice and the reverse), except Reckoning
+                    if (lastExtraAttackSpell && triggerSpellId != 20178)
+                        return false;
                 }
             }
             break;
@@ -1531,6 +1536,9 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
             spellId3 = 106829;
             spellId4 = 106899;
             break;
+        case FORM_MOONKIN_FORM:
+            spellId = 24905; // Moonkin Form (Passive): armor from items, as the form tooltip says
+            break;
         case FORM_FLIGHT_FORM:
             spellId = 33948;
             spellId2 = 34764;
@@ -1562,7 +1570,6 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
         case FORM_BATTLE_STANCE:
         case FORM_DEFENSIVE_STANCE:
         case FORM_BERSERKER_STANCE:
-        case FORM_MOONKIN_FORM:
         case FORM_METAMORPHOSIS:
             break;
         default:
@@ -3457,11 +3464,10 @@ void AuraEffect::HandleAuraModDecreaseSpeed(AuraApplication const* aurApp, uint8
     Unit* target = aurApp->GetTarget();
 
     target->UpdateSpeed(MOVE_RUN);
+    target->UpdateSpeed(MOVE_RUN_BACK);
     target->UpdateSpeed(MOVE_SWIM);
     target->UpdateSpeed(MOVE_FLIGHT);
-    target->UpdateSpeed(MOVE_RUN_BACK);
-    target->UpdateSpeed(MOVE_SWIM_BACK);
-    target->UpdateSpeed(MOVE_FLIGHT_BACK);
+    target->UpdateSpeed(MOVE_WALK);
 }
 
 void AuraEffect::HandleAuraModUseNormalSpeed(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
@@ -5141,6 +5147,11 @@ void AuraEffect::HandleChannelDeathItem(AuraApplication const* aurApp, uint8 mod
         return;
 
     if (GetSpellEffectInfo().ItemType == 0)
+        return;
+
+    // Warlocks: only one soul shard when Shadowburn and Drain Soul were both on the target (vMaNGOS, GPL-2.0, Aura::HandleChannelDeathItem);
+    // the other aura is still present while the first one is removed, so the second removal grants it
+    if (GetSpellInfo()->SpellFamilyName == SPELLFAMILY_WARLOCK && target->HasAuraTypeWithCaster(SPELL_AURA_CHANNEL_DEATH_ITEM, plCaster->GetGUID()))
         return;
 
     // Soul Shard

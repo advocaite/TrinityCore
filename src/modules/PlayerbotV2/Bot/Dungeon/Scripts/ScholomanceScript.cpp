@@ -93,6 +93,9 @@ public:
         };
         // Boss progression — Scholomance has ~7-8 encounters
         // (some are random spawns / Cata revamp differs from classic).
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             10901,  // Lorekeeper Polkelt
             10503,  // Jandice Barov
@@ -102,7 +105,6 @@ public:
             10507,  // The Ravenian
             10432,  // Vectus
             10508,  // Ras Frostwhisper
-            1853,   // Darkmaster Gandling (final)
         };
         // Progression waypoints — Scholo (classic) is multi-floor with
         // Gandling teleports bots to side rooms throughout the run.

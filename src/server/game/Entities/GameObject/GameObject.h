@@ -341,6 +341,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         // Classic 1.60: multi-open chests (mining veins): true if the chest was reset for another opening
         bool TryReopenChest();
         void RollChestOpens();
+        bool IsMiningVein() const;
         uint32 GetUniqueUseCount() const { return uint32(m_unique_users.size()); }
 
         void SaveRespawnTime(uint32 forceDelay = 0);

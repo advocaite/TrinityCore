@@ -78,6 +78,10 @@ enum Fireworks
     SPELL_ROCKET_BIG_YELLOW = 26356,
     SPELL_LUNAR_FORTUNE     = 26522,
 
+    // Lunar Fireworks (8867): credit for each rocket or cluster a player launches (VMaNGOS npc_pats_firework_guy)
+    NPC_FIREWORK_CREDIT     = 15893,
+    NPC_CLUSTER_CREDIT      = 15894,
+
     ANIM_GO_LAUNCH_FIREWORK = 3,
     ZONE_MOONGLADE          = 493,
 };
@@ -86,7 +90,7 @@ Position omenSummonPos = {7558.993f, -2839.999f, 450.0214f, 4.46f};
 
 struct npc_firework : public ScriptedAI
 {
-    npc_firework(Creature* creature) : ScriptedAI(creature) { }
+    npc_firework(Creature* creature) : ScriptedAI(creature), _launched(false) { }
 
     bool isCluster()
     {
@@ -250,18 +254,26 @@ struct npc_firework : public ScriptedAI
 
     void Reset() override
     {
-        if (GameObject* launcher = FindNearestLauncher())
+        if (_launched)
+            return;
+        _launched = true;
+
+        // A rocket from the bag goes up wherever it is used, as in VMaNGOS; a launcher nearby only adds its animation and facing.
+        GameObject* launcher = FindNearestLauncher();
+        if (launcher)
         {
             launcher->SendCustomAnim(ANIM_GO_LAUNCH_FIREWORK);
             me->SetOrientation(launcher->GetOrientation() + float(M_PI) / 2);
         }
-        else
-            return;
+
+        if (TempSummon* summon = me->ToTempSummon())
+            if (Player* summoner = Object::ToPlayer(summon->GetSummonerUnit()))
+                summoner->KilledMonsterCredit(isCluster() ? NPC_CLUSTER_CREDIT : NPC_FIREWORK_CREDIT);
 
         if (isCluster())
         {
             // Check if we are near Elune'ara lake south, if so try to summon Omen or a minion
-            if (me->GetZoneId() == ZONE_MOONGLADE)
+            if (launcher && me->GetZoneId() == ZONE_MOONGLADE)
             {
                 if (!me->FindNearestCreature(NPC_OMEN, 100.0f) && me->GetDistance2d(omenSummonPos.GetPositionX(), omenSummonPos.GetPositionY()) <= 100.0f)
                 {
@@ -291,6 +303,9 @@ struct npc_firework : public ScriptedAI
             //me->CastSpell(me, GetFireworkSpell(me->GetEntry()), true);
             me->CastSpell(me->GetPosition(), GetFireworkSpell(me->GetEntry()), true);
     }
+
+private:
+    bool _launched;
 };
 
 /*####

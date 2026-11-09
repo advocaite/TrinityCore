@@ -8,8 +8,11 @@
 
 #include "BotTypes.h"
 #include <string>
+#include <vector>
 
+class Group;
 class Player;
+struct Position;
 
 namespace Playerbot {
 
@@ -38,6 +41,25 @@ public:
     // when `line` is one, stores it for the sender's account (OwnerRegistry::SetCcDeny, the marked-CC switch for "off cc" / "on cc"),
     // answers the sender once and returns true. The bots pick it up with their next snapshot. World thread.
     static bool ApplyCcOrder(Player* sender, std::string const& line, char const* via);
+    // The owner's "ignore target" (toggles the selected mob on the sender's ignore list; the panel's Ignore target button and key) and
+    // "ignore clear" (empties it): the sender's bots never attack a mob on it (OwnerRegistry::ToggleFightIgnore). Stored once for the sender's
+    // account and answered once. Returns false for any other line.
+    static bool ApplyIgnoreOrder(Player* sender, std::string const& line, char const* via);
+
+    // The ForeverBots Positions tab (add-on PLACE_REQ) and the "place" order: the chosen bots of the sender's group stand in `shape`
+    // (close, circle, arc, spread, line, column, spear, arrow; Placement.h) with `gap` (tight, normal, wide) round `anchor` (here =
+    // where the sender stands, target = his target) and stay there; after a fight they walk back to their own spot. Shape "follow":
+    // they follow again. `who`: bot names and the words all, tanks, healers, melee, ranged, dps, group1..group8, a class; empty = all.
+    // Returns how many were placed and the line to answer. World thread.
+    struct PlaceResult { uint32 placed = 0; uint32 asked = 0; std::string line; };
+    static PlaceResult PlaceBots(Player* sender, std::string const& shape, std::string const& gap, std::string const& anchor,
+                                 std::vector<std::string> const& who, char const* via, Position const* point = nullptr);
+    // anchor "cursor" without a point arms the order for 30 s: the player's next ping (Module::OnGroupPingPoint) is the spot. Returns
+    // true when this ping was taken for it (the ping does nothing else then). World thread.
+    static bool TakePendingPlace(Player* sender, Position const& point);
+    // "place <shape> [tight|normal|wide] [here|target] [who...]" / "place follow [who...]": PlaceBots once, answered as a system line.
+    // Returns false for any other line.
+    static bool ApplyPlaceOrder(Player* sender, std::string const& line, char const* via);
 
     // May `sender` give this bot a group order (the panel, a party / raid line)? Its owner, or for a bot with no owner a player
     // who is its controller in the group they share (GroupControl.h): the group leader when human, else the first human
@@ -56,6 +78,11 @@ public:
     // Drop the owner's "follow" order on `bot` (BotAI::owner_follow_order) and log [owner_order]
     // when it was set: the party-chat "pull" hands the fight back to the non-tanks this way.
     static void ReleaseOwnerFollowOrder(Player const* sender, Player const* bot, char const* why);
+
+    // The group's marker assignments ("assign <name> <marker> [tank|cc|kill]"), highest marker first: tank marks, then each
+    // bot's kill and cc marks. Read by the "assign list" order and the add-on's hidden ASSIGN_REQ. World thread.
+    struct AssignRow { uint8 marker; std::string name; char const* role; };
+    static std::vector<AssignRow> AssignList(Group* grp);
 
 private:
     // The command table; DispatchSingle wraps it with the [owner_order] log line.

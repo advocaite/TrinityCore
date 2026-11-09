@@ -15,11 +15,13 @@
 #pragma once
 
 #include "Bot/BotTypes.h"
+#include "ObjectGuid.h"
 #include <array>
 #include <cstdint>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class Field;
@@ -128,6 +130,19 @@ public:
     // "on cc" for every class: every order of this account is gone (the switch is SetCcEnabled's).
     void   ClearCcDeny(uint32 account_id);
 
+    // The owner's "ignore target" list (the ForeverBots panel's Ignore target button and key, the words "ignore target" and
+    // "ignore clear"): mobs that none of this account's bots attack, even when the mob attacks the owner or a bot (a hunter player
+    // taming a rare beast). Up to kMaxFightIgnore mobs; each one is forgotten after kFightIgnoreMs. Memory only. Any thread.
+    static constexpr size_t kMaxFightIgnore = 8;
+    static constexpr uint32 kFightIgnoreMs  = 30u * 60u * 1000u;
+    // The same mob toggled again this soon is the same press reaching the server twice (the panel's addon message and the chat
+    // line): no change.
+    static constexpr uint32 kFightIgnoreRepeatMs = 1500u;
+    enum class FightIgnoreChange : uint8 { Added, Removed, Repeat };
+    FightIgnoreChange ToggleFightIgnore(uint32 account_id, ObjectGuid mob, uint32 now_ms);
+    size_t            ClearFightIgnore(uint32 account_id);   // returns how many mobs were on the list
+    std::vector<ObjectGuid> FightIgnored(uint32 account_id, uint32 now_ms) const;
+
     // Returns the bot ids currently owned by `account_id`. Empty if none.
     // O(N) in the registry; only used by GM diagnostic commands and the
     // /squad addressing — not in any per-tick path.
@@ -231,13 +246,24 @@ private:
     std::unordered_map<BotId, uint8>         subgroup_;   // 0-based raid sub-group
     std::unordered_map<uint32, uint8>        owner_gear_mode_;
     std::unordered_set<uint32>               cc_disabled_;
+    static constexpr uint16 kDefaultCcDenied = 1u;   // CcDeny::Fear
     struct CcDenyState
     {
-        uint16 every = 0;                    // denied for every class
+        // Fear is off until the owner turns it on ("yes fear", "@warlock on cc", "on cc"): a feared mob runs into the next pack, in a dungeon
+        // and in a raid alike (the owner, 2026-10-28: "fear is a pain").
+        uint16 every = kDefaultCcDenied;     // denied for every class
         std::array<uint16, 16> deny{};       // denied for one class (by class id)
         std::array<uint16, 16> allow{};      // allowed for one class against `every`
     };
     std::unordered_map<uint32, CcDenyState>  cc_deny_;
+    struct FightIgnoreEntry
+    {
+        ObjectGuid mob;
+        uint32     added_ms   = 0;
+        uint32     toggled_ms = 0;
+    };
+    std::unordered_map<uint32, std::vector<FightIgnoreEntry>> fight_ignore_;
+    std::unordered_map<uint32, std::pair<ObjectGuid, uint32>> removed_ms_;   // the last mob taken off each list, and when
 };
 
 } // namespace Playerbot

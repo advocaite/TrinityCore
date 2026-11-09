@@ -13,6 +13,8 @@ local function run(members, inInstance, kind, maxPlayers)
     GetNumGroupMembers = function() return members end,
     IsInInstance = function() return inInstance, kind end,
     GetInstanceInfo = function() return "x", kind, 0, "", maxPlayers end,
+    UI = {},   -- the add-on's window-builder table (defined above the block); the dungeon list hangs off it
+    L = setmetatable({}, { __index = function(_, k) return k end }),   -- English text, as the add-on's L with no locale
   }, { __index = _G })
   setfenv(loadstring(src), env)()()
   local t = { tank = 0, healer = 0, dps = 0 }
@@ -31,7 +33,7 @@ n = run(6, false, "none", 0); check(n, 0)
 n = run(1, true, "party", 5); check(n, 4)
 -- UBRS 10: 9 bots, 2 tanks 3 healers 4 dps
 n, t = run(1, true, "raid", 10); check(n, 9); assert(t.tank == 2 and t.healer == 3 and t.dps == 4)
--- UBRS with 6 already (chris's case): 4 more
+-- UBRS with 6 already (Karrz's case): 4 more
 n = run(6, true, "raid", 10); check(n, 4)
 -- ZG 20, MC 40, unknown raid size -> 40
 n, t = run(1, true, "raid", 20); check(n, 19); assert(t.tank == 2 and t.healer == 5)

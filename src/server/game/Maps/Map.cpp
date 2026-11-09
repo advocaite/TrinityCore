@@ -1865,8 +1865,9 @@ TransferAbortParams Map::PlayerCannotEnter(uint32 mapid, Player* player)
             if (TransferAbortParams denyReason = boundMap->CannotEnter(player))
                 return denyReason;
 
-        // players are only allowed to enter 10 instances per hour
-        if (!entry->GetFlags2().HasFlag(MapFlags2::IgnoreInstanceFarmLimit) && entry->IsDungeon() && !player->GetSession()->UpdateAndCheckInstanceCount(instanceIdToCheck) && !player->isDead())
+        // players are only allowed to enter 10 instances per hour; a bot follows its group, so the group's real player is the one counted
+        if (!entry->GetFlags2().HasFlag(MapFlags2::IgnoreInstanceFarmLimit) && entry->IsDungeon() && !player->GetSession()->IsBot()
+            && !player->GetSession()->UpdateAndCheckInstanceCount(instanceIdToCheck) && !player->isDead())
             return TRANSFER_ABORT_TOO_MANY_INSTANCES;
     }
 
@@ -3007,8 +3008,9 @@ TransferAbortParams InstanceMap::CannotEnter(Player* player)
 */
 bool InstanceMap::AddPlayerToMap(Player* player, bool initPlayer /*= true*/)
 {
-    // increase current instances (hourly limit)
-    player->GetSession()->AddInstanceEnterTime(GetInstanceId(), GameTime::GetSystemTime());
+    // increase current instances (hourly limit); not for a bot, which is never checked against it
+    if (!player->GetSession()->IsBot())
+        player->GetSession()->AddInstanceEnterTime(GetInstanceId(), GameTime::GetSystemTime());
 
     MapDb2Entries entries{ GetEntry(), GetMapDifficulty() };
     if (entries.MapDifficulty->HasResetSchedule() && i_instanceLock && !i_instanceLock->IsNew() && i_data && !player->GetSession()->IsBot())

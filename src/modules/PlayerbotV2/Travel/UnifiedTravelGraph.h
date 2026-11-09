@@ -115,6 +115,9 @@ struct GraphNode
     //   Hearth         -> bot guid_low (per-bot virtual nodes don't enter the
     //                     adjacency table; resolved at routing time)
     uint32   payload_id  = 0;
+    // A dungeon entrance in a walk piece of entrances only, with a real place within kFarAttachYds (EntrancePockets.h): never a
+    // route end; routes to and from it attach to the real places around it instead. Set by ConnectIslands.
+    bool     dead_end_entrance = false;
 };
 
 struct GraphEdge

@@ -520,7 +520,12 @@ inline bool FollowLaneWaypoints(uint16_t bg_type, std::vector<LanePoint> const& 
         if (w[next].drop)
         {
             float const ax = w[next].x - bx, ay = w[next].y - by;
-            if (ax * ax + ay * ay < kLedgeR * kLedgeR && std::fabs(w[next].z - bz) < 4.0f)
+            // Landed short: down from the ledge, at the landing's level but not on the landing point. The drop is over; the old test
+            // (within 3.5 y of the landing) kept such a bot "in the air" and gave it the landing as a drop target, a drop the move API
+            // refuses below a 4 y fall, so it stood there (WSG soak on 247: Jacelia came down the Horde-side slope at (1066,1396,325),
+            // 10 y short of the landing (1077,1396,324), every move refused for 154 s).
+            bool const landed_short = bz < w[bi].z - 3.0f && std::fabs(w[next].z - bz) < 4.0f && ax * ax + ay * ay < 20.0f * 20.0f;
+            if ((ax * ax + ay * ay < kLedgeR * kLedgeR && std::fabs(w[next].z - bz) < 4.0f) || landed_short)
             {
                 if (next + 1 >= n) return false;          // landed at the chain's end: on to the goal
                 ++next;                                    // landed: the leg after the landing

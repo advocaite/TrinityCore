@@ -31,8 +31,10 @@ namespace
     uint32 _maxItemLevel = 100;   // Naxxramas epics top out around 92
     bool _valueCurve = false;
 
-    // copper per item level squared, by quality (gray .. epic)
-    constexpr std::array<uint32, 5> QualityFactor = { 1, 2, 15, 50, 150 };
+    // copper per item level squared, by quality (gray .. epic); AuctionHouseBot.Vanilla.ValueCurve.Gray .. .Epic
+    std::array<uint32, 5> QualityFactor = { 1, 2, 15, 50, 150 };
+    // AuctionHouseBot.Vanilla.ValueCurve.Scale: one easy knob over the whole curve (1 = as set, 2 = double, 0.5 = half)
+    float _scale = 1.0f;
 }
 
 void LoadConfig()
@@ -41,6 +43,12 @@ void LoadConfig()
     _maxReqLevel = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.MaxReqLevel", 60);
     _maxItemLevel = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.MaxItemLevel", 100);
     _valueCurve = sConfigMgr->GetBoolDefault("AuctionHouseBot.Vanilla.ValueCurve", false);
+    QualityFactor[0] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Gray", 1);
+    QualityFactor[1] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.White", 2);
+    QualityFactor[2] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Green", 15);
+    QualityFactor[3] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Blue", 50);
+    QualityFactor[4] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Epic", 150);
+    _scale = std::clamp(sConfigMgr->GetFloatDefault("AuctionHouseBot.Vanilla.ValueCurve.Scale", 1.0f), 0.1f, 10.0f);
 }
 
 bool Enabled()
@@ -113,7 +121,7 @@ uint64 UnitValue(ItemTemplate const* proto)
 
     uint32 quality = std::min<uint32>(proto->GetQuality(), QualityFactor.size() - 1);
     uint64 itemLevel = proto->GetBaseItemLevel();
-    uint64 curve = itemLevel * itemLevel * QualityFactor[quality] * classPct / 100;
+    uint64 curve = uint64(double(itemLevel * itemLevel * QualityFactor[quality] * classPct / 100) * _scale);
     return std::max<uint64>(vendor, curve);
 }
 }

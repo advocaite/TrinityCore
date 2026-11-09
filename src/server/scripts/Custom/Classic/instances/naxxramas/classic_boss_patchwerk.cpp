@@ -47,7 +47,8 @@ enum ClassicNaxxPatchwerkData : uint32
     SPELL_PATCHWERK_SUMMON_PLAYER = 20477,
     SPELL_PATCHWERK_HATEFUL_STRIKE = 28308,
     SPELL_PATCHWERK_ENRAGE        = 28131, // 5% enrage soft enrage
-    SPELL_PATCHWERK_BERSERK       = 27680, // 7min hard enrage
+    SPELL_PATCHWERK_BERSERK       = 26662, // 7min hard enrage: the vanilla Berserk (+500% damage, +150% attack speed), the spell his
+                                          // VMaNGOS row carries; 27680 is the Berserk with +150% movement speed instead
     SPELL_PATCHWERK_SLIMEBOLT     = 32309  // Added in patch 1.12
 };
 

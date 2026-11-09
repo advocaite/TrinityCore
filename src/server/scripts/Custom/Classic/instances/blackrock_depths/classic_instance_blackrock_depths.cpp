@@ -1267,6 +1267,27 @@ public:
 
             if (GetData(TYPE_FLAMELASH) == IN_PROGRESS)
             {
+                // cMaNGOS boss_ambassador_flamelash: a spirit that reaches Flamelash casts Burning Spirit on him.
+                // Taken off the list first, the cast kills the spirit and its death would edit the list again.
+                if (Creature* flamelash = instance->GetCreature(m_uiFlamelashGUID))
+                {
+                    std::vector<Creature*> arrived;
+                    for (auto itr = m_burningSpirits.begin(); itr != m_burningSpirits.end();)
+                    {
+                        Creature* spirit = instance->GetCreature(*itr);
+                        if (spirit && spirit->IsAlive() && spirit->IsWithinDistInMap(flamelash, 2 * CONTACT_DISTANCE))
+                        {
+                            arrived.push_back(spirit);
+                            itr = m_burningSpirits.erase(itr);
+                        }
+                        else
+                            ++itr;
+                    }
+
+                    for (Creature* spirit : arrived)
+                        spirit->CastSpell(flamelash, SPELL_BURNING_SPIRIT, true);
+                }
+
                 for (uint8 i = 0; i < DWARF_RUNES_MAX; i++)
                 {
                     if (m_uiSpiritTimer[i] < diff)

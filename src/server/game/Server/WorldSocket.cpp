@@ -67,7 +67,7 @@ std::array<uint8, 32> const WorldSocket::EncryptionKeySeed = { 0x71, 0xC9, 0xED,
 
 WorldSocket::WorldSocket(Trinity::Net::IoContextTcpSocket&& socket) : BaseSocket(std::move(socket)),
     _type(CONNECTION_TYPE_REALM), _key(0), _serverChallenge(), _sessionKey(), _encryptKey(), _overSpeedPings(0),
-    _worldSession(nullptr), _authed(false), _canRequestHotfixes(true), _authDeadline(TimePoint::max()), _headerBuffer(sizeof(IncomingPacketHeader)), _sendBufferSize(4096), _compressionStream(nullptr)
+    _worldSession(nullptr), _authed(false), _canRequestHotfixes(true), _clientBuild(0), _authDeadline(TimePoint::max()), _headerBuffer(sizeof(IncomingPacketHeader)), _sendBufferSize(4096), _compressionStream(nullptr)
 {
 }
 
@@ -360,6 +360,8 @@ void WorldSocket::SetWorldSession(WorldSession* session)
 {
     std::scoped_lock sessionGuard(_worldSessionLock);
     _worldSession = session;
+    if (session)
+        _clientBuild = session->GetClientBuild();
     _authed = true;
 }
 
@@ -384,7 +386,7 @@ bool WorldSocket::ReadHeaderHandler()
         // CMSG_HOTFIX_REQUEST can be much larger than normal packets, allow receiving it once per session
         // Classic: the header carries the client's own opcode number (0x440011); a new client build with an empty hotfix
         // cache asks for every hotfix at once (66 KB for 70235)
-        if (ClassicOpcodes::TranslateClientOpcode(header->EncryptedOpcode) != CMSG_HOTFIX_REQUEST || header->Size > 0x100000 || !_canRequestHotfixes)
+        if (ClassicOpcodes::TranslateClientOpcode(header->EncryptedOpcode, _clientBuild) != CMSG_HOTFIX_REQUEST || header->Size > 0x100000 || !_canRequestHotfixes)
         {
             TC_LOG_ERROR("network", "WorldSocket::ReadHeaderHandler(): client {} sent malformed packet (size: {}, opcode {})",
                 GetRemoteIpAddress(), header->Size, uint32(header->EncryptedOpcode));
@@ -410,7 +412,7 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
 
     WorldPacket packet(std::move(_packetBuffer).Release(), GetConnectionType());
     uint32 rawOpcode = packet.read<uint32>();
-    OpcodeClient opcode = OpcodeClient(ClassicOpcodes::TranslateClientOpcode(rawOpcode));
+    OpcodeClient opcode = OpcodeClient(ClassicOpcodes::TranslateClientOpcode(rawOpcode, _clientBuild));
     if (!opcodeTable.IsValid(opcode))
     {
         TC_LOG_ERROR("network", "WorldSocket::ReadHeaderHandler(): client {} sent wrong opcode (opcode: 0x{:06X} = {}, size: {}) data: {}",
@@ -510,7 +512,7 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
     if (!IsOpen())
         return;
 
-    if (ClassicOpcodes::IsServerOpcodeBlocked(packet.GetOpcode()))
+    if (ClassicOpcodes::IsServerOpcodeBlocked(packet.GetOpcode(), _clientBuild))
     {
         TC_LOG_DEBUG("network.opcode", "S->C: {} {} not sent (blocked for Classic client)", GetRemoteIpAddress(), GetOpcodeNameForLogging(static_cast<OpcodeServer>(packet.GetOpcode())));
         return;
@@ -537,7 +539,7 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
 
 void WorldSocket::WritePacketToBuffer(EncryptablePacket const& packet, MessageBuffer& buffer)
 {
-    uint32 opcode = ClassicOpcodes::TranslateServerOpcode(packet.GetOpcode());
+    uint32 opcode = ClassicOpcodes::TranslateServerOpcode(packet.GetOpcode(), _clientBuild);
     uint32 packetSize = packet.size();
 
     // Reserve space for buffer
@@ -564,7 +566,7 @@ void WorldSocket::WritePacketToBuffer(EncryptablePacket const& packet, MessageBu
         buffer.WriteCompleted(compressedSize);
         packetSize = compressedSize + sizeof(CompressedWorldPacket);
 
-        opcode = ClassicOpcodes::TranslateServerOpcode(SMSG_COMPRESSED_PACKET);
+        opcode = ClassicOpcodes::TranslateServerOpcode(SMSG_COMPRESSED_PACKET, _clientBuild);
     }
     else if (!packet.empty())
         buffer.Write(packet.data(), packet.size());
@@ -581,7 +583,7 @@ void WorldSocket::WritePacketToBuffer(EncryptablePacket const& packet, MessageBu
 
 uint32 WorldSocket::CompressPacket(uint8* buffer, WorldPacket const& packet)
 {
-    uint32 opcode = ClassicOpcodes::TranslateServerOpcode(packet.GetOpcode());
+    uint32 opcode = ClassicOpcodes::TranslateServerOpcode(packet.GetOpcode(), _clientBuild);
     uint32 bufferSize = deflateBound(_compressionStream, packet.size() + sizeof(opcode));
 
     _compressionStream->next_out = buffer;
@@ -919,6 +921,7 @@ void WorldSocket::HandleAuthSessionCallback(WorldPackets::Auth::AuthSession cons
     // At this point, we can safely hook a successful login
     sScriptMgr->OnAccountLogin(account.Game.Id);
 
+    _clientBuild = account.Game.Build;
     _authed = true;
     _worldSession = new WorldSession(account.Game.Id, std::move(*joinTicket->mutable_gameaccount()), account.BattleNet.Id,
         std::move(account.BattleNet.Email), static_pointer_cast<WorldSocket>(shared_from_this()), account.Game.Security,

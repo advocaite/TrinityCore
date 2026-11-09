@@ -48,6 +48,7 @@ namespace ClassicScholomance
         NPC_GANDLING            = 1853,
         NPC_VECTUS              = 10432,
         NPC_MARDUKE             = 10433,
+        NPC_RISEN_GUARDIAN      = 11598,
 
         NPC_J_EEVEE             = 14500
     };
@@ -66,7 +67,7 @@ namespace ClassicScholomance
         TYPE_DARKREAVER         = 15,
         INSTANCE_SCHOLOMANCE_MAX_ENCOUNTER = 16,
 
-        // GetGuidData
+        // GetGuidData (the GO_GATE_* entries above are keys too; SetGuidData(gate entry, guid) registers a Risen Guardian behind that gate)
         DATA_VECTUS             = 16,
         DATA_MARDUKE            = 17
     };

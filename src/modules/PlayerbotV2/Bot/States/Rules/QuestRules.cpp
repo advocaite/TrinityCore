@@ -5,6 +5,7 @@
 #include "Bot/IdleRule.h"
 #include "Group/GroupSnapshot.h"
 #include "Bot/BotAI.h"
+#include "Bot/BotBridge.h"
 #include "Bot/DeathHotspots.h"
 #include "GameTime.h"
 #include "Bot/BotSnapshotView.h"
@@ -432,6 +433,9 @@ bool QuestAbandonUnachievableFire(BotSnapshotView const& s, BotAI& ai, GroupSnap
         ai.blacklist_quest(q.quest_id, s.raw().published_at_ms);
         emit.abandon_quest(q.quest_id);
         ai.set_last_rule_fired("idle:quest_abandon_unachievable");
+        if (BotBridge::Enabled())
+            BotBridge::ReportQuestFail(s.bot_id(), q.quest_id, junk ? "dropped the quest: it can never be turned in"
+                                                                    : "dropped the quest: an objective needs a script credit bots cannot get (no normal mob to kill for it)");
         return true;
     }
     return false;
@@ -979,7 +983,7 @@ bool QuestPursueGoalFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView 
 // Side effect only: the rule never claims the tick. Playerbot.World.QuestSiteCap (default 5, 0 = off).
 bool QuestSiteShareGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32)
 {
-    static uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault))));
+    static uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault), true)));
     if (cap == 0) return false;
     if (s.has_owner_character() || s.in_group() || s.is_in_instance() || s.is_in_dungeon() || s.in_battleground()) return false;
     auto const& poi = s.current_objective_poi();
@@ -990,7 +994,7 @@ bool QuestSiteShareGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView c
 
 bool QuestSiteShareFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter&, uint32 now_ms)
 {
-    uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault))));
+    uint32 const cap = uint32(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.World.QuestSiteCap", int32(V2::Fleet::kQuestSiteCapDefault), true)));
     float bx, by, bz; s.position(bx, by, bz);
     std::vector<V2::Fleet::SiteWorker> near;
     for (auto const& u : s.raw().combat.nearby_friends)

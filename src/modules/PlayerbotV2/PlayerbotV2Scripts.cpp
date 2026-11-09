@@ -17,6 +17,7 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "PathGenerator.h"
+#include "Random.h"
 #include "Player.h"
 #include "PlayerbotMovement.h"
 #include "ScriptMgr.h"
@@ -27,8 +28,10 @@
 #include "Bot/Raid/RaidIncoming.h"
 #include "Bot/Raid/RaidManaLedger.h"
 #include "WorldSession.h"
+#include <algorithm>
 
 void AddSC_playerbot_v2_commandscript();
+void AddSC_playerbot_v2_hire_broker();
 
 namespace
 {
@@ -118,11 +121,39 @@ public:
         Module::instance().OnPlayerLogout(player);
     }
 
+    // A bot's autosave comes far less often than a player's (PlayerSaveInterval, 90 s). With a High bot crowd (500 active)
+    // every bot saving each 90 s puts about 6 saves a second, 30-50 statements each, on the one characters DB worker. The
+    // player's own auction buy/list replies and the login load wait behind that queue: the auction list went empty and slow
+    // and login took long until the bots were set to Low. Logout and the module's own saves still happen as before; a crash
+    // loses at most this much of a bot's progress. The core sets the timer before this hook, so this only stretches it.
+    void OnSave(Player* player) override
+    {
+        if (!player || !player->GetSession() || !player->GetSession()->IsBot())
+            return;
+        int32 const sec = std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.SaveIntervalSec", 900, true), 0, 7200);
+        if (sec <= 0)
+            return;
+        uint32 const ms = uint32(sec) * IN_MILLISECONDS;
+        if (ms > player->GetSaveTimer())
+            player->SetSaveTimer(urand(ms * 3 / 4, ms * 5 / 4)); // spread, so bots that logged in together do not save together
+    }
+
+    void OnDelete(ObjectGuid guid, uint32 /*accountId*/) override
+    {
+        Module::instance().OnPlayerDeleted(guid.GetCounter());
+    }
+
     // Raid mana ledger: what a cast cost (the core's own figure, taken when the cast completes) and what a mana potion, rune or
     // Innervate restored. Only a healer the raid brain watches in a pull is recorded.
     void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
         using namespace Playerbot::Raid;
+        // A world marker a player puts on the ground (the Positions tab's "Place at cursor" button casts one): the marker's spot
+        // takes a waiting Positions order (BotCommandParser::TakePendingPlace); nothing happens without one.
+        if (player && spell && IsHuman(player) && spell->m_targets.HasDst())
+            if (SpellInfo const* mi = spell->GetSpellInfo(); mi && mi->HasEffect(SPELL_EFFECT_CHANGE_RAID_MARKER))
+                if (WorldLocation const* dst = spell->m_targets.GetDstPos())
+                    Module::instance().OnWorldMarkerPlaced(player, dst->GetPosition());
         if (!player || !spell || !ManaLedgerWatching(player->GetGUID().GetCounter()))
             return;
         SpellInfo const* si = spell->GetSpellInfo();
@@ -392,14 +423,25 @@ public:
     }
 };
 
+// Playerbot.Enable = 0 turns the whole module off, as if the server were built without it: no script of the module is registered,
+// so it never starts (no bot sessions, bot database or migrations), gets no world, player, unit, group or guild hook, has no
+// commands and no world update, and the path check below is not installed. Only read at start-up: a change needs a restart.
+// Playerbot.World.Enable is the second level: with the module on, it turns only the wandering world bots on or off.
 void AddSC_playerbot_v2()
 {
+    if (!sConfigMgr->GetBoolDefault("Playerbot.Enable", true))
+    {
+        TC_LOG_INFO("server.loading", "[startup] bots: off (Playerbot.Enable = 0), the bot module does not start");
+        return;
+    }
+
     new playerbot_v2_world();
     new playerbot_v2_player();
     new playerbot_v2_unit();
     new playerbot_v2_group();
     new playerbot_v2_guild();
     AddSC_playerbot_v2_commandscript();
+    AddSC_playerbot_v2_hire_broker();
 
     PathGenerator::SetLiquidRouteCheck(&BotPathTouchesAvoidedLiquid);
 }

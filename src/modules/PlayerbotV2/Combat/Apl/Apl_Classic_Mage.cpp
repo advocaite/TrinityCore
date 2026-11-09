@@ -14,8 +14,11 @@
 // Explosion on packs in melee, Fire Blast / nuke, wand when dry. Remove
 // Lesser Curse on the member the raid dispel plan gives the mage
 // (Classic::PickDispel: one bot per cursed member).
-// Polymorph on an add (PickGroupCC). Skipped: Blink, Mana Shield,
-// Pyroblast opener, Cone of Cold.
+// Polymorph on an add (PickGroupCC). Forever procs, in the order the
+// wowsims/forever (MIT) frost and fire lists use them: Ice Lance on the last
+// Fingers of Frost charge, Pyroblast at 3 Heating Up stacks, Arcane Wrath
+// (Arcane talent) on cooldown, right after Presence of Mind. Skipped: Blink,
+// Mana Shield, Pyroblast opener, Cone of Cold.
 
 #include "../ApRegistry.h"
 #include "../ApRotation.h"
@@ -45,6 +48,7 @@ constexpr uint32 FIRE_VULNERABILITY = 22959;   // the Improved Scorch debuff, 5 
 constexpr uint32 ARCANE_MISSILES    = 5143;
 constexpr uint32 FIRE_BLAST         = 2136;
 constexpr uint32 ARCANE_EXPLOSION   = 1449;
+constexpr uint32 BLIZZARD           = 10;
 constexpr uint32 FROST_ARMOR        = 168;
 constexpr uint32 ICE_ARMOR          = 7302;
 constexpr uint32 MAGE_ARMOR         = 6117;
@@ -248,6 +252,41 @@ bool ShouldArcaneExplosion(ApPredicateContext const& ctx)
 }
 void DoArcaneExplosion(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(ARCANE_EXPLOSION); }
 
+// Blizzard: an 8 s ground channel of 8 ticks on every enemy within 8 yd of the point (classic_spell_ground_area_damage, rank 6: 149 frost
+// plus 4.17% spell power a tick). Three enemies in the area out-damage the single-target nukes: a T2 mage's Frostbolt is about 330 a
+// second on one target, Blizzard about 165 a second on each one in it. Cast on the victim from range, so it reaches the piles a raid's
+// tanks hold (bwl_nefarian 1108h: 3-5 drakonids on each tank, and the mages' one area spell, Arcane Explosion, reaches 10 yd round
+// the mage only). Enemies that avoid frost (a Blue Drakonid's resistance, the raid school hint) are not counted. Standing still, with
+// the mana for the channel, and never over a crowd-controlled, unpulled or not yet secured mob (AoeSafeAroundVictim).
+constexpr float kBlizzardRadius = 8.0f;
+constexpr int kBlizzardMinTargets = 3;
+bool ShouldBlizzard(ApPredicateContext const& ctx)
+{
+    NearbyUnit const* v = ctx.bot.victim_info();
+    if (!v || !HasLiveTarget(ctx) || !ctx.bot.in_combat() || ctx.bot.is_moving() || ManaPct(ctx) < 40)
+        return false;
+    if (ctx.bot.raw().raid_order.no_aoe || !(Ready(ctx, BLIZZARD) && ctx.bot.victim_in_spell_range(BLIZZARD)))
+        return false;
+    uint8 const frost = BotIntentEmitter::SpellSchoolMaskOf(BLIZZARD, 0);
+    PveOrder const& po = ctx.bot.raw().pve_order;
+    int n = 0;
+    float const r2 = kBlizzardRadius * kBlizzardRadius;
+    for (NearbyUnit const& u : ctx.bot.nearby_enemies())
+    {
+        if (u.hp <= 0 || u.untargetable || u.is_pacified || u.is_player || !u.unit_in_combat) continue;
+        float const dx = u.x - v->x, dy = u.y - v->y, dz = u.z - v->z;
+        if (dx * dx + dy * dy + dz * dz > r2) continue;
+        if (PveOrder::SchoolHint const* h = po.school_hint_for(u.guid); h && (h->avoid_mask & frost)) continue;
+        ++n;
+    }
+    return n >= kBlizzardMinTargets && AoeSafeAroundVictim(ctx.bot, kBlizzardRadius, "Blizzard", BLIZZARD);
+}
+void DoBlizzard(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    if (NearbyUnit const* v = ctx.bot.victim_info())
+        e.cast_at(BLIZZARD, v->x, v->y, v->z);
+}
+
 bool ShouldFireBlast(ApPredicateContext const& ctx)
 {
     // Instant but on the global cooldown and mana-hungry: worth it while moving (a hard cast cannot run) or as a filler for a fire
@@ -272,6 +311,17 @@ bool NukeUsable(ApPredicateContext const& ctx, uint32 spell)
 {
     return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && (Ready(ctx, spell) && ctx.bot.victim_in_spell_range(spell));
 }
+// Arcane Wrath (Arcane talent 1326079, trainer ranks 1326080-1326082): 3.5 s cast, 6 s cooldown, extra spell damage of 5% of the
+// mage's maximum mana (classic_spell_mage_arcane_wrath). The wowsims/forever (MIT) arcane list casts it on cooldown, straight
+// after Presence of Mind, above its other spells. The hard cast waits while the bot moves; under Presence of Mind it is instant.
+constexpr uint32 ARCANE_WRATH = 1326079;
+bool ShouldArcaneWrath(ApPredicateContext const& ctx)
+{
+    return ctx.bot.current_cast_spell_id() == 0 && (!ctx.bot.is_moving() || ctx.bot.has_aura(PRESENCE_OF_MIND))
+        && NukeUsable(ctx, ARCANE_WRATH);
+}
+void DoArcaneWrath(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(ARCANE_WRATH, ctx.bot.victim()); }
+
 bool ShouldFrostboltNuke(ApPredicateContext const& ctx)      { return NukeUsable(ctx, FROSTBOLT); }
 bool ShouldFireballNuke(ApPredicateContext const& ctx)       { return NukeUsable(ctx, FIREBALL); }
 bool ShouldArcaneMissilesNuke(ApPredicateContext const& ctx) { return NukeUsable(ctx, ARCANE_MISSILES); }
@@ -280,6 +330,7 @@ SchoolHint::SchoolChoice const kSchoolChoices[] = {
     { FROSTBOLT,       ShouldFrostboltNuke },
     { FIRE_BLAST,      ShouldFireBlast },
     { FIREBALL,        ShouldFireballNuke },
+    { ARCANE_WRATH,    ShouldArcaneWrath },
     { ARCANE_MISSILES, ShouldArcaneMissilesNuke },
 };
 // A fire mage on a boss keeps Fire Vulnerability at 5 stacks with Scorch before it throws Fireballs (raid vanilla rule); the stacks are
@@ -293,6 +344,28 @@ bool ShouldScorch(ApPredicateContext const& ctx)
     return !fv || fv->stacks < 5 || fv->remaining.count() < 8000;
 }
 void DoScorch(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SCORCH, ctx.bot.victim()); }
+
+// Forever procs (server scripts classic_talents_mage_shaman.cpp). Fingers of Frost puts 2 charges (400670) on the mage; each cast
+// spends one and counts as hitting a Frozen target, and Ice Lance (400640, Forever trainer, level 28) then deals three times its
+// damage. Like the wowsims/forever frost list, the first charge goes to the Frostbolt and the last one to an Ice Lance.
+constexpr uint32 ICE_LANCE               = 400640;
+constexpr uint32 FINGERS_OF_FROST_STACKS = 400670;
+// Heating Up (400625): each stack takes 25% off the next Pyroblast's cast time, 3 stacks at most, 20 s. The wowsims/forever fire
+// list casts Pyroblast at 3 stacks; before that the bot never cast Pyroblast at all.
+constexpr uint32 HEATING_UP_BUFF         = 400625;
+
+bool ShouldIceLanceFingers(ApPredicateContext const& ctx)
+{
+    return ctx.bot.aura_stacks(FINGERS_OF_FROST_STACKS) == 1 && ctx.bot.current_cast_spell_id() == 0 && NukeUsable(ctx, ICE_LANCE);
+}
+void DoIceLanceFingers(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(ICE_LANCE, ctx.bot.victim()); }
+
+bool ShouldPyroblastHeatingUp(ApPredicateContext const& ctx)
+{
+    return FireBuild(ctx) && ctx.bot.aura_stacks(HEATING_UP_BUFF) >= 3 && !ctx.bot.is_moving()
+        && ctx.bot.current_cast_spell_id() == 0 && NukeUsable(ctx, PYROBLAST);
+}
+void DoPyroblastHeatingUp(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(PYROBLAST, ctx.bot.victim()); }
 
 bool ShouldSchoolNuke(ApPredicateContext const& ctx) { return SchoolHint::ShouldCast(ctx, kSchoolChoices); }
 void DoSchoolNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { SchoolHint::DoCast(ctx, e, kSchoolChoices); }
@@ -332,8 +405,12 @@ ApRule const kMageRules[] = {
     { ShouldPresenceOfMind,  DoPresenceOfMind,  "classic_mage:presence_of_mind" },
     { ShouldCombustion,      DoCombustion,      "classic_mage:combustion" },
     { ShouldArcaneExplosion, DoArcaneExplosion, "classic_mage:arcane_explosion" },
+    { ShouldBlizzard,        DoBlizzard,        "classic_mage:blizzard" },
     { ShouldScorch,          DoScorch,          "classic_mage:scorch" },
+    { ShouldIceLanceFingers, DoIceLanceFingers, "classic_mage:ice_lance_fingers" },
+    { ShouldPyroblastHeatingUp, DoPyroblastHeatingUp, "classic_mage:pyroblast_heating_up" },
     { ShouldSchoolNuke,      DoSchoolNuke,      "classic_mage:school_nuke" },
+    { ShouldArcaneWrath,     DoArcaneWrath,     "classic_mage:arcane_wrath" },
     { ShouldFireBlast,       DoFireBlast,       "classic_mage:fire_blast" },
     { ShouldNuke,            DoNuke,            "classic_mage:nuke" },
     { ShouldWand,            DoWand,            "classic_mage:wand" },

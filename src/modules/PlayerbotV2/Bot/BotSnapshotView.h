@@ -44,6 +44,7 @@ public:
     // A heal is refused (PREVENTED_BY_MECHANIC) while stunned, feared, confused or silenced.
     bool   cannot_heal()  const { return s_->vitals.is_stunned || s_->vitals.is_feared || s_->vitals.is_confused || s_->vitals.is_silenced; }
     bool   is_pvp()       const { return s_->vitals.is_pvp; }
+    bool   pvp_wanted()   const { return s_->vitals.pvp_wanted; }
     // True when any state would block cast attempts (stun + silence + active
     // cast). Caller should still check spell-specific gates (CD, resource).
     bool   can_cast() const { return !s_->vitals.is_stunned && !s_->vitals.is_silenced &&
@@ -398,6 +399,15 @@ public:
     ObjectGuid group_tank() const { return s_->combat.group_tank; }
     bool       big_raid()   const { return s_->combat.big_raid; }
     bool       in_raid_group() const { return s_->combat.raid_group; }
+    // Raid tactics (threat discipline, the ranged slots behind the tank, the step to the tank, the raid plan): a raid map (20 and 40
+    // players) or a raid group in the open world. A raid group in a dungeon, and a 10-player raid map (UBRS), play it as a dungeon (the
+    // owner, 2026-10-28: "UBRS is a 10-man, I wouldn't classify that as a raid ... anything above 20-man, raid tactics").
+    static constexpr uint32 kRaidTacticsMinPlayers = 20;
+    bool       raid_tactics_map() const
+    {
+        return is_in_raid() && (s_->instance_ctx.max_players == 0 || s_->instance_ctx.max_players >= kRaidTacticsMinPlayers);
+    }
+    bool       raid_rules() const { return raid_tactics_map() || (in_raid_group() && !s_->instance_ctx.is_in_instance); }
     // Damage-restraint verdict for a NON-TANK group member about to damage
     // `target` (MCRaidHoldDamage): TankOpening while the tank has not yet
     // built `opening_lead` threat (or nobody has engaged the mob yet);

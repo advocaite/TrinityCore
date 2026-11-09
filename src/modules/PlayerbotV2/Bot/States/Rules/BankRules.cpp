@@ -8,6 +8,9 @@
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/BotIntent.h"
+#include "Bot/AlwaysBuffs.h"
+#include "Services.h"
+#include "Util/ConfigReader.h"
 #include "UnitDefines.h"
 
 namespace Playerbot {
@@ -53,10 +56,16 @@ bool BankDepositFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
 }
 
 // ---------- idle:guild_bank_deposit_money ----------
+// A bot keeps the free gold floor of the always-repair upkeep (kAlwaysGoldFloor) plus 50g, and only gold above that may
+// go to the guild bank. Before, the ceiling was 50g while the upkeep topped every bot back up to 200g, so each bot at a
+// Guild Vault paid 120g into the bank over and over (player report 2026-11-06: 3333g taken out of a bot guild bank).
+constexpr uint64 kGuildDepositKeep = (uint64(kAlwaysGoldFloor) + 50) * 10000;   // copper
+
 bool GuildBankDepositGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&,uint32)
 {
+    if (!Services::Config().guilds_bank_deposit()) return false;   // PlayerbotV2.Guilds.BankDeposit, off by default
     if (!s.in_guild()) return false;
-    if (s.gold() < 500000) return false;   // 50g
+    if (uint64(s.gold()) <= kGuildDepositKeep) return false;
     if (s.in_combat()) return false;
     auto const* vault = s.nearest_object_of_type(/*GAMEOBJECT_TYPE_GUILD_BANK*/ 34);
     if (!vault) return false;
@@ -72,8 +81,8 @@ bool GuildBankDepositFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView
     const uint64 vault_low = vault->guid.GetCounter();
     if (ai.action_recently_tried(BotAI::ActionKind::GuildBankDep, vault_low, now_ms))
         return false;
-    const uint64 ceiling = 500000;
-    const uint64 overage = uint64(s.gold()) - ceiling;
+    if (uint64(s.gold()) <= kGuildDepositKeep) return false;
+    const uint64 overage = uint64(s.gold()) - kGuildDepositKeep;
     const uint64 deposit = (overage * 80) / 100;
     if (deposit < 100000) return false;   // at least 10g
     emit.emit(GuildBankDepositMoneyIntent{vault->guid, deposit});

@@ -28,7 +28,7 @@ namespace AuctionBotBuyerPolicy
 {
     TC_GAME_API void LoadConfig();
 
-    // Buyer.Stacks: stackable listings (herbs, ore, cloth...) can be bought, always the whole listing.
+    // Buyer.Commodities (older name Buyer.Stacks): stackable listings (herbs, ore, cloth...) can be bought, always the whole listing.
     TC_GAME_API bool StacksEnabled();
 
     // False while the listing is still too fresh (a stable per-listing delay between

@@ -52,6 +52,7 @@ class Unit;
 namespace Playerbot {
 
 struct GroupMemberSummary;
+class BotAI;
 
 class PveGroupCoordinator
 {
@@ -145,7 +146,8 @@ private:
     // a caster with a crowd control spell crowd-controls it (cc_target, never for the skull; released when the mob's icon
     // turns skull or goes), a duty tank in a 5-man holds it (tank_target; raids: PlanRaidTanks). The bot's chat `rti`
     // orders extend the icon. Writes mark_symbol / mark_target / cc_* into `plan`. World thread.
-    void PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid,
+    // `bosses`: the instance script's boss entries (DungeonAdvice::bosses), never crowd-controlled.
+    void PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid, std::vector<uint32_t> const& bosses,
                         std::vector<Member> const& mem,
                         std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
                         std::unordered_map<uint64, PveOrder>& plan);
@@ -155,6 +157,10 @@ private:
     // Both reset when the pack is gone (PlanRaidTanks, Playerbot.Behavior.TankMarkers).
     std::unordered_map<uint64, std::unordered_map<uint64, uint8>> tank_mark_auto_;
     std::unordered_map<uint64, std::array<ObjectGuid, 8>> marks_set_;
+    // Per-(group, map) mob the pre-pull crowd control put the moon on (PlanPrePullCc). Kept apart from marks_set_, which a
+    // 5-man resets every pass (PlanRaidTanks' non-raid branch), and from the request, which expires on its own: the moon is
+    // taken off once the request is finished or gone.
+    std::unordered_map<uint64, ObjectGuid> prepull_moon_;
 
     std::unordered_map<uint64, PveOrder> orders_;
     std::unordered_map<uint64, PveOrder> next_orders_;
@@ -250,6 +256,29 @@ private:
                         std::unordered_map<uint64, PveOrder>& plan);
     // Per-(group, map) last logged Innervate assignment (druid low -> healer low).
     std::unordered_map<uint64, std::unordered_map<uint64, uint64>> last_innervate_;
+    // Dungeons (not the raid plan): the line-of-sight pull (PveOrder::sight_pull). Mobs of a pull the bot main tank runs back
+    // that stand off and shoot or cast from where they stood (2 s still, beyond melee, the victim in sight) bring the group to a
+    // spot near the return point out of their sight, so they walk in. World thread (vmap line of sight, navmesh paths, live
+    // creatures); writes sight_* into `plan` and moves the tank's pull-back return point to the spot. [sight_pull] logs.
+    // `ais`: the bucket's bots' BotAI (the pull back plan, mutex-guarded).
+    void PlanSightPull(uint64 bkey, uint64 group_low, uint32 map_id, uint32 now_ms, bool in_combat, uint64 main_tank,
+                       std::vector<std::pair<uint64, Player*>> const& bots,
+                       std::unordered_map<uint64, BotAI*> const& ais,
+                       std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
+                       std::unordered_map<uint64, PveOrder>& plan);
+    struct SightPull
+    {
+        struct Watch { uint32 since_ms = 0; uint32 seen_ms = 0; float x = 0.f, y = 0.f; };
+        std::unordered_map<uint64, Watch> watch;   // engaged mob guid counter -> standing still since
+        bool   active = false;
+        float  x = 0.f, y = 0.f, z = 0.f;          // the spot
+        float  ax = 0.f, ay = 0.f, az = 0.f;       // the return point it was found from
+        uint32 since_ms = 0;
+        uint8  replans = 0;                        // the spot was searched again (a mob saw it from where it stopped next)
+        std::vector<ObjectGuid> mobs;              // the mobs still standing off
+        uint32 no_spot_log_ms = 0;
+    };
+    std::unordered_map<uint64, SightPull> sight_pull_;
     uint32 last_plan_ms_ = 0;
     std::string last_dump_;
 };

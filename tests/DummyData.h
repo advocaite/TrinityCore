@@ -69,6 +69,7 @@ class UnitTestDataLoader
         };
 
         static void InitializeSpellSpecificInfo(SpellInfo& spellInfo);
+        static void InitializeSpellPositivity(SpellInfo& spellInfo);
         static void LoadAchievementTemplates();
         static void LoadItemTemplates();
         static void LoadSpellImmunities(SpellInfo& spellInfo);

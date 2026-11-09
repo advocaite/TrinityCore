@@ -157,6 +157,12 @@ public:
     // Returns the number of slots changed. World thread only.
     uint32 SwapResistGear(Player* p, uint8 school);
 
+    // Blackwing Lair's Onyxia Scale Cloak (Playerbot.Raid.OnyxiaCloak, Bot/ResistGear.h): with on, a grouped companion in the instance gets a
+    // free copy of the cloak in its back slot, its own cloak goes to the bags; with off, its own cloak is back on and the copy deleted. Never
+    // in combat, never with full bags (nothing is destroyed but the copy). A player's own character is never touched. Returns the slots
+    // changed (0 or 1). World thread only.
+    uint32 SwapFightCloak(Player* p, bool on);
+
     // One-step companion (`.bot add`). Once the newly created bot is in the world: level it to its owner, teach its
     // class trainer spells, set the requested role (a Role value; Role::Unknown keeps the class default), apply
     // talents and gear, bring it to the owner and put it in the owner's group (made a raid when full). Dropped if the
@@ -165,6 +171,10 @@ public:
     // Brings an owned companion to its owner at once, in the open world or inside an instance (see the definition). Empty = on its way,
     // else why not (also logged as [summon]). World thread.
     std::string BringToOwner(Player* owner, Player* bot, char const* why);
+    // Puts a bot of the owner's group on the ship or zeppelin he rides, on the deck beside him (Playerbot.Behavior.RideWithOwner). It rides
+    // with him from there as a passenger. Empty = aboard (or already was), else why not (also logged as [ride_with_owner]). Same map
+    // only. World thread.
+    std::string BoardOwnerShip(Player* owner, Player* bot, char const* why);
 
     // Resolves and pins a companion's role: `requested` (the owner's word) if not Role::Unknown, else the role stored with
     // the companion (OwnerRegistry::DeclaredRole, migration 0024), else the one its talents say. Sets the BotAI role
@@ -194,6 +204,9 @@ public:
     // each RunGearBackfill pass teaches it its new ranks, class-quest abilities and talents, and mends its gear. Runs
     // for every companion, whatever its gear. Cheap; no-op for any other bot.
     void CompanionUpkeep(BotId id, Player* p);
+    // Hired bots only: a Group Finder loan bot out of its owner's group is deleted (HireMgr::SetLoaned).
+    bool ReleaseLoan(BotId id, Player* p, uint32 now_ms);
+    void ReleaseOfflineLoans(uint32 now_ms);
     // A hunter companion's starter pet, granted once per bot (OwnerRegistry::StarterPetGranted).
     void GrantCompanionStarterPet(BotId id, Player* p);
     // A bot hunter of level 10+ nobody owns (world, pool and scenario bots) that has no pet, summoned, dismissed or stabled, gets a beast of its own:
@@ -216,6 +229,12 @@ public:
         uint64 bot_low = 0;
         ObjectGuid owner;
         uint32 queued_ms = 0;
+        // Where it was sent, so a bring that did not land says how far it got and from where (11-08: a catch-up after the zeppelin
+        // logged "brought" and the bot never moved).
+        uint32 map_id = 0;
+        float x = 0.f, y = 0.f, z = 0.f;
+        float from_x = 0.f, from_y = 0.f, from_z = 0.f;
+        std::string why;
     };
     std::vector<PendingBring> pending_brings_;
     void DrainBringChecks();
@@ -304,6 +323,12 @@ public:
     // One-line world spawner status (`.bot world`).
     std::string WorldReport() const;
     WorldLoadFacts WorldLoad() const;
+    // The world bot choice of the ForeverBots panel (GM only; Fleet/BotSize.h PopLevel as an int: 0 Off, 1 Low, 2 Medium, 3 High;
+    // -1 = the config files decide). Applies on the next world tick and is kept over a restart.
+    void SetWorldPopulation(int level);
+    int WorldPopulation() const;
+    std::string WorldPopulationLine() const;
+    bool WorldPopulationDraining() const;
     // True for a bot the world spawner placed: BG / LFG queue fills leave these where they are.
     bool IsWorldPlaced(BotId id) const;
     bool WorldSpawnerPending(uint64 guid_low) const;

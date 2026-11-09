@@ -37,4 +37,17 @@ inline bool AllowPartialRoute(PartialRouteStall& st, std::uint64_t goal_key, flo
     return st.stalled <= kStallMaxPartials;
 }
 
+// Whether a partial that ends no closer to the goal is a long route cut by the path cap (walk it) rather than a goal off the navmesh
+// (refuse it). Detour's partial for a goal it cannot reach ends at the searched polygon nearest the goal, never meaningfully farther
+// than the start; one that ends well farther away is the first stretch of a real route that winds away first. A far goal (more than
+// 100 yards) was always walked this way. A near one that winds was refused for ever: the RFC tank on the ledge 18 yards above
+// Oggleflint (27 yards away) got a 72-point partial back down into the pit 99 yards from him on every try and stood there for good.
+constexpr float kFarGoalYards = 100.0f;
+constexpr float kTruncatedRouteSlackYards = 10.0f;   // a partial ending this much farther than the start was cut, not refused
+
+constexpr bool PartialIsTruncatedRoute(float cur_to_dst, float end_to_dst)
+{
+    return cur_to_dst > kFarGoalYards || end_to_dst > cur_to_dst + kTruncatedRouteSlackYards;
+}
+
 } // namespace Playerbot::BotMovement

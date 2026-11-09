@@ -70,10 +70,11 @@ public:
             12795,  // Frenzy
         };
         // Boss progression — Razorfen Downs has 5 encounters.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. Tuten'kash and
+        // Plaguemaw have no static spawn (event_summoned_bosses), so they are not on it; with them in, every waypoint answered the
+        // wrong boss (bosses[0] Tuten'kash was steered to Glutton's spot, Glutton to Mordresh's).
         a.bosses = {
-            7355,   // Tuten'kash
             8567,   // Glutton
-            7356,   // Plaguemaw the Rotting
             7357,   // Mordresh Fire Eye
             7358,   // Amnennar the Coldbringer (final)
             7354,   // Ragglesnout (rare side spawn)

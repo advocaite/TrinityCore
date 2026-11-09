@@ -15,15 +15,25 @@ constexpr TalentPick kWarriorArms[] = {
     // A talent below another needs a parent node filled to its maximum, so the first rows are bought in full (Deflection 5, Improved
     // Tactical Mastery 5, Improved Rend 3, Improved Thunder Clap 3): 143 stopped Deflection at 4 and Tactical Mastery at 3 and never
     // got Deep Wounds, Anger Management or Impale.
-    { "Improved Heroic Strike", 3 }, { "Deflection", 5 }, { "Improved Rend", 3 }, { "Improved Charge", 2 }, { "Improved Tactical Mastery", 5 },
-    { "Improved Thunder Clap", 3 },
-    { "Improved Overpower", 2 }, { "Anger Management", 1 }, { "Deep Wounds", 3 },
-    { "Two-Handed Weapon Specialization", 5 }, { "Impale", 2 }, { "Sweeping Strikes", 1 },
-    { "Weaponmaster", 5 }, { "Improved Hamstring", 1 }, { "Mortal Strike", 1 },
-    { "Cruelty", 5 }, { "Unbridled Wrath", 4 },
+    // 0.1.30 (client tree of 70755): Deflection (parry) and Improved Thunder Clap only filled rows; Improved Heroic Strike and Improved Rend
+    // already open the second row, so their 8 points (and Improved Hamstring's 1) go to the Fury tab: Unbridled Wrath 5 makes 10 there, which
+    // opens Furious Precision (+hit, row 3), then Booming Voice and Improved Execute. Mortal Strike still has its 30 Arms points.
+    // Client 70790: every tier gate of the warrior tree counts the points spent in the whole tree (one trait currency, 3820, for all
+    // three tabs), so a row is open by the points spent anywhere. Scorecard 0.1.30 (5 Nov, 12 measurements): arms 708-834 against fury's
+    // 1076-1260, with 5 points in Booming Voice (shout area and cost only) and 2 in Improved Charge (no Charge in a boss fight), and 2
+    // in Improved Thunder Clap from the fillers. Those 9 points, and the 4 that the 70790 tree took from Improved Tactical Mastery and
+    // Two-Handed Weapon Specialization (now 3 ranks each), buy the fury damage talents that need no fury rotation: Death Wish (+20%
+    // physical damage for 30 s, cast in boss fights by classic_war:death_wish), Flurry (attack speed after a crit; arms crits 40%+) and
+    // Improved Whirlwind (a shorter Whirlwind cooldown, and arms fights in Berserker Stance in boss fights).
+    { "Improved Heroic Strike", 3 }, { "Improved Rend", 3 }, { "Improved Tactical Mastery", 3 },
+    { "Anger Management", 1 }, { "Deep Wounds", 3 },
+    { "Two-Handed Weapon Specialization", 3 }, { "Impale", 2 }, { "Sweeping Strikes", 1 },
+    { "Weaponmaster", 5 }, { "Mortal Strike", 1 },
+    { "Cruelty", 5 }, { "Unbridled Wrath", 5 }, { "Furious Precision", 3 }, { "Improved Execute", 2 },
+    { "Death Wish", 1 }, { "Flurry", 3 }, { "Improved Whirlwind", 2 },
     // Fillers, bought only with points left over (Forever's trees have no Tactical Mastery, Sword Specialization or Improved Battle Shout,
     // and the 70532 tree no Axe Specialization: "build talents not found" on every arms walk of 235).
-    { "Improved Execute", 2, true }, { "Enrage", 3, true }, { "Booming Voice", 5, true },
+    { "Improved Overpower", 2, true }, { "Improved Charge", 2, true }, { "Booming Voice", 5, true },
 };
 constexpr TalentPick kWarriorFury[] = {
     // The vanilla raid fury build, 17 Arms / 34 Fury (51 points). The Arms core goes first: the last build spent 46 points in Fury before it
@@ -61,9 +71,10 @@ constexpr TalentPick kPaladinHoly[] = {
     // was refused and the holy paladin of the support scorecard (230) healed with no Illumination at all. Light's Vigil (row y5730) needs 30
     // points in the Holy tab, and Holy Conduit (node 105704) is a Retribution node: bought before it, the tab held 29 and Light's Vigil was
     // refused (233, LearnResult 2). Voice of Truth first makes the 30; Improved Hammer of Justice at 1 keeps the list at 51.
+    // Forever launch data (hotfixes 2026_11_03_41): Voice of Truth's node (definition 134825) is Oath of Light now, and Reverence stops at 2.
     { "Divine Intellect", 5 }, { "Spiritual Focus", 2 }, { "Healing Light", 3 }, { "Reverence", 3 }, { "Divine Favor", 1 },
     { "Holy Power", 5 }, { "Holy Shock", 1 }, { "Illumination", 5 }, { "Purifying Power", 2 }, { "Infusion of Light", 2 },
-    { "Voice of Truth", 1 }, { "Light's Vigil", 1 }, { "Holy Conduit", 2 },
+    { "Oath of Light|Voice of Truth", 1 }, { "Light's Vigil", 1 }, { "Holy Conduit", 2 },
     { "Redoubt", 5 }, { "Guardian's Favor", 2 }, { "Toughness", 5 }, { "Anticipation", 5 }, { "Improved Hammer of Justice", 1 },
 };
 constexpr TalentPick kPaladinProtection[] = {
@@ -83,49 +94,59 @@ constexpr TalentPick kPaladinRetribution[] = {
     { "Improved Judgement", 2 }, { "Conviction", 5 }, { "Benediction", 5 }, { "Deflection", 5 },
     { "Vindication", 3 }, { "Sanctified Judgement", 3 }, { "Seal of Command", 1 }, { "Pursuit of Justice", 2 },
     { "Eye for an Eye", 2 }, { "Sacred Arbiter", 1 }, { "Vengeance", 3 }, { "Two-Handed Weapon Specialization", 3 },
-    { "Repentance", 1 }, { "Improved Seal of Fury", 1 }, { "Swift Judgement", 1 }, { "Instrument of Law", 2 }, { "Twist of Light", 1 },
+    // Forever launch data: Improved Seal of Fury's node (definition 142627) is Shieldsworn, and Twist of Light (spell 1310735) is Unsealed Wrath.
+    { "Repentance", 1 }, { "Shieldsworn|Improved Seal of Fury", 1 }, { "Swift Judgement", 1 }, { "Instrument of Law", 2 },
+    { "Unsealed Wrath|Twist of Light", 1 },
 };
 
 // ---- Hunter ----
 constexpr TalentPick kHunterBeastMastery[] = {
     // Forever names (talent coverage dump of the client data): Deadly Aspects is the Improved Aspect of the Hawk, Lethal Attacks the Lethal Shots;
     // Aimed Shot is a trainer spell there, not a talent.
-    { "Deadly Aspects", 5 }, { "Endurance Training", 5 }, { "Unleashed Fury", 5 }, { "Ferocity", 5 },
-    { "Intimidation", 1 }, { "Spirit Bond", 2 }, { "Bestial Discipline", 2 }, { "Frenzy", 2 },
+    // Bestial Wrath (node 104961, row 7) needs 30 points in the tab and Intimidation, which hangs under Bestial Swiftness (client tree of
+    // 70755). 0.1.29 spent 28 there and never got it (scorecard: "refused Bestial Wrath has parents: node 104964", "Bestial Wrath 0/1"):
+    // Bestial Swiftness and Frenzy 5 make the 30; the 3 points come off Efficiency.
+    { "Deadly Aspects", 5 }, { "Endurance Training", 5 }, { "Unleashed Fury", 5 }, { "Ferocity", 5 }, { "Bestial Swiftness", 1 },
+    { "Intimidation", 1 }, { "Bestial Discipline", 2 }, { "Spirit Bond", 1 }, { "Frenzy", 5 },
     { "Bestial Wrath", 1 },
     // Mortal Shots (node 105002) hangs under Careful Aim (node 105008) in full: without it Mortal Shots was refused in every scorecard
-    // (236: "refused Mortal Shots has parents: node 105008 edge type 2 0/5"). Careful Aim's 5 points come off Hawk Eye and Efficiency.
-    { "Efficiency", 3 }, { "Lethal Attacks", 5 }, { "Careful Aim", 5 },
+    // (236: "refused Mortal Shots has parents: node 105008 edge type 2 0/5"), and its row needs 15 points in Marksmanship.
+    { "Lethal Attacks", 5 }, { "Careful Aim", 5 },
     { "Improved Arcane Shot", 5 }, { "Mortal Shots", 5 },
 };
 constexpr TalentPick kHunterMarksmanship[] = {
     // Names from the talent dump of the client data (147/156 logs): Forever's Marksmanship has no Lethal Shots, Aimed Shot (a trainer
     // spell there), Improved Hunter's Mark, Monster / Humanoid Slaying or Trap Mastery. Mortal Shots was refused with the tab full of
     // other points, so the rows that open its tier are bought before it, then the leftover pass spends what remains in the tab.
-    { "Improved Concussive Shot", 5 }, { "Efficiency", 5 }, { "Improved Arcane Shot", 5 }, { "Hawk Eye", 3 },
-    { "Improved Serpent Sting", 5 }, { "Improved Stings", 3 }, { "Rapid Killing", 2 }, { "Careful Aim", 5 },
-    { "Barrage", 3 }, { "Scatter Shot", 1 }, { "Mortal Shots", 5 }, { "Ranged Weapon Specialization", 5 },
-    { "Trueshot Aura", 1 },
+    // 0.1.30 (client tree of 70755): Lethal Attacks (+5% crit) and Lone Wolf (row 3, +20% damage with no pet out; the bot sends the pet
+    // away in a raid) replace Improved Concussive Shot, Scatter Shot and Hawk Eye, which add no damage; Deadly Aspects goes to 5 (Quick Shots).
+    { "Lethal Attacks", 5 }, { "Efficiency", 5 }, { "Careful Aim", 5 }, { "Improved Arcane Shot", 5 }, { "Lone Wolf", 1 },
+    { "Improved Stings", 3 }, { "Rapid Killing", 2 }, { "Mortal Shots", 5 }, { "Trueshot Aura", 1 }, { "Improved Serpent Sting", 5 },
+    { "Barrage", 3 }, { "Ranged Weapon Specialization", 5 }, { "Deadly Aspects", 5 }, { "Hawk Eye", 1 },
 };
 constexpr TalentPick kHunterSurvival[] = {
-    // Forever's Survival nodes (talent coverage dump of the client data): no Monster / Humanoid Slaying, Trap Mastery, Killer Instinct, Improved
-    // Feign Death or Lightning Reflexes there, and Wyvern Sting is a spell. 31 points in the tab, the rest in the Marksmanship nodes the rotation uses.
-    { "Savage Strikes", 2 }, { "Entrapment", 5 }, { "Survivalist", 5 }, { "Deterrence", 1 }, { "Surefooted", 3 }, { "Clever Traps", 1 },
-    { "Survival Tactics", 2 }, { "Counterattack", 1 }, { "Improved Wing Clip", 3 }, { "Predator's Edge", 5 },
-    { "Efficiency", 3 }, { "Lethal Attacks", 5 }, { "Careful Aim", 5 },   // Mortal Shots needs Careful Aim in full, see Beast Mastery
-    { "Improved Arcane Shot", 5 }, { "Mortal Shots", 5 },
+    // Forever's Survival nodes (client tree of 70755): no Monster / Humanoid Slaying, Trap Mastery or Killer Instinct, and Wyvern Sting is a
+    // spell. Lightning Reflexes (row 6, +15% agility) is there now and needs 25 points in the tab: the rows before it take the talents a bot
+    // that also levels and fights in melee uses. The rest goes to Marksmanship: Lethal Attacks, Careful Aim, Improved Arcane Shot, Lone Wolf
+    // (+20% damage with no pet out; the bot sends the pet away in a raid) and Mortal Shots. Entrapment, Clever Traps and Improved Wing Clip
+    // (traps and snares) are left out; 0.1.29 survival was the lowest hunter (547-616 dps).
+    { "Deflection", 5 }, { "Survivalist", 5 }, { "Savage Strikes", 2 }, { "Surefooted", 3 }, { "Deterrence", 1 },
+    { "Survival Tactics", 2 }, { "Counterattack", 1 }, { "Predator's Edge", 5 }, { "Resourcefulness", 1 }, { "Lightning Reflexes", 5 },
+    { "Lethal Attacks", 5 }, { "Careful Aim", 5 },   // Mortal Shots needs Careful Aim in full, see Beast Mastery
+    { "Improved Arcane Shot", 5 }, { "Lone Wolf", 1 }, { "Mortal Shots", 5 },
 };
 
 // ---- Rogue ----
+// Client 70790 renamed Improved Sinister Strike (13732) to Efficient Strikes and Improved Eviscerate (14162) to Coup de Grace.
 constexpr TalentPick kRogueAssassination[] = {
     { "Malice", 5 }, { "Murder", 2 }, { "Ruthlessness", 3 }, { "Improved Slice and Dice", 3 },
     { "Relentless Strikes", 1 }, { "Lethality", 5 }, { "Vile Poisons", 1 }, { "Cold Blood", 1 },
     { "Improved Poisons", 4 }, { "Seal Fate", 5 }, { "Vigor", 1 },
-    { "Improved Sinister Strike", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Endurance", 2 },
-    { "Improved Eviscerate", 1 }, { "Puncturing Wounds", 3 }, { "Dual Wield Specialization", 5 },
+    { "Improved Sinister Strike|Efficient Strikes", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Endurance", 2 },
+    { "Improved Eviscerate|Coup de Grace", 1 }, { "Puncturing Wounds", 3 }, { "Dual Wield Specialization", 5 },
 };
 constexpr TalentPick kRogueCombat[] = {
-    { "Improved Sinister Strike", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Deflection", 5 }, { "Riposte", 1 },
+    { "Improved Sinister Strike|Efficient Strikes", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Deflection", 5 }, { "Riposte", 1 },
     { "Endurance", 2 }, { "Improved Sprint", 2 }, { "Dual Wield Specialization", 5 }, { "Blade Flurry", 1 },
     { "Hack and Slash", 5 }, { "Weapon Expertise", 2 }, { "Aggression", 2 }, { "Adrenaline Rush", 1 },
     { "Malice", 5 }, { "Murder", 2 }, { "Ruthlessness", 3 }, { "Improved Slice and Dice", 3 },
@@ -136,8 +157,8 @@ constexpr TalentPick kRogueSubtlety[] = {
     { "Opportunity", 5 }, { "Master of Deception", 5 }, { "Camouflage", 3 }, { "Initiative", 3 },
     { "Improved Ambush", 3 }, { "Ghostly Strike", 1 }, { "Serrated Blades", 3 }, { "Hemorrhage", 1 },
     { "Preparation", 1 }, { "Dirty Deeds", 2 }, { "Setup", 1 }, { "Heightened Senses", 2 }, { "Premeditation", 1 },
-    { "Improved Sinister Strike", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Endurance", 2 },
-    { "Improved Eviscerate", 1 }, { "Puncturing Wounds", 3 }, { "Dual Wield Specialization", 5 },
+    { "Improved Sinister Strike|Efficient Strikes", 2 }, { "Lightning Reflexes", 3 }, { "Precision", 5 }, { "Endurance", 2 },
+    { "Improved Eviscerate|Coup de Grace", 1 }, { "Puncturing Wounds", 3 }, { "Dual Wield Specialization", 5 },
 };
 
 // ---- Priest ----
@@ -197,21 +218,24 @@ constexpr TalentPick kShamanRestoration[] = {
 };
 
 // ---- Mage ----
+// Forever launch data (hotfixes 2026_10_30_21 and 2026_11_03_41): Elemental Precision is Precision (3 ranks), Improved Fireball is
+// Accelerant, Critical Mass stops at 3 and Incineration goes to 5, and Arcane Resilience and Missile Barrage swapped nodes (Missile
+// Barrage takes the Arcane point Arcane Resilience had, so the tab keeps its shape).
 constexpr TalentPick kMageArcane[] = {
     { "Arcane Subtlety", 2 }, { "Arcane Focus", 3 }, { "Arcane Concentration", 5 },
-    { "Arcane Impact", 3 }, { "Arcane Resilience", 1 }, { "Magic Absorption", 1 },
+    { "Arcane Impact", 3 }, { "Missile Barrage", 1 }, { "Magic Absorption", 1 },
     { "Arcane Meditation", 3 }, { "Improved Channeling", 2 }, { "Presence of Mind", 1 },
     { "Arcane Mind", 5 }, { "Arcane Instability", 3 }, { "Arcane Power", 1 },
     { "Improved Frostbolt", 5 }, { "Ice Shards", 5 }, { "Piercing Ice", 3 }, { "Frostbite", 2 },
-    { "Frost Channeling", 3 }, { "Elemental Precision", 2 },
+    { "Frost Channeling", 3 }, { "Precision|Elemental Precision", 2 },
 };
 constexpr TalentPick kMageFire[] = {
     // Every Fire talent of the client list at its full rank (parity 200: the fire mage fell from 743 to 575 when the leftover points that used to
     // finish the Fire tab went to the Arcane tail), the damage ones first; the last 7 points are Arcane Subtlety and Arcane Concentration.
     // The 70532 client data gives Critical Mass 5 ranks, and Combustion hangs under it in full (236: Combustion refused under node 105784 at 3/5);
     // it has no Wake of Fire, and Improved Fire Blast (2 ranks) in its place. A rank above a node's maximum is clamped (Critical Mass 3 on 70450).
-    { "Improved Fireball", 5 }, { "Ignite", 5 }, { "Fire Power", 5 }, { "Critical Mass", 5 }, { "Improved Scorch", 3 },
-    { "Master of Elements", 3 }, { "Incineration", 3 }, { "Pyroblast", 1 }, { "Combustion", 1 }, { "Impact", 3 },
+    { "Accelerant|Improved Fireball", 5 }, { "Ignite", 5 }, { "Fire Power", 5 }, { "Critical Mass", 3 }, { "Improved Scorch", 3 },
+    { "Master of Elements", 3 }, { "Incineration", 5 }, { "Pyroblast", 1 }, { "Combustion", 1 }, { "Impact", 3 },
     { "Improved Flamestrike", 3 }, { "Blast Wave", 1 }, { "Burning Soul", 3 }, { "Wake of Fire|Improved Fire Blast", 2 }, { "Heating Up", 1 },
     { "Flamethrowing", 2 },
     { "Arcane Subtlety", 2 }, { "Arcane Concentration", 5 },
@@ -220,7 +244,7 @@ constexpr TalentPick kMageFrost[] = {
     // Cold Snap sits a tier down that needs 20 points in the tree: bought third it was refused (LearnResult 1, 147), so the rows above it go first.
     { "Improved Frostbolt", 5 }, { "Ice Shards", 5 }, { "Piercing Ice", 3 },
     { "Improved Blizzard", 1 }, { "Frost Channeling", 3 }, { "Shatter", 2 }, { "Ice Block", 1 },
-    { "Elemental Precision", 3 }, { "Cold Snap", 1 }, { "Frostbite", 1 }, { "Winter's Chill", 5 }, { "Ice Barrier", 1 },
+    { "Precision|Elemental Precision", 3 }, { "Cold Snap", 1 }, { "Frostbite", 1 }, { "Winter's Chill", 5 }, { "Ice Barrier", 1 },
     { "Arcane Subtlety", 2 }, { "Arcane Focus", 3 }, { "Arcane Concentration", 5 },
     { "Arcane Impact", 3 }, { "Magic Absorption", 2 }, { "Arcane Meditation", 3 },
     { "Improved Channeling", 2 },
@@ -263,29 +287,34 @@ constexpr TalentPick kDruidBalance[] = {
     { "Improved Wrath", 5 }, { "Improved Moonfire", 5 }, { "Nature's Reach", 2 }, { "Vengeance", 5 },
     { "Nature's Grace", 1 }, { "Moonglow", 3 }, { "Improved Starfire", 5 }, { "Moonfury", 5 },
     { "Moonkin Form", 1 }, { "Insect Swarm", 1 },
-    { "Furor", 5 }, { "Nature's Focus", 5 }, { "Reflection", 3 },
+    { "Heart of the Wild", 5 }, { "Nature's Focus", 5 }, { "Subtlety", 3 },
     { "Improved Rejuvenation", 3 }, { "Tranquil Spirit", 2 },
 };
 // Forever's feral tree names (damage_parity 147 talent list): no Feral Aggression, Improved Shred, Faerie Fire (Feral), Primal Fury or Improved Enrage.
+// Forever launch data (hotfixes 2026_11_03_41) swaps spells between nodes: the Feral node that was Heart of the Wild (definition 134400)
+// is Furor and the Restoration node that was Furor (134419) is Heart of the Wild; Reflection (134378) and Subtlety (134381) swap the same
+// way; Berserk's node (134417) is Primal Bite, Primal Bite's (134410) is Lacerate. The builds name the new spells so that every node
+// keeps the points it had, and the tiers below them still open.
 constexpr TalentPick kDruidFeralCat[] = {
     { "Ferocity", 5 }, { "Feral Swiftness", 2 }, { "Sharpened Claws", 3 }, { "Shredding Attacks", 2 },
-    { "Predatory Strikes", 3 }, { "Blood Frenzy", 2 }, { "Savage Fury", 2 }, { "Heart of the Wild", 5 },
-    { "Leader of the Pack", 1 }, { "Furor", 5 }, { "Rend and Tear", 5 }, { "Brutal Impact", 2 },
-    { "Feral Instinct", 5 }, { "Natural Shapeshifter", 3 }, { "Berserk", 1 }, { "Subtlety", 2 }, { "Reflection", 3 },
+    { "Predatory Strikes", 3 }, { "Blood Frenzy", 2 }, { "Savage Fury", 2 }, { "Furor", 5 },
+    { "Leader of the Pack", 1 }, { "Heart of the Wild", 5 }, { "Rend and Tear", 5 }, { "Brutal Impact", 2 },
+    { "Feral Instinct", 5 }, { "Natural Shapeshifter", 3 }, { "Berserk|Primal Bite", 1 }, { "Reflection", 2 }, { "Subtlety", 3 },
 };
 constexpr TalentPick kDruidFeralBear[] = {
     { "Ferocity", 5 }, { "Thick Hide", 5 }, { "Feral Charge", 1 }, { "Sharpened Claws", 3 },
     { "Feral Swiftness", 2 }, { "Predatory Strikes", 3 }, { "Savage Fury", 2 }, { "Blood Frenzy", 2 },
-    { "Heart of the Wild", 5 }, { "Leader of the Pack", 1 }, { "Furor", 5 }, { "Brutal Impact", 2 },
-    { "Feral Instinct", 5 }, { "Natural Shapeshifter", 3 }, { "Subtlety", 2 }, { "Reflection", 3 },
+    { "Furor", 5 }, { "Leader of the Pack", 1 }, { "Heart of the Wild", 5 }, { "Brutal Impact", 2 },
+    { "Feral Instinct", 5 }, { "Natural Shapeshifter", 3 }, { "Lacerate", 1 }, { "Reflection", 2 }, { "Subtlety", 3 },
 };
 constexpr TalentPick kDruidRestoration[] = {
     // Nature's Swiftness (node 104921) hangs under Naturalist (node 104922, edge type 2: the parent full), so with Naturalist at 2 of 5 it was
     // refused in every support scorecard (233: "refused: Nature's Swiftness=2", readiness "Nature's Swiftness 0/1"). Naturalist in full; the three
     // points come off Improved Moonfire.
-    { "Furor", 5 }, { "Genesis", 5 }, { "Reflection", 3 }, { "Naturalist", 5 },
+    // Node swaps of the launch data: see the feral builds.
+    { "Heart of the Wild", 5 }, { "Genesis", 5 }, { "Subtlety", 3 }, { "Naturalist", 5 },
     { "Tranquil Spirit", 5 }, { "Improved Rejuvenation", 3 },
-    { "Gift of Nature", 5 }, { "Improved Regrowth", 5 }, { "Nature's Swiftness", 1 }, { "Swiftmend", 1 }, { "Subtlety", 5 },
+    { "Gift of Nature", 5 }, { "Improved Regrowth", 5 }, { "Nature's Swiftness", 1 }, { "Swiftmend", 1 }, { "Reflection", 5 },
     { "Improved Wrath", 5 }, { "Improved Moonfire", 1 },
 };
 

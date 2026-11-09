@@ -9,6 +9,8 @@
 #include "BotPersonality.h"
 #include "BotRegistry.h"
 #include "BotSnapshotView.h"
+#include "BotBridge.h"
+#include "../Fleet/BotPool.h"
 #include "../Services.h"
 #include "../Threading/IntentQueue.h"
 #include "../Util/ConfigReader.h"
@@ -224,18 +226,74 @@ std::string AreaName(uint32 area_id)
     return BotTextMgr::instance().Get("string_unknown_area");
 }
 
+// An item link the 12.x client shows as a link: the quality colour as "|cnIQ<q>:" and the item string with all its fields (id,
+// enchant, three gems, three empty, link level, spec, empty, context, bonus lists, modifiers, three relic bonus lists, crafter, use
+// enchant: Hyperlinks LinkTags::item::StoreTo). The old 1.12-style "|cFFFFFFFF|Hitem:id:0:...|h" (13 fields) was plain text in
+// the client: the bots' WTS / WTB lines had no links (PC, 2026-11-09).
 std::string ItemLink(ItemTemplate const* proto, uint8 level)
 {
     uint32 const quality = std::min<uint32>(proto->GetQuality(), MAX_ITEM_QUALITY - 1);
-    // Same hyperlink shape TrinityCore's own `.list mail` uses.
-    return Trinity::StringFormat("|c{:X}|Hitem:{}:0:0:0:0:0:0:0:{}:0:0:0:0:0|h[{}]|h|r",
-        ItemQualityColors[quality], proto->GetId(), uint32(level), proto->GetName(sWorld->GetDefaultDbcLocale()));
+    return Trinity::StringFormat("|cnIQ{}:|Hitem:{}::::::::{}::::::::::|h[{}]|h|r",
+        quality, proto->GetId(), uint32(level), proto->GetName(sWorld->GetDefaultDbcLocale()));
 }
 
-std::string QuestLink(Player const* bot, Quest const* quest)
+// A quest link as the 12.x client writes one: "quest:<id>:<content tuning id>" (LinkTags::quest::StoreTo), the title as the text.
+std::string QuestLinkOf(Quest const* quest)
 {
-    return Trinity::StringFormat("|cffffff00|Hquest:{}:{}:{}:0:0|h[{}]|h|r",
-        quest->GetQuestId(), bot->GetQuestLevel(quest), bot->GetQuestMinLevel(quest), quest->GetLogTitle());
+    return Trinity::StringFormat("|cffffff00|Hquest:{}:{}|h[{}]|h|r", quest->GetQuestId(), quest->GetContentTuningId(), quest->GetLogTitle());
+}
+
+// A fixed line without its |c / |H / |h / |r link codes ("[Linen Cloth]" stays), for the program to read.
+std::string PlainText(std::string const& text)
+{
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        if (text[i] != '|' || i + 1 >= text.size())
+        {
+            out += text[i];
+            continue;
+        }
+        char const c = text[i + 1];
+        if (c == 'c' && i + 2 < text.size() && text[i + 2] == 'n')
+        {
+            size_t const colon = text.find(':', i + 3);              // |cnIQ4:
+            i = colon == std::string::npos ? text.size() : colon;
+        }
+        else if (c == 'c')
+            i += std::min<size_t>(9, text.size() - 1 - i);          // |cAARRGGBB
+        else if (c == 'H')
+        {
+            size_t const h = text.find("|h", i + 2);                 // |Hitem:...|h
+            i = h == std::string::npos ? text.size() : h + 1;
+        }
+        else if (c == 'h' || c == 'r')
+            ++i;
+        else
+            out += text[i];
+    }
+    return out;
+}
+
+// The moment's words for the program, by text key: what happened, in plain words.
+char const* QualityWord(uint32 quality)
+{
+    switch (quality)
+    {
+        case ITEM_QUALITY_POOR:      return "a grey (junk)";
+        case ITEM_QUALITY_NORMAL:    return "a plain white";
+        case ITEM_QUALITY_UNCOMMON:  return "a green (uncommon)";
+        case ITEM_QUALITY_RARE:      return "a blue (rare)";
+        case ITEM_QUALITY_EPIC:      return "a purple (epic)";
+        case ITEM_QUALITY_LEGENDARY: return "an orange (legendary)";
+        default:                     return "a special";
+    }
+}
+
+std::string QuestLink(Player const* /*bot*/, Quest const* quest)
+{
+    return QuestLinkOf(quest);
 }
 
 // The bot's party has a real player in it (owner or any human) - the audience the broadcasts are for.
@@ -282,7 +340,8 @@ void PushChat(BotId id, ChatIntent&& chat, uint32 defer_ms)
 
 // One unsolicited party line from a companion, through every gate: chatter on, a real player in the
 // group, the bot not silenced by personality, the key's chance, then the per-group/per-bot limiter.
-void BroadcastToParty(Player* bot, std::string_view key, TextPlaceholders& ph)
+// With the bot bridge's moments on, the line is handed to the program as a moment (`what`, `detail`) instead.
+void BroadcastToParty(Player* bot, std::string_view key, TextPlaceholders& ph, char const* what, std::string const& detail)
 {
     BotTextMgr const& mgr = BotTextMgr::instance();
     if (!ChattyAi(bot, Verbosity::Normal) || !GroupHasRealPlayer(bot) || !mgr.HasKey(key))
@@ -295,6 +354,8 @@ void BroadcastToParty(Player* bot, std::string_view key, TextPlaceholders& ph)
     AddSelfPlaceholders(ph, bot->GetClass(), bot->GetRace(), bot->GetLevel(), bot->GetZoneId(), bot->GetAreaId());
     std::string text = mgr.Get(key, ph);
     if (text.empty())
+        return;
+    if (BotBridge::QueueMoment(id, what, detail, PlainText(text)))
         return;
     // A beat later, like a person glancing at the loot window or quest log before typing.
     PushChat(id, ChatIntent{ PartyChatIntent{ std::move(text) } }, urand(1500, 4000));
@@ -366,7 +427,7 @@ bool TakeSlot(Slot slot, uint64 group_low, BotId bot, uint32 now_ms)
     return true;
 }
 
-std::string GreetLine(bool follow_owner, uint64 group_low, BotId bot, uint32 now_ms)
+std::string GreetLine(bool follow_owner, uint64 group_low, BotId bot, uint32 now_ms, bool* to_program)
 {
     BotTextMgr const& mgr = BotTextMgr::instance();
     char const* key = (follow_owner && mgr.HasKey("hello_follow")) ? "hello_follow" : "hello";
@@ -374,11 +435,19 @@ std::string GreetLine(bool follow_owner, uint64 group_low, BotId bot, uint32 now
         return {};
     if (!TakeSlot(Slot::Greet, group_low, bot, now_ms))
         return {};
-    return mgr.Get(key);
+    std::string line = mgr.Get(key);
+    if (!line.empty() && BotBridge::QueueMoment(bot, "greet", follow_owner ? "you just joined your friend's group to play together"
+                                                                           : "you just joined this group", PlainText(line)))
+    {
+        if (to_program)
+            *to_program = true;
+        return {};
+    }
+    return line;
 }
 
 std::string LevelUpLine(uint8 level, uint8 cls, uint8 race, uint32 zone_id, uint32 area_id,
-                        uint64 group_low, BotId bot, uint32 now_ms)
+                        uint64 group_low, BotId bot, uint32 now_ms, bool* to_program)
 {
     BotTextMgr const& mgr = BotTextMgr::instance();
     if (!mgr.Enabled())
@@ -395,7 +464,17 @@ std::string LevelUpLine(uint8 level, uint8 cls, uint8 race, uint32 zone_id, uint
         return {};
     TextPlaceholders ph;
     AddSelfPlaceholders(ph, cls, race, level, zone_id, area_id);
-    return mgr.Get(key, ph);
+    std::string line = mgr.Get(key, ph);
+    bool const top = level >= uint8(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+    std::string const detail = "you just reached level " + std::to_string(level)
+                             + (top ? ", the top level" : level % 10 == 0 ? ", a round number" : "");
+    if (!line.empty() && BotBridge::QueueMoment(bot, "level_up", detail, PlainText(line)))
+    {
+        if (to_program)
+            *to_program = true;
+        return {};
+    }
+    return line;
 }
 
 std::string GenerateReply(std::string const& bot_name, std::string const& msg, std::string const& sender_name)
@@ -466,7 +545,8 @@ void OnItemLooted(Player* bot, uint32 item_id)
         default: return;
     }
     TextPlaceholders ph{ { "%item_link", ItemLink(proto, bot->GetLevel()) } };
-    BroadcastToParty(bot, key, ph);
+    BroadcastToParty(bot, key, ph, "loot", std::string("you looted ") + QualityWord(proto->GetQuality()) + " item: "
+                                           + proto->GetName(sWorld->GetDefaultDbcLocale()));
 }
 
 void OnQuestStatusChange(Player* bot, uint32 quest_id)
@@ -519,7 +599,16 @@ void OnQuestStatusChange(Player* bot, uint32 quest_id)
     if (!quest)
         return;
     TextPlaceholders ph{ { "%quest_link", QuestLink(bot, quest) } };
-    BroadcastToParty(bot, text_key, ph);
+    std::string const title = quest->GetLogTitle();
+    std::string detail;
+    switch (status)
+    {
+        case QUEST_STATUS_INCOMPLETE: detail = "you took the quest " + title; break;
+        case QUEST_STATUS_COMPLETE:   detail = "you finished everything the quest " + title + " asks; it can be handed in"; break;
+        case QUEST_STATUS_FAILED:     detail = "you failed the quest " + title + " (the time ran out)"; break;
+        default:                      detail = "you handed in the quest " + title; break;
+    }
+    BroadcastToParty(bot, text_key, ph, "quest", detail);
 }
 
 void OnCreatureKilled(Player* bot, Creature* killed)
@@ -547,7 +636,18 @@ void OnCreatureKilled(Player* bot, Creature* killed)
         { "%victim_name", killed->GetName() },
         { "%victim_level", std::to_string(killed->GetLevel()) },
     };
-    BroadcastToParty(bot, key, ph);
+    char const* rank = "";
+    if (killed->IsPet())
+        rank = ", someone's pet";
+    else if (killed->isWorldBoss())
+        rank = ", a world boss";
+    else if (killed->GetCreatureTemplate()->Classification == CreatureClassifications::RareElite)
+        rank = ", a rare elite";
+    else if (killed->GetCreatureTemplate()->Classification == CreatureClassifications::Rare)
+        rank = ", a rare";
+    else if (killed->GetCreatureTemplate()->Classification == CreatureClassifications::Elite)
+        rank = ", an elite";
+    BroadcastToParty(bot, key, ph, "kill", "you killed " + killed->GetName() + " (level " + std::to_string(killed->GetLevel()) + rank + ")");
 }
 
 void OnPlayerKilled(Player* bot, Player* killed)
@@ -562,7 +662,8 @@ void OnPlayerKilled(Player* bot, Player* killed)
         { "%victim_level", std::to_string(killed->GetLevel()) },
         { "%victim_class", victim_class },
     };
-    BroadcastToParty(bot, "broadcast_killed_player", ph);
+    BroadcastToParty(bot, "broadcast_killed_player", ph, "player_kill", "you killed " + killed->GetName() + ", a level "
+                     + std::to_string(killed->GetLevel()) + " " + victim_class + " of the other side");
 }
 
 void SayGoodbye(Player* bot, Player* owner)
@@ -922,8 +1023,7 @@ bool SuggestQuest(BotSnapshotView const& s, Suggestion& out)
     if (!quest)
         return false;
     out.key = "suggest_quest";
-    out.ph.emplace_back("%quest_link", Trinity::StringFormat("|cffffff00|Hquest:{}:{}:{}:0:0|h[{}]|h|r",
-        q.quest_id, uint32(q.level), uint32(q.min_level), quest->GetLogTitle()));
+    out.ph.emplace_back("%quest_link", QuestLinkOf(quest));
     out.ph.emplace_back("%quest_level", std::to_string(q.level));
     return true;
 }
@@ -1015,6 +1115,10 @@ void Suggest(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em, uint32 n
     // ike3: random (world) bots only, solo, out of instances. Companions have an owner.
     if (s.has_owner_character() || s.in_group() || !s.is_alive() || s.is_ghost() || s.in_combat()
         || s.is_in_instance() || s.in_battleground())
+        return;
+    // A scenario test squad (the raid and dungeon test bots, "Mctankwa") never posts: between runs it stood in town and filled
+    // General and Trade (PC, 2026-11-09).
+    if (::Playerbot::Pool::IsScenarioBot(s.bot_id()))
         return;
     if (ai.personality().verbosity < Verbosity::Normal)
         return;
@@ -1110,6 +1214,79 @@ void Suggest(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em, uint32 n
     std::string text = mgr.Get(sug.key, sug.ph);
     if (text.empty())
         return;
+    // With a program writing the bots' talk (Playerbot.Bridge.Talk), it writes the post from what it is about, so the channels
+    // don't repeat the same few lines; the item or quest keeps its link. Past the limit, the fixed line as before.
+    {
+        auto ph = [&](char const* k) -> std::string
+        {
+            for (auto const& [key, value] : sug.ph)
+                if (key == k)
+                    return value;
+            return {};
+        };
+        auto name_of = [](std::string const& link)
+        {
+            uint32 entry = 0;
+            std::string first;
+            std::string plain = V2::ChannelTalk::StripLinks(link, entry, first);
+            if (plain.size() >= 2 && plain.front() == '[' && plain.back() == ']')
+                plain = plain.substr(1, plain.size() - 2);
+            return plain;
+        };
+        std::string_view const key = sug.key;
+        std::string what = "chat", detail, link;
+        std::string const me = fmt::format("you are a level {} {} ({})", ph("%my_level"), ph("%my_class"), ph("%my_role"));
+        if (key == "suggest_instance")
+        { what = "lfg"; detail = fmt::format("you want a group for {}; {}", ph("%instance_name"), me); }
+        else if (key == "suggest_quest")
+        { what = "quest"; link = ph("%quest_link"); detail = fmt::format("you want help with the quest {} (level {}); {}", name_of(link), ph("%quest_level"), me); }
+        else if (key == "suggest_trade")
+        { what = "wtb"; link = ph("%category"); detail = "you want to buy " + name_of(link); }
+        else if (key == "suggest_faction")
+        { what = "rep"; detail = fmt::format("you look for people to grind {} reputation with, to {}", ph("%faction"), ph("%rep_level")); }
+        else if (key == "suggest_sell")
+        { what = "wts"; link = ph("%item_link");
+          detail = fmt::format("you sell {}{} for {}", name_of(link), ph("%item_count") != "1" ? " x" + ph("%item_count") : std::string(), ph("%cost_gold")); }
+        else
+        {
+            // What a General line is about, one of many, so the channel does not fill with the same question (8 of 10 posts were
+            // "good grinding spots at 60", PC 2026-11-09). A real quest of the bot's where it fits.
+            std::string quest_title;
+            {
+                std::vector<uint32> qs;
+                for (QuestEntry const& q : s.quests())
+                    if (q.state == 0 && !q.unachievable)
+                        qs.push_back(q.quest_id);
+                if (!qs.empty())
+                    if (Quest const* qt = sObjectMgr->GetQuestTemplate(qs[urand(0, uint32(qs.size() - 1))]))
+                        quest_title = qt->GetLogTitle();
+            }
+            static constexpr char const* kSeeds[] = {
+                "you just died to something in this zone and grumble about it, short",
+                "ask where a trainer, a vendor or the flight master is around here",
+                "a dry joke about this zone or its mobs",
+                "say you are looking for a guild, casual, and what you play",
+                "a word about the weather or the time of day here",
+                "ask which profession earns the most gold",
+                "ask if anyone is around to quest together",
+                "you are bored of this zone and ask where people go next at your level",
+                "you just got a nice drop or a level and say so, short",
+                "ask how much a mount costs, or say you are saving for one",
+                "complain about mobs respawning too fast",
+            };
+            std::size_t const n = std::size(kSeeds) + (quest_title.empty() ? 0 : 2);
+            std::size_t const pick = urand(0, uint32(n - 1));
+            if (pick < std::size(kSeeds))
+                detail = kSeeds[pick];
+            else if (pick == std::size(kSeeds))
+                detail = "ask for help with your quest " + quest_title + ", or if anyone is on it too";
+            else
+                detail = "complain about the drop rate on your quest " + quest_title;
+            detail += "; " + me + ". Not about grinding spots";
+        }
+        if (BotBridge::QueuePost(s.bot_id(), sug.channel, what, detail, text, link.empty() ? std::string() : name_of(link), link))
+            return;
+    }
     em.emit(ChatIntent{ ChannelChatIntent{ sug.channel, std::move(text) } });
 }
 
@@ -1290,6 +1467,79 @@ void BanterTick(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em)
         em.say(std::move(line));
 }
 
+// A companion's group came to a new zone: with the bot bridge's moments on, one bot of the group may say something about it
+// (there is no fixed line for this; without a program the bots stay quiet as before). Per bot the zone it was last seen in; per
+// group the zone last spoken about, so the group says it once and not again for 10 minutes.
+std::array<std::pair<std::mutex, std::unordered_map<BotId, uint32>>, kSpeechShards> g_last_zone;
+std::mutex                             g_zone_said_mtx;
+std::unordered_map<uint64, std::pair<uint32, uint32>> g_zone_said;   // group low -> (zone, when)
+
+void ZoneTick(BotAI& ai, BotSnapshotView const& s)
+{
+    if (!BotBridge::MomentsOn() || !s.is_companion_with_owner() || !s.in_group() || s.big_raid() || !s.is_alive() || !s.zone_id())
+        return;
+    uint32 old_zone = 0;
+    {
+        auto& [mtx, map] = g_last_zone[s.bot_id() % kSpeechShards];
+        std::lock_guard lk(mtx);
+        uint32& z = map[s.bot_id()];
+        old_zone = z;
+        z = s.zone_id();
+    }
+    if (!old_zone || old_zone == s.zone_id() || ai.personality().verbosity < Verbosity::Normal || s.in_combat())
+        return;
+    uint64 const group = s.group_guid().GetCounter();
+    uint32 const now_ms = s.published_at_ms();
+    {
+        std::lock_guard lk(g_zone_said_mtx);
+        auto it = g_zone_said.find(group);
+        if (it != g_zone_said.end() && (it->second.first == s.zone_id() || now_ms - it->second.second < 600000u))
+            return;
+        if (urand(1, 100) > 50)
+        {
+            g_zone_said[group] = { s.zone_id(), now_ms };   // the group's turn for this zone is used up, spoken or not
+            return;
+        }
+        if (g_zone_said.size() > 4096)
+            g_zone_said.clear();
+        g_zone_said[group] = { s.zone_id(), now_ms };
+    }
+    std::string detail = "your group just came to " + AreaName(s.zone_id());
+    if (s.is_in_dungeon())
+        detail += ", a dungeon";
+    else if (AreaTableEntry const* from = sAreaTableStore.LookupEntry(old_zone))
+        detail += std::string(" from ") + from->AreaName[sWorld->GetDefaultDbcLocale()];
+    BotBridge::QueueMoment(s.bot_id(), "new_zone", std::move(detail), {});
+}
+
+// What a banter moment is, for the program.
+char const* BanterWhat(Banter kind)
+{
+    switch (kind)
+    {
+        case Banter::Ready:    return "ready_check";
+        case Banter::Wipe:     return "wipe";
+        case Banter::Thanks:   return "rezzed";
+        case Banter::Ouch:     return "died";
+        case Banter::BossKill: return "boss_kill";
+    }
+    return "moment";
+}
+
+std::string BanterDetail(Banter kind, BotSnapshotView const& s)
+{
+    std::string const where = " in " + AreaName(s.zone_id());
+    switch (kind)
+    {
+        case Banter::Ready:    return "the group leader asked if everyone is ready, and you are";
+        case Banter::Wipe:     return "the whole group just died" + where + " (a wipe)";
+        case Banter::Thanks:   return "you were dead and a group mate just brought you back to life";
+        case Banter::Ouch:     return "you just died" + where;
+        case Banter::BossKill: return "your group just killed a boss";
+    }
+    return {};
+}
+
 void PushEmote(BotId id, uint32 emote_id, uint32 defer_ms)
 {
     Intent it{};
@@ -1301,7 +1551,7 @@ void PushEmote(BotId id, uint32 emote_id, uint32 defer_ms)
 
 } // namespace
 
-std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s)
+std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s, bool* to_program)
 {
     if (!Services::Config().behavior_party_banter())
         return {};
@@ -1313,7 +1563,14 @@ std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s)
         return {};
     if (!TakeBanterSlot(kind, s.group_guid().GetCounter(), s.bot_id(), s.published_at_ms()))
         return {};
-    return PickBanter(kind, s.cls(), ai.effective_role(s), pers);
+    std::string line = PickBanter(kind, s.cls(), ai.effective_role(s), pers);
+    if (!line.empty() && BotBridge::QueueMoment(s.bot_id(), BanterWhat(kind), BanterDetail(kind, s), line))
+    {
+        if (to_program)
+            *to_program = true;
+        return {};
+    }
+    return line;
 }
 
 void OnBossKilled(Player* killer, Creature* boss)
@@ -1355,7 +1612,9 @@ void OnBossKilled(Player* killer, Creature* boss)
         if (!spoke && TakeBanterSlot(Banter::BossKill, group->GetGUID().GetCounter(), id, now_ms))
         {
             std::string text = PickBanter(Banter::BossKill, m->GetClass(), Role::Unknown, ai->personality());
-            if (!text.empty())
+            std::string const detail = "your group just killed the boss " + boss->GetName()
+                                     + (owner_killed ? ", " + killer->GetName() + " landed the last hit" : std::string());
+            if (!text.empty() && !BotBridge::QueueMoment(id, "boss_kill", detail, text))
                 PushChat(id, ChatIntent{ PartyChatIntent{ std::move(text) } }, urand(2000, 5000));
             spoke = true;
         }
@@ -1376,6 +1635,7 @@ void SpeechTick(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& em)
     Callouts(ai, s, em, now_ms);
     Suggest(ai, s, em, now_ms);
     BanterTick(ai, s, em);
+    ZoneTick(ai, s);
 }
 
 } // namespace BotChatter

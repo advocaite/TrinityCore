@@ -63,8 +63,8 @@ NameEntry PopRandom_locked(std::vector<NameEntry>& v)
 // Single config-driven home for all instance-shared playerbot data
 // (Playerbot.SharedDatabase, default "playerbot"). Read once. Used to
 // qualify cross-DB queries so swapping the active world/character DB never
-// strands the shared bot data. NOTE: the realm-specific `characters.characters`
-// join below is intentionally NOT this schema.
+// strands the shared bot data. NOTE: the realm-specific `characters` join below
+// is intentionally NOT this schema (it uses the connection's own database).
 std::string const& SharedDb()
 {
     static std::string const db =
@@ -206,7 +206,9 @@ void BotNamePool::ReconcileOnBoot()
     // This catches SQL-wipes / mid-create crashes that bypassed Release.
     auto orphan_res = CharacterDatabase.Query(fmt::format(
         "SELECT pn.name_id FROM {}.playerbots_names pn "
-        "LEFT JOIN characters.characters c ON c.guid = pn.used_by_guid "
+        // Unqualified: the query already runs on the configured characters database, whatever its name
+        // (was characters.characters, which fails on a realm whose characters database has another name).
+        "LEFT JOIN characters c ON c.guid = pn.used_by_guid "
         "WHERE pn.is_used = 1 AND (pn.used_by_guid IS NULL OR c.guid IS NULL)",
         SharedDb()).c_str());
 

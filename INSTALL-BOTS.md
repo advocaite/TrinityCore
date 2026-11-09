@@ -55,7 +55,7 @@ with a builder script that is not part of this branch. Without them the bots and
 5. **Start the server** (bnetserver, then worldserver). The first start takes longer while the bot
    tables are created. Bot log lines go to `Playerbot.log` in your logs folder.
 6. **Install the addon.** Copy the folder `src\modules\PlayerbotV2\Addon\ForeverBots` into
-   `<your WoW folder>\_classic_beta_\Interface\AddOns\` (so you have `...\AddOns\ForeverBots\ForeverBots.toc`).
+   `<your WoW folder>\_forever_\Interface\AddOns\` (so you have `...\AddOns\ForeverBots\ForeverBots.toc`).
    On the character screen open AddOns and tick "Load out of date AddOns" if it is greyed out.
 
 ## Using the bots in game

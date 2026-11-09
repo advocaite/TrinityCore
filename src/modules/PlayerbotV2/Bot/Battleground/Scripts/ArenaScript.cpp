@@ -130,6 +130,17 @@ static ArenaGeometry const& GeometryFor(uint16_t id)
         };
         return rl;
     }
+    // Mak'gora Arena (id 1169), played in the Ring of Law (map 3200, an arena copy of Blackrock Depths): a walled round floor
+    // about 40 yards across, the teams start in tunnels behind the south and east gates. No pillars, no hazards; the rally
+    // is the ring centre (the Blackrock Depths script's own ring point).
+    if (id == 1169) {
+        static const ArenaGeometry mk = {
+            /*pillars*/ {},
+            /*hazards*/ {},
+            /*rally*/ 596.285f, -188.699f, -54.132f
+        };
+        return mk;
+    }
     // Blade's Edge (id 5) — bridge box high-ground breaks LoS both ways.
     if (id == 5 || id == 875 || id == 907 || id == 908) {
         static const ArenaGeometry be = {
@@ -233,6 +244,8 @@ ARENA_FACTORY(TolViron3,         912,  "arena_tolviron_3")
 ARENA_FACTORY(BlackRookHold3,    913,  "arena_black_rook_hold_3")
 ARENA_FACTORY(Robodrome,         1025, "arena_robodrome")
 ARENA_FACTORY(EmpyreanDomain,    1041, "arena_empyrean_domain")
+// Classic 1.60 (Forever) arena.
+ARENA_FACTORY(Makgora,           1169, "arena_makgora")
 
 #undef ARENA_FACTORY
 

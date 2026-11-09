@@ -29,6 +29,13 @@ struct RaidOrder
     bool  move = false;
     float move_x = 0.f, move_y = 0.f, move_z = 0.f;
     char const* move_reason = "";   // static string literal (log/diag only)
+    // The bot stands at its encounter role position (a Stand rule, within its tolerance): the generic in-fight formation walk and the
+    // clump separation leave it there (each would walk it off the post, and the next brain pass walk it back).
+    bool at_post = false;
+    // The enemy the bot's Stand post is placed for (set while the post applies, on it or walking back): the ranged spacing step does not
+    // walk the bot away from it. The post already says where to stand against that enemy (Victor Nefarius' Shadow Blink lands him next to
+    // a random raider every 20-25 s; bwl_nefarian 1108h: 96 steps back from him in one pull, the camp scattered).
+    ObjectGuid post_enemy;
 
     // Melee bot whose target stands inside a hazard that applies to it
     // (Inferno, Blast Wave): pause the rotation so it does not chase back in.

@@ -146,7 +146,7 @@ inline int32 ManaPct(BotSnapshotView const& s)
 // rules, every one rolling Renew on every raider a pulse hit (57% overheal, the holy priest out of mana). The name is the older "raid" one.
 inline bool RaidHealing(BotSnapshotView const& s)
 {
-    return EfficiencyRulesApply(s.is_in_raid() || s.in_raid_group(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
+    return EfficiencyRulesApply(s.raid_rules(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
 }
 
 // Playerbot.Behavior.HealClaims (default on): the raid in-flight heal dedupe, the HoT claims and
@@ -609,9 +609,14 @@ inline Patient PickPatient(BotSnapshotView const& s, GroupSnapshotView const& g,
     HealClaims const claims = raid ? CopyHealClaims(s.published_at_ms()) : HealClaims{};
     bool const opening_hold = raid && (TankOpeningOnBoss(s) || HealerNearTankThreat(s));
     int32 const stand_down_pct = raid ? HealerStandDownPatientPct(s, g) : kHealerNoStandDown;
+    // The owner's "focus heal <names>": only those players and the healer itself are patients (the emitter refuses the rest).
+    std::vector<ObjectGuid> const& heal_only = s.raw().heal_only;
+    auto const focus_heal_skips = [&](ObjectGuid guid)
+    { return !heal_only.empty() && guid != s.guid() && std::find(heal_only.begin(), heal_only.end(), guid) == heal_only.end(); };
     auto consider = [&](Patient const& raw, bool assigned, bool own = false)
     {
         if (!raw.valid || raw.max_hp <= 0) return;
+        if (focus_heal_skips(raw.guid)) return;
         Patient p = raw;
         if (opening_hold && !raw.tank && raw.actual_pct >= kHealOpeningHoldPct) return;
         if (raw.actual_pct >= stand_down_pct) return;
@@ -1412,6 +1417,23 @@ inline void DoAssignedDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
         Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
         if (Classic::IsCurseDispelSpell(d.spell))
             Classic::NoteRaidSupport(Classic::RaidSupportKind::Decurse, ctx.bot.map_id());
+    }
+}
+
+// A member taken out of the fight by a debuff this bot can remove (Classic::PickControlDispel): before the heals.
+inline bool ShouldControlDispel(ApPredicateContext const& ctx)
+{
+    if (ctx.bot.is_casting())
+        return false;
+    return Classic::PickControlDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot }).spell != 0;
+}
+inline void DoControlDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    Classic::CastPick const d = Classic::PickControlDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot });
+    if (d.spell && e.cast(d.spell, d.target))
+    {
+        WithHealTiming(ctx.bot, [&](HealTiming& t) { t.dispel_key = d.key; t.dispel_ms = ctx.bot.published_at_ms(); return 0; });
+        Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
     }
 }
 

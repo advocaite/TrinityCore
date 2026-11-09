@@ -1113,10 +1113,33 @@ struct classic_mob_qiraji_mindslayer : public ScriptedAI
 ## spell_aq40_drain_mana
 ######*/
 
+enum ClassicAQ40DrainMana : uint32
+{
+    SPELL_AQ40_DRAIN_MANA_ERADICATOR        = 26457,
+    SPELL_AQ40_DRAIN_MANA_ERADICATOR_EFFECT = 25755,   // 250 mana from the target, refills the caster
+    SPELL_AQ40_DRAIN_MANA_NULLIFIER         = 26559,
+    SPELL_AQ40_DRAIN_MANA_NULLIFIER_EFFECT  = 25671    // 500 mana
+};
+
 // 26457 - Drain Mana (Obsidian Eradicator)
 // 26559 - Drain Mana (Obsidian Nullifier)
+// VMaNGOS SpellEffects.cpp (script effect 26457 / 26559): each of up to 12 hit mana users gets the single-target Drain Mana
+// (25755: 250 mana, 25671: 500 mana) cast on it, which also refills the caster. The area spell is a script effect in the client
+// data, so without this hit handler it drained nothing and the Eradicators never reached the full mana that fires Shock Blast.
 class classic_spell_aq40_drain_mana : public SpellScript
 {
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_AQ40_DRAIN_MANA_ERADICATOR_EFFECT, SPELL_AQ40_DRAIN_MANA_NULLIFIER_EFFECT });
+    }
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        uint32 const effectSpell = GetSpellInfo()->Id == SPELL_AQ40_DRAIN_MANA_ERADICATOR ? SPELL_AQ40_DRAIN_MANA_ERADICATOR_EFFECT
+                                                                                         : SPELL_AQ40_DRAIN_MANA_NULLIFIER_EFFECT;
+        GetCaster()->CastSpell(GetHitUnit(), effectSpell, true);
+    }
+
     void FilterTargets(std::list<WorldObject*>& targets)
     {
         // Avoid targeting players with no mana
@@ -1134,6 +1157,7 @@ class classic_spell_aq40_drain_mana : public SpellScript
     void Register() override
     {
         OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(classic_spell_aq40_drain_mana::FilterTargets, EFFECT_ALL, TARGET_UNIT_SRC_AREA_ENEMY);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_aq40_drain_mana::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
     }
 };
 

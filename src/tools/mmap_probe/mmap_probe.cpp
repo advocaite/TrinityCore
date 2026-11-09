@@ -401,26 +401,107 @@ int RunQuery(dtNavMesh* navMesh, dtNavMeshQuery* query,
     return ok ? 0 : 1;
 }
 
+// Crumb mode: the whole Detour route src -> dst (no 74-polygon cap), sampled every `step` yards, one "CRUMB x y z" line per point
+// in TC coords, first and last included. For dungeon route_waypoints: each sample's height is read from the route's own polygon under
+// it, so a crumb on a walkway over a lower floor keeps the walkway's height. Returns 0 iff the route reaches dst's polygon.
+int RunCrumbs(dtNavMeshQuery* query, float step,
+    float srcX, float srcY, float srcZ,
+    float dstX, float dstY, float dstZ)
+{
+    dtQueryFilter filter;
+    filter.setIncludeFlags(NAV_GROUND | NAV_GROUND_STEEP | NAV_WATER | NAV_ROAD);
+    filter.setExcludeFlags(0);
+    float const extents[3] = { 3.0f, 5.0f, 3.0f };
+    float const startPoint[3] = { srcY, srcZ, srcX };
+    float const endPoint[3] = { dstY, dstZ, dstX };
+    dtPolyRef startRef = 0, endRef = 0;
+    float startClosest[3], endClosest[3];
+    if (dtStatusFailed(query->findNearestPoly(startPoint, extents, &filter, &startRef, startClosest)) || !startRef ||
+        dtStatusFailed(query->findNearestPoly(endPoint, extents, &filter, &endRef, endClosest)) || !endRef)
+    {
+        std::printf("STATUS: FARFROMPOLY\n");
+        return 1;
+    }
+
+    constexpr int MAX_ROUTE_POLYS = 4096;
+    std::vector<dtPolyRef> polys(MAX_ROUTE_POLYS);
+    int polyCount = 0;
+    dtStatus s = query->findPath(startRef, endRef, startClosest, endClosest, &filter, polys.data(), &polyCount, MAX_ROUTE_POLYS);
+    if (dtStatusFailed(s) || polyCount == 0)
+    {
+        std::printf("STATUS: NOPATH\n");
+        return 1;
+    }
+    bool const reached = polys[polyCount - 1] == endRef && !(s & DT_PARTIAL_RESULT);
+
+    std::vector<float> pts(MAX_ROUTE_POLYS * 3);
+    std::vector<unsigned char> flags(MAX_ROUTE_POLYS);
+    std::vector<dtPolyRef> refs(MAX_ROUTE_POLYS);
+    int n = 0;
+    query->findStraightPath(startClosest, endClosest, polys.data(), polyCount, pts.data(), flags.data(), refs.data(), &n,
+        MAX_ROUTE_POLYS, DT_STRAIGHTPATH_ALL_CROSSINGS);
+    std::printf("  route: polys=%d points=%d reached_endRef=%d\n", polyCount, n, reached ? 1 : 0);
+    if (n == 0)
+        return 1;
+
+    auto print = [](float const* p) { std::printf("CRUMB %.1f %.1f %.1f\n", p[2], p[0], p[1]); };
+    print(&pts[0]);
+    float carry = 0.0f;   // distance walked past the last sample on the previous segments
+    for (int i = 0; i + 1 < n; ++i)
+    {
+        float const* a = &pts[i * 3];
+        float const* b = &pts[(i + 1) * 3];
+        float const seg = dtVdist(a, b);
+        float t = step - carry;
+        for (; t <= seg; t += step)
+        {
+            float p[3];
+            dtVlerp(p, a, b, t / seg);
+            // The height of the route polygon under the point: of the corridor's polygons that contain it, the one nearest the line.
+            float best = 1e9f, h = p[1];
+            for (int k = 0; k < polyCount; ++k)
+            {
+                float hh;
+                if (dtStatusSucceed(query->getPolyHeight(polys[k], p, &hh)) && std::fabs(hh - p[1]) < best)
+                {
+                    best = std::fabs(hh - p[1]);
+                    h = hh;
+                }
+            }
+            p[1] = h;
+            print(p);
+        }
+        carry = seg - (t - step);
+    }
+    if (carry > 0.5f)
+        print(&pts[(n - 1) * 3]);
+    std::printf("STATUS: %s\n", reached ? "OK" : "PARTIAL");
+    return reached ? 0 : 1;
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 3)
     {
         std::fprintf(stderr,
             "Usage: %s <mmaps_dir> <mapId> <srcX> <srcY> <srcZ> <dstX> <dstY> <dstZ>\n"
-            "       %s <mmaps_dir> <mapId> --batch   (reads 'sx sy sz dx dy dz' lines from stdin)\n",
-            argv[0], argv[0]);
+            "       %s <mmaps_dir> <mapId> --batch   (reads 'sx sy sz dx dy dz' lines from stdin)\n"
+            "       %s <mmaps_dir> <mapId> --crumbs <step> <srcX> <srcY> <srcZ> <dstX> <dstY> <dstZ>\n",
+            argv[0], argv[0], argv[0]);
         return 2;
     }
 
     std::string dir = argv[1];
     uint32_t mapId = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
     bool batch = (argc == 4 && std::strcmp(argv[3], "--batch") == 0);
-    if (!batch && argc != 9)
+    bool const crumbs = (argc == 11 && std::strcmp(argv[3], "--crumbs") == 0);
+    if (!batch && !crumbs && argc != 9)
     {
         std::fprintf(stderr,
             "Usage: %s <mmaps_dir> <mapId> <srcX> <srcY> <srcZ> <dstX> <dstY> <dstZ>\n"
-            "       %s <mmaps_dir> <mapId> --batch   (reads 'sx sy sz dx dy dz' lines from stdin)\n",
-            argv[0], argv[0]);
+            "       %s <mmaps_dir> <mapId> --batch   (reads 'sx sy sz dx dy dz' lines from stdin)\n"
+            "       %s <mmaps_dir> <mapId> --crumbs <step> <srcX> <srcY> <srcZ> <dstX> <dstY> <dstZ>\n",
+            argv[0], argv[0], argv[0]);
         return 2;
     }
 
@@ -429,6 +510,12 @@ int main(int argc, char** argv)
     // Parsed early (and printed here) only for the single-shot path, so the
     // overall print order stays byte-identical to the original tool.
     float srcX = 0, srcY = 0, srcZ = 0, dstX = 0, dstY = 0, dstZ = 0;
+    float crumbStep = 0.0f;
+    if (crumbs)
+    {
+        crumbStep = std::strtof(argv[4], nullptr);
+        argv += 2;   // the coordinates follow the step
+    }
     if (!batch)
     {
         srcX = std::strtof(argv[3], nullptr);
@@ -476,7 +563,9 @@ int main(int argc, char** argv)
     }
 
     int rc = 0;
-    if (!batch)
+    if (crumbs)
+        rc = crumbStep > 0.0f ? RunCrumbs(query, crumbStep, srcX, srcY, srcZ, dstX, dstY, dstZ) : 2;
+    else if (!batch)
     {
         rc = RunQuery(navMesh, query, srcX, srcY, srcZ, dstX, dstY, dstZ);
     }

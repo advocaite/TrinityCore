@@ -31,6 +31,8 @@
 #include "Bot/TownErrand.h"
 #include "Bot/TownErrandConfig.h"
 #include "Bot/ClassicUpkeep.h"
+#include "Combat/Apl/ApClassicHeal.h"   // idle:kind_heal: the class heal and its rank
+#include "ClassicSpec.h"                // Classic::IsSingleSpecClass
 #include "SharedDefines.h"
 #include "Fleet/GateDuels.h"
 #include "Fleet/Gathering.h"
@@ -42,7 +44,10 @@
 #include "Bot/ChannelChat.h"
 #include "Bot/PartyLink.h"
 #include "Bot/BotRegistry.h"
+#include "Bot/BotBridge.h"
+#include "Fleet/BotPool.h"
 #include "Fleet/OwnerRegistry.h"
+#include "Fleet/WorldPvpConfig.h"
 #include "Util.h"
 #include "Log.h"
 #include "Config.h"
@@ -102,6 +107,101 @@ bool AssistFriendPvpFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView 
     if (best_attacker.IsEmpty() || best_d2 >= 40.0f * 40.0f) return false;
     if (!emit.start_attack(best_attacker)) return false;
     ai.set_last_rule_fired("idle:assist_friend_pvp");
+    return true;
+}
+
+// ---------- idle:world_pvp_flag / idle:world_pvp_ambush ----------
+// World PvP of the world bots on a PvP or free-for-all realm (Fleet/WorldPvp.h). A flagged bot keeps its PvP flag on as a player who
+// typed /pvp; a hunter (a flagged bot too) sometimes attacks an enemy it sees, a roll per enemy every RollMinutes. Only free world
+// bots: never a companion, a hired bot or a bot in a group, never in a battleground, dungeon, raid or capital.
+namespace F = ::Playerbot::V2::Fleet;
+
+static bool FreeWorldBotForPvp(BotSnapshotView const& s)
+{
+    return s.is_alive() && !s.has_owner_character() && !s.in_group() && !s.in_battleground() && !s.is_in_instance()
+        && !s.is_in_dungeon() && !s.is_sanctuary() && !::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id());
+}
+
+// The PvP button of the bot follows its temper: on for a flagged bot (it stays flagged everywhere); off for the others, which then
+// carry the flag only where the realm puts it on everyone (hostile territory), and lose it 5 minutes after leaving it, as a player.
+// A bot whose button was turned on here and whose temper is no longer flagged (the setting changed, a normal realm now) turns it off.
+static bool WantsPvpFlag(BotSnapshotView const& s)
+{
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    return F::IsPvpFlagged(w.cfg, w.realm, uint64(s.bot_id()));
+}
+
+bool WorldPvpFlagGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (s.in_combat() || s.has_owner_character() || s.in_group() || !s.is_alive() || s.in_battleground()) return false;
+    return WantsPvpFlag(s) != s.pvp_wanted();
+}
+
+bool WorldPvpFlagFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    if (!emit.set_pvp(WantsPvpFlag(s))) return false;
+    ai.set_last_rule_fired("idle:world_pvp_flag");
+    return true;
+}
+
+bool WorldPvpAmbushGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (s.in_combat() || s.is_casting() || !FreeWorldBotForPvp(s)) return false;
+    if (s.hp_pct() < 80 || s.raw().movement.is_mounted) return false;
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    return F::IsPvpHunter(w.cfg, w.realm, uint64(s.bot_id()));
+}
+
+bool WorldPvpAmbushFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    uint64 const now_s = uint64(GameTime::GetGameTime());
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    NearbyUnit const* best = nullptr;
+    float best_d = 35.0f;   // what a player sees coming: a rogue still has to walk in from here
+    auto consider = [&](NearbyUnit const& u)
+    {
+        if (!u.is_player || u.hp <= 0 || u.untargetable || !u.in_los || u.guid == s.raw().guid) return;
+        if (!F::LevelOk(w.cfg, uint32(s.level()), uint32(u.level))) return;
+        bool const is_bot = Services::Registry().has(BotId(u.guid.GetCounter()));
+        if (is_bot && !w.cfg.attack_bots) return;
+        if (ai.start_attack_recently_refused(u.guid.GetCounter(), now_ms)) return;
+        float const d = std::hypot(u.x - bx, u.y - by);
+        if (d >= best_d || std::fabs(u.z - bz) > 12.0f) return;
+        if (!F::AttackRoll(w.cfg, w.realm, uint64(s.bot_id()), u.guid.GetCounter(), now_s)) return;
+        best = &u;
+        best_d = d;
+    };
+    for (auto const& u : s.nearby_enemies())
+        consider(u);
+    // Free-for-all: the bot's own faction is fair game too (start_attack is refused by the server where it is not, and that
+    // target is then left alone for a while).
+    if (w.realm == F::RealmPvp::Ffa)
+        for (auto const& u : s.nearby_friends())
+            if (!u.is_in_group)
+                consider(u);
+    if (!best) return false;
+    // The class's own first hit (F::PvpOpeners): the first one known, ready and in range. A caster that opens with a spell does not
+    // also start a melee swing (it would run in); a warrior's Charge and every class without a fitting opener start the attack.
+    bool const in_form = s.has_aura(768) || s.has_aura(5487) || s.has_aura(9634);   // cat, bear, dire bear
+    F::PvpOpener const* list = nullptr;
+    int const n = F::PvpOpeners(s.cls(), in_form, list);
+    bool const has_seal = s.has_aura(21084) || s.has_aura(20375) || s.has_aura(20165) || s.has_aura(20166) || s.has_aura(21082);
+    uint32 opener = 0;
+    for (int i = 0; i < n && !opener; ++i)
+    {
+        F::PvpOpener const& o = list[i];
+        if (best_d < o.min_yards || best_d > o.max_yards || (o.needs_seal && !has_seal)) continue;
+        if (s.knows_spell(o.spell) && s.is_ready(o.spell)) opener = o.spell;
+    }
+    bool const melee_too = !opener || opener == 100;   // Charge, or no opener: swing as well
+    if (opener && !emit.cast(opener, best->guid)) opener = 0;
+    if ((melee_too || !opener) && !emit.start_attack(best->guid) && !opener) return false;
+    ai.set_last_rule_fired("idle:world_pvp_ambush");
+    TC_LOG_INFO("playerbot.v2", "[world_pvp] {} lvl={} cls={} zone={} attacks {} {} lvl={} at {:.0f} y, opener {} ({} realm)", s.name(),
+                uint32(s.level()), uint32(s.cls()), s.zone_id(), Services::Registry().has(BotId(best->guid.GetCounter())) ? "bot" : "player",
+                best->guid.GetCounter(), uint32(best->level), best_d, opener, w.realm == F::RealmPvp::Ffa ? "free-for-all" : "PvP");
     return true;
 }
 
@@ -200,7 +300,7 @@ bool PvpHelpCalloutFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView c
 // Playerbot.World.TownLife (default 1): the shows below and the level-gated LFG yells. Read once at start.
 bool TownLifeEnabled()
 {
-    static bool const on = sConfigMgr->GetBoolDefault("Playerbot.World.TownLife", true);
+    static bool const on = sConfigMgr->GetBoolDefault("Playerbot.World.TownLife", true, true);
     return on;
 }
 
@@ -554,11 +654,42 @@ bool FidgetFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
 // I-P3h: needs a NearbyUnit.is_bot flag (owned by BotSnapshotBuilder)
 // to fully suppress bot-on-bot greets — until then the hard rate-limit
 // keeps it from looking robotic.
+//
+// 2026-11-09: on a live realm a stranger walking through Stormwind is greeted now and then, not by every bot he passes (with fifty
+// bots in town the old per-bot lockout made five waves a minute, which read as robotic). So a real player is greeted by at most one
+// bot every two and a half to four minutes, realm-wide (TakePasserbySlot); bots never greet each other this way (they are in the
+// registry); the greeting varies (a wave, a nod, a bow, a salute); and with a program writing the bots' talk (Playerbot.Bridge.Talk)
+// one greeting in two also comes with a short /say line to him (BotBridge::QueueGreet).
+std::mutex g_passerby_mtx;
+std::unordered_map<uint64, uint32> g_passerby_ms;   // real player guid low -> when a bot last greeted him
+
+bool PasserbySlotFree(uint64 player, uint32 now_ms)
+{
+    uint32 const gap = 150000u + uint32((player * 2654435761ull) % 90000u);
+    std::lock_guard<std::mutex> lk(g_passerby_mtx);
+    auto it = g_passerby_ms.find(player);
+    return it == g_passerby_ms.end() || now_ms - it->second >= gap;
+}
+
+bool TakePasserbySlot(uint64 player, uint32 now_ms)
+{
+    uint32 const gap = 150000u + uint32((player * 2654435761ull) % 90000u);
+    std::lock_guard<std::mutex> lk(g_passerby_mtx);
+    if (g_passerby_ms.size() > 4096)
+        g_passerby_ms.clear();
+    auto [it, fresh] = g_passerby_ms.try_emplace(player, now_ms);
+    if (!fresh && now_ms - it->second < gap)
+        return false;
+    it->second = now_ms;
+    return true;
+}
+
 bool ReactToPasserbyGate(BotSnapshotView const& s, BotAI& ai,
                          GroupSnapshotView const&, uint32)
 {
     if (ai.personality().verbosity < Verbosity::Normal) return false;
     if (!s.is_alive()) return false;
+    if (::Playerbot::Pool::IsScenarioBot(s.bot_id())) return false;   // a test squad does not greet the town
     if (s.is_moving() || s.in_combat() || s.is_casting()) return false;
     if (s.raw().movement.is_mounted) return false;
     if (s.raw().social_events.has_duel_request) return false;
@@ -571,6 +702,8 @@ bool ReactToPasserbyGate(BotSnapshotView const& s, BotAI& ai,
         if (!u.is_player) continue;
         if (u.is_in_group) continue;     // skip grouped players (likely in a party)
         if (u.hp <= 0) continue;
+        if (Services::Registry().has(u.guid.GetCounter())) continue;   // another bot
+        if (!PasserbySlotFree(u.guid.GetCounter(), s.published_at_ms())) continue;
         return true;
     }
     return false;
@@ -603,6 +736,8 @@ bool ReactToPasserbyFire(BotSnapshotView const& s, BotAI& ai,
         if (u.hp <= 0) continue;
         if (u.guid == s.raw().guid) continue;
         if (in_our_group(u.guid)) continue;
+        if (Services::Registry().has(u.guid.GetCounter())) continue;
+        if (!PasserbySlotFree(u.guid.GetCounter(), now_ms)) continue;
         // Per-target hard lockout (10 min, ActionKind::GreetPlayer).
         if (ai.action_recently_tried(BotAI::ActionKind::GreetPlayer,
                                      u.guid.GetCounter(), now_ms))
@@ -612,11 +747,15 @@ bool ReactToPasserbyFire(BotSnapshotView const& s, BotAI& ai,
         if (d2 < best_d2) { best_d2 = d2; best = u.guid; }
     }
     if (best.IsEmpty()) return false;
-    // Face them, then wave (3 = EMOTE_ONESHOT_WAVE aimed at the target).
+    if (!TakePasserbySlot(best.GetCounter(), now_ms)) return false;   // another bot greeted him meanwhile
+    // Face them, then a wave (3), a nod (273), a bow (2) or a salute (66), aimed at him.
+    static constexpr uint32 kGreets[] = { 3, 3, 3, 273, 273, 2, 66 };
     emit.face_target(best);
-    if (!emit.perform_emote(3, best)) return false;
+    if (!emit.perform_emote(kGreets[urand(0, uint32(std::size(kGreets) - 1))], best)) return false;
     ai.note_action_retry(BotAI::ActionKind::GreetPlayer,
                          best.GetCounter(), now_ms);
+    if (best_d2 <= 15.0f * 15.0f && urand(0, 1))
+        BotBridge::QueueGreet(s.bot_id(), best);
     ai.set_last_rule_fired("idle:react_to_passerby");
     return true;
 }
@@ -1297,6 +1436,7 @@ bool GrindRoamGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
         if (!u.guid.IsCreature() || u.no_xp_kill || u.is_pacified || u.untargetable) continue;
         if (u.level > lvl + 4u || u.hp_pct() < 50 || u.victim != ObjectGuid::Empty) continue;
         if (V2::ShareMobs::LeaveMob(s, u)) continue;   // a real player's: not ours to fight
+        if (V2::ShareMobs::LeaveElite(s, u)) continue;   // elites and rares are left to players
         return false;   // something to fight in reach: the engage rule takes it
     }
     return true;
@@ -1357,15 +1497,16 @@ bool CampfireFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     return true;
 }
 
-// ---------- idle:kind_buff / idle:kind_help / idle:kind_rez ----------
+// ---------- idle:kind_buff / idle:kind_heal / idle:kind_help / idle:kind_rez ----------
 // Small kindnesses of a world bot for a real player it passes (Playerbot.World.Kindness, Fleet/StrangerBoard.h): a priest's
-// Fortitude, a mage's Intellect or a druid's Mark on a player who lacks it, a hand against the mob of a player losing the fight, a
-// resurrection for a player lying dead (not released) next to it. Each is rare: one per player per kind per cooldown, whoever
+// Fortitude, a mage's Intellect or a druid's Mark on a player who lacks it, a heal from a priest, druid, paladin or shaman for a hurt
+// player, a hand against the mob of a player losing the fight, a resurrection for a player lying dead (not released) next to it. Each is rare: one per player per kind per cooldown, whoever
 // gives it, and the bot's own rule interval on top.
 constexpr float kKindBuffRange = 28.0f;
 constexpr float kKindHelpRange = 35.0f;
 constexpr float kKindRezRange  = 28.0f;
-constexpr uint32 kKindHelpCooldownMs = 180000u;
+constexpr float kKindHealRange = 35.0f;   // heals reach 40: slack for the board's one-second cadence
+constexpr int32 kKindHealManaPct = 40;
 constexpr uint32 kKindRezCooldownMs  = 120000u;
 
 bool KindFree(BotSnapshotView const& s)
@@ -1433,9 +1574,75 @@ bool KindBuffFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     return true;
 }
 
+// The heal a passing healer-class bot gives (the out-of-combat top-up heal of its class, Combat/Apl/ApClassicHeal.h), 0 = none:
+// not a healer class, in a druid form, short of mana or the spell not ready.
+uint32 KindHealSpell(BotSnapshotView const& s)
+{
+    if (!Classic::IsSingleSpecClass(s.cls()) || s.power_pct(POWER_MANA) < kKindHealManaPct) return 0;
+    if (s.cls() == CLASS_DRUID)
+        for (uint32 form : { 768u, 5487u, 9634u, 783u, 1066u, 24858u })   // Cat, Bear, Dire Bear, Travel, Aquatic, Moonkin
+            if (s.has_aura(form)) return 0;
+    uint32 const spell = Combat::ClassicHeal::OocHealSpell(s);
+    return spell && s.is_ready(spell) ? spell : 0;
+}
+
+V2::Strangers::Stranger const* KindHealTarget(BotSnapshotView const& s, std::vector<V2::Strangers::Stranger> const& list)
+{
+    uint32 const pct = Services::Config().kindness_heal_hp_pct();
+    if (!pct) return nullptr;
+    float bx, by, bz; s.position(bx, by, bz);
+    return V2::Strangers::PickHealTarget(list, s.map_id(), s.is_alliance(), s.group_guid().GetCounter(), bx, by, kKindHealRange,
+                                         uint8(pct), s.is_pvp());
+}
+
+bool KindHealGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (!KindFree(s) || s.in_combat() || !KindHealSpell(s)) return false;
+    auto const list = V2::Strangers::Board::Get().Current();
+    return list && !list->empty() && KindHealTarget(s, *list);
+}
+
+bool KindHealFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    uint32 const spell = KindHealSpell(s);
+    auto const list = V2::Strangers::Board::Get().Current();
+    V2::Strangers::Stranger const* t = spell && list ? KindHealTarget(s, *list) : nullptr;
+    if (!t) return false;
+    // The rank for what he is missing, one the bot can pay (a stranger at 55% gets a small heal, not the top rank).
+    float const missing = float(t->max_hp > t->hp ? t->max_hp - t->hp : 0u);
+    uint32 const rank = Combat::ClassicHeal::AffordableRank(s, spell, Combat::ClassicHeal::PlanRank(s, spell, missing, true).rank);
+    if (!rank) return false;
+    auto& board = V2::Strangers::Board::Get();
+    if (!board.cooldowns.Take(t->guid, V2::Strangers::Kind::Heal, s.published_at_ms(), Services::Config().kindness_heal_cd_ms()))
+    {
+        board.cooldown_skips.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    ObjectGuid const target = ObjectGuid::Create<HighGuid::Player>(t->guid);
+    // A heal with a cast time is refused while the bot walks: it stops for it, as a player would, and walks on after.
+    if (s.is_moving())
+        emit.stop_movement(true);
+    emit.face_target(target);
+    if (!emit.cast_rank(rank, target))
+    {
+        board.cast_fails.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (urand(0, 3) == 0)
+    {
+        static constexpr char const* kLines[] = { "there you go", "patched you up", "heal inc", "careful out there", "you looked like you needed that" };
+        emit.say_world(kLines[urand(0, uint32(std::size(kLines)) - 1)]);
+    }
+    board.heals.fetch_add(1, std::memory_order_relaxed);
+    TC_LOG_INFO("playerbot.v2", "[kindness] {} heals a passing player (guid {}) at {}% with {}", s.name(), t->guid, t->hp_pct, rank);
+    ai.set_last_rule_fired("idle:kind_heal");
+    return true;
+}
+
 bool KindHelpGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
 {
     if (!KindFree(s) || s.in_combat() || s.hp_pct() < 60) return false;
+    if (Services::Config().kindness_help_hp_pct() == 0) return false;   // HelpHpPct = 0: no help
     auto const list = V2::Strangers::Board::Get().Current();
     if (!list || list->empty()) return false;
     float bx, by, bz; s.position(bx, by, bz);
@@ -1458,7 +1665,7 @@ bool KindHelpFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         if (u.guid.IsCreature() && u.victim == player && u.hp > 0 && !u.untargetable) { mob = &u; break; }
     if (!mob) return false;
     auto& board = V2::Strangers::Board::Get();
-    if (!board.cooldowns.Take(t->guid, V2::Strangers::Kind::Help, s.published_at_ms(), kKindHelpCooldownMs)) return false;
+    if (!board.cooldowns.Take(t->guid, V2::Strangers::Kind::Help, s.published_at_ms(), Services::Config().kindness_help_cd_ms())) return false;
     if (!emit.start_attack(mob->guid)) return false;
     board.helps.fetch_add(1, std::memory_order_relaxed);
     TC_LOG_INFO("playerbot.v2", "[kindness] {} helps a player (guid {}) at {}% against {}", s.name(), t->guid, t->hp_pct, mob->entry);
@@ -1613,6 +1820,17 @@ void RegisterAmbientRules(IdleRuleRegistry& r)
     }
     {
         IdleRule rule;
+        rule.name     = "idle:kind_heal";
+        // Above the hand against his mob (142): a healer passing a player losing a fight heals him rather than hitting the mob.
+        // Looked at every 2 s so a healer walking by (in reach for a few seconds) notices; the per-player cooldown keeps it rare.
+        rule.priority = 144;
+        rule.gate     = &KindHealGate;
+        rule.fire     = &KindHealFire;
+        rule.min_interval_ms = 2000;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
         rule.name     = "idle:kind_help";
         rule.priority = 142;
         rule.gate     = &KindHelpGate;
@@ -1675,6 +1893,26 @@ void RegisterAmbientRules(IdleRuleRegistry& r)
         rule.priority = 705;
         rule.gate     = &AssistFriendPvpGate;
         rule.fire     = &AssistFriendPvpFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:world_pvp_ambush";
+        // Just under the PvP defence of a friend (705): helping comes first, then the hunt. A roll per enemy per RollMinutes, so a
+        // look every second is enough.
+        rule.priority = 704;
+        rule.min_interval_ms = 1000;
+        rule.gate     = &WorldPvpAmbushGate;
+        rule.fire     = &WorldPvpAmbushFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:world_pvp_flag";
+        rule.priority = 140;
+        rule.min_interval_ms = 30000;
+        rule.gate     = &WorldPvpFlagGate;
+        rule.fire     = &WorldPvpFlagFire;
         r.register_rule(std::move(rule));
     }
     {

@@ -39,6 +39,9 @@ namespace
 // lfg_proposal_accept): the owner queued the group. Repairs and new trainer spells come free (BackfillOne).
 bool IsWorldErrand(std::string_view name)
 {
+    // Taking the quest from an item already in the bags goes nowhere, so a companion does it too.
+    if (name == "idle:quest_start_item")
+        return false;
     static constexpr std::string_view kPrefixes[] = {
         "idle:ah_", "idle:autoact_dispatch", "idle:bag_hearth", "idle:bags_full_recover", "idle:bank_deposit",
         "idle:calendar_", "idle:capital_bag_run", "idle:craft_order_", "idle:critical_repair", "idle:dual_spec_switch",
@@ -57,6 +60,23 @@ bool IsWorldErrand(std::string_view name)
             return true;
     return false;
 }
+}
+
+// A member of a bot-led group whose leader is here: State_InGroup keeps it at the leader's side (follow slack 6-13 y), so an
+// errand of its own pulls it away, the follow pulls it back, and it runs to and fro (Stormwind 2026-11-06: follow_recall against
+// travel_plan_walk / wander_to_quest_hub / guild staging every second or two, 28 of 38 moving bots). The leader runs the errands
+// and the group goes with it, as a companion goes with its owner.
+static bool FollowsBotLeader(BotSnapshotView const& s, GroupSnapshotView const& g)
+{
+    if (!s.in_group() || !g.exists() || !g.leader_is_bot()) return false;
+    ObjectGuid const leader = g.leader();
+    if (leader.IsEmpty() || leader == s.guid()) return false;
+    auto const* members = g.members();
+    if (!members) return false;
+    for (GroupMemberSummary const& m : *members)
+        if (m.guid == leader)
+            return m.online && m.is_alive && m.map_id == s.map_id();
+    return false;
 }
 
 void IdleRuleRegistry::finalize()
@@ -98,6 +118,7 @@ std::string_view IdleRuleRegistry::tick(BotSnapshotView const& s, BotAI& ai,
         });
         finalize();
     }
+    bool const follows_bot_leader = FollowsBotLeader(s, g);
     for (size_t ri = 0; ri < rules_.size(); ++ri)
     {
         auto const& r = rules_[ri];
@@ -105,7 +126,7 @@ std::string_view IdleRuleRegistry::tick(BotSnapshotView const& s, BotAI& ai,
         if (!r.enabled) continue;
         if (!r.gate)    continue;
         // A bot in a group with a player (its owner, or the player who invited it) never runs world errands.
-        if (r.world_errand && s.is_led_by_player()) continue;
+        if (r.world_errand && (s.is_led_by_player() || follows_bot_leader)) continue;
         // No errand (bag run, vendor, walk to a hub) while fighting or with a victim (auto-attack target): a full-bag bot used to walk off mid-fight.
         if (r.world_errand && !r.fight_exempt && (s.in_combat() || !s.victim().IsEmpty())) continue;
         if (r.quest_seek && !Services::Config().world_questing() && s.is_free_world_bot()) continue;

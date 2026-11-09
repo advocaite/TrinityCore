@@ -8,7 +8,11 @@
 //   src/server/scripts/EasternKingdoms/ScarletMonastery/boss_*.cpp
 
 #include "../DungeonScript.h"
+#include "../../BotSnapshotView.h"
 #include "../../ClassTables.h"
+
+#include <array>
+#include <limits>
 
 namespace Playerbot {
 
@@ -85,7 +89,7 @@ public:
     uint32_t  map_id() const override { return 189; }
     char const* name() const override { return "scarlet_monastery_classic"; }
 
-    DungeonAdvice get_advice(BotSnapshotView const& /*s*/) const override
+    DungeonAdvice get_advice(BotSnapshotView const& s) const override
     {
         if (!IsVanillaRealm())
             return DungeonAdvice{};
@@ -131,26 +135,51 @@ public:
             4300,   // Scarlet Wizard
             4297,   // Scarlet Conjuror
         };
-        a.bosses = {
-            3983,   // Interrogator Vishas
-            4543,   // Bloodmage Thalnos
-            3974,   // Houndmaster Loksey
-            6487,   // Arcanist Doan
-            3975,   // Herod
-            4542,   // High Inquisitor Fairbanks
-            3976,   // Scarlet Commander Mograine
-            3977,   // High Inquisitor Whitemane
+        // The boss route is the wing the bot stands in, not the whole map. One list for all four wings sent a party entering the
+        // Library to Vishas first: Loksey was in sight, the route owed the earliest boss, Vishas, and the tank walked to the
+        // Graveyard (RC10 smlibrary_loksey and smarmory_herod: out of bounds at 1786,1124 within 11 s of the start, the party left
+        // behind). The wings lie 600 y and more apart, so the nearest entrance or boss spot names the wing.
+        struct Spot { float x, y, z; };
+        struct Wing { std::vector<uint32_t> bosses; std::vector<Spot> spots; Spot entrance; };
+        static std::array<Wing, 4> const wings = {{
+            { { 3983, 4543 },                     // Graveyard: Interrogator Vishas, Bloodmage Thalnos
+              { { 1786.5f, 1124.4f, 7.6f }, { 1820.3f, 1416.7f, -7.9f } }, { 1687.3f, 1050.1f, 18.7f } },
+            { { 3974, 6487 },                     // Library: Houndmaster Loksey, Arcanist Doan
+              { { 119.9f, -260.9f, 18.6f }, { 148.3f, -428.7f, 18.5f } }, { 253.7f, -206.6f, 18.7f } },
+            { { 3975 },                           // Armory: Herod
+              { { 1965.1f, -431.6f, 6.3f } }, { 1608.1f, -318.9f, 18.7f } },
+            { { 4542, 3976, 3977 },               // Cathedral: High Inquisitor Fairbanks, Scarlet Commander Mograine, Whitemane
+              { { 1158.9f, 1354.3f, 30.4f }, { 1153.9f, 1398.4f, 32.6f }, { 1202.1f, 1399.1f, 29.1f } }, { 853.2f, 1319.2f, 18.7f } },
+        }};
+        auto add = [&a](Wing const& w)
+        {
+            a.bosses.insert(a.bosses.end(), w.bosses.begin(), w.bosses.end());
+            for (Spot const& p : w.spots)
+                a.progression_waypoints.push_back({ p.x, p.y, p.z });
         };
-        a.progression_waypoints = {
-            { 1786.5f, 1124.4f, 7.6f },   // Interrogator Vishas
-            { 1820.3f, 1416.7f, -7.9f },   // Bloodmage Thalnos
-            { 119.9f, -260.9f, 18.6f },   // Houndmaster Loksey
-            { 148.3f, -428.7f, 18.5f },   // Arcanist Doan
-            { 1965.1f, -431.6f, 6.3f },   // Herod
-            { 1158.9f, 1354.3f, 30.4f },   // High Inquisitor Fairbanks
-            { 1153.9f, 1398.4f, 32.6f },   // Scarlet Commander Mograine
-            { 1202.1f, 1399.1f, 29.1f },   // High Inquisitor Whitemane
-        };
+        // No bot in the map (the GM audit and list commands pass an empty view): every wing, in the old order.
+        if (s.map_id() != map_id())
+        {
+            for (Wing const& w : wings)
+                add(w);
+            return a;
+        }
+        float px, py, pz;
+        s.position(px, py, pz);
+        Wing const* in = &wings[0];
+        float best = std::numeric_limits<float>::max();
+        for (Wing const& w : wings)
+        {
+            auto consider = [&](Spot const& p)
+            {
+                float const d = (p.x - px) * (p.x - px) + (p.y - py) * (p.y - py);
+                if (d < best) { best = d; in = &w; }
+            };
+            consider(w.entrance);
+            for (Spot const& p : w.spots)
+                consider(p);
+        }
+        add(*in);
         return a;
     }
 };

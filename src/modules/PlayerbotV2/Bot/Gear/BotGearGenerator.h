@@ -164,6 +164,7 @@ uint32 PickThrownWeapon(Player const* wearer);
 
 // Whether a bot may wear this item at all. Classic 1.60 (Forever) also ships Season of Discovery items (ids from
 // ~208000, rune set bonuses); bots there wear vanilla's own items, which all sit below 25000, and no honor-rank rewards.
+// Holiday items only while their holiday runs, and none with Bots.HolidayClothes = 0 (worn ones come off at the next gear check).
 bool IsBotWearableItemId(uint32 entry);
 
 // Approximate ilvl target for a character level (linear L1=1 -> L80=600,

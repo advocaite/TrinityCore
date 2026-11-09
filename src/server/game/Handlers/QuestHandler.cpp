@@ -824,6 +824,16 @@ void WorldSession::HandleUiMapQuestLinesRequest(WorldPackets::Quest::UiMapQuestL
     WorldPackets::Quest::UiMapQuestLinesResponse response;
     response.UiMapID = uiMap->ID;
 
+    // Classic 1.60: the map lists come from retail data (ui_map_quest_line, ui_map_quest, QuestLineXQuest.db2). Most of their
+    // quests are later-expansion quests that nobody gives in this world (e.g. the 88 Cataclysm Eastern Plaguelands quests),
+    // and with no Classic level their ContentTuning lets any level take them, so a level 16 character saw dozens of "!"
+    // on the Eastern Plaguelands map (Discord 2026-11-07). Only quests with Classic level data (vanilla and Forever quests)
+    // are offered on the map.
+    auto isClassicQuest = [](Quest const* quest)
+    {
+        return quest->GetClassicMinLevel() > 0 || quest->GetClassicQuestLevel() > 0;
+    };
+
     if (std::vector<uint32> const* questLines = sObjectMgr->GetUiMapQuestLinesList(uiMap->ID))
     {
         for (uint32 questLineId : *questLines)
@@ -833,10 +843,15 @@ void WorldSession::HandleUiMapQuestLinesRequest(WorldPackets::Quest::UiMapQuestL
                 continue;
 
             bool isQuestLineCompleted = true;
+            bool hasClassicQuest = false;
             for (QuestLineXQuestEntry const* questLineQuest : questLineQuests)
             {
                 if (Quest const* quest = sObjectMgr->GetQuestTemplate(questLineQuest->QuestID))
                 {
+                    if (!isClassicQuest(quest))
+                        continue;
+
+                    hasClassicQuest = true;
                     if (_player->CanTakeQuest(quest, false))
                         response.QuestLineXQuestIDs.push_back(questLineQuest->ID);
 
@@ -845,7 +860,7 @@ void WorldSession::HandleUiMapQuestLinesRequest(WorldPackets::Quest::UiMapQuestL
                 }
             }
 
-            if (!isQuestLineCompleted)
+            if (hasClassicQuest && !isQuestLineCompleted)
                 response.QuestLineIDs.push_back(questLineId);
         }
     }
@@ -854,7 +869,7 @@ void WorldSession::HandleUiMapQuestLinesRequest(WorldPackets::Quest::UiMapQuestL
     {
         for (uint32 questId : *quests)
             if (Quest const* quest = sObjectMgr->GetQuestTemplate(questId))
-                if (_player->CanTakeQuest(quest, false))
+                if (isClassicQuest(quest) && _player->CanTakeQuest(quest, false))
                     response.QuestIDs.push_back(questId);
     }
 

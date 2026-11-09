@@ -21,16 +21,19 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
     // corpse (living ones ignore it).
     // "fallback" (also "fall back", "back") runs every bot to the rally point and re-forms there; "rally here"
     // sets that point (BotCommandParser OrderFallback). "pull back" (also "pullback", "pull and back") is the main
-    // tank's pull-and-return: ranged opener, run to the rally point, tank the mob there (OrderPullBack). Exact
-    // phrases only.
+    // tank's pull-and-return: ranged opener, run to the rally point, tank the mob there (OrderPullBack). "mount" and
+    // "dismount" are the parser's own words (MountIntent / DismountIntent): with AI chat on they went to the language model as
+    // chatter and the bots only talked back (Karrz, 2026-11-08). Exact phrases only.
     // The owner's plain-language words (Playerbot.Behavior.OwnerCommands, BotCommandParser OwnerWordOrder) are exact
     // phrases too: summon, passive / defensive / aggressive, the questions who / help / stats / gear / inventory, the
     // quest orders, loot / loot all, sell grey, repair. "drop quest <name>" is an argument order below.
-    static constexpr std::array<std::string_view, 18> kGroupOrders =
+    static constexpr std::array<std::string_view, 20> kGroupOrders =
         { "follow", "stay", "hold", "resume", "attack", "come", "disengage", "assist", "pull", "flee", "release",
-          "fallback", "fall back", "pull back", "pullback", "pull and back", "back", "rally here" };
-    static constexpr std::array<std::string_view, 20> kOwnerWords =
-        { "summon", "passive", "defensive", "aggressive", "who", "help", "stats", "gear", "inventory",
+          "fallback", "fall back", "pull back", "pullback", "pull and back", "back", "rally here", "mount", "dismount" };
+    // "stance nofight" / "stance defensive" / "stance aggressive" (and the older add-on's "stance passive") are the ForeverBots panel's
+    // own re-send of its stance (BotCommandParser): stance only.
+    static constexpr std::array<std::string_view, 24> kOwnerWords =
+        { "summon", "passive", "defensive", "aggressive", "stance passive", "stance aggressive", "stance defensive", "stance nofight", "who", "help", "stats", "gear", "inventory",
           "quests", "quest list", "accept", "accept all", "turn in", "turnin", "share", "loot", "loot all",
           "sell grey", "repair" };
     bool const owner_word = owner_words &&
@@ -38,7 +41,7 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
     // Formation / spacing / main tank orders carry an argument ("formation circle", "spacing tight", "set main tank X").
     // Gear orders: "equip <item link / name / upgrades / best>", "use your best gear" (BotCommandParser OrderEquip).
     // "use <object>" (an altar, brazier, lever, orb; BotCommandParser "use") is unambiguous as a bare party line, so it needs no ";"
-    // (chris typed "use altar" / "use orb" in party chat and nothing answered, 2026-10-23). A bare "use" alone still says nothing.
+    // (Karrz typed "use altar" / "use orb" in party chat and nothing answered, 2026-10-23). A bare "use" alone still says nothing.
     bool const arg_order = order.rfind("gear ", 0) == 0 || order == "equip" || order.rfind("equip ", 0) == 0 || order == "use your best gear" ||
         order.rfind("use ", 0) == 0 ||
         order == "wear your best gear" || order.rfind("formation ", 0) == 0 || order.rfind("spacing ", 0) == 0 ||
@@ -51,7 +54,34 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
         order.rfind("tank ", 0) == 0 || order == "clear tanks" || order == "clear tank" ||
         order.rfind("rti ", 0) == 0 || order.rfind("pull rti", 0) == 0 ||
         // The panel's CC switch: "crowdcontrol on|off" (also "cc on|off"), answered once for the whole group.
-        order.rfind("crowdcontrol ", 0) == 0 || order.rfind("crowd control ", 0) == 0 || order == "cc on" || order == "cc off";
+        order.rfind("crowdcontrol ", 0) == 0 || order.rfind("crowd control ", 0) == 0 || order == "cc on" || order == "cc off" ||
+        // The panel's Ignore target button and key: the owner's own list, answered once (BotCommandParser::ApplyIgnoreOrder).
+        order == "ignore target" || order == "ignore clear" ||
+        // The Positions tab's words: "place <shape> [gap] [here|target] [who...]", answered once (BotCommandParser::ApplyPlaceOrder).
+        order.rfind("place ", 0) == 0;
+    // Everyday words for the two commonest orders, exact lines only ("follow me please" stays chatter). Karrz typed "wait here" in
+    // party chat (2026-11-08): a bot answered "wait, got it" (BotChatReactor's acknowledgement) and nobody waited; "follow me"
+    // likewise only got a reply. The Russian lines are the ones the Russian testers use.
+    struct Alias { std::string_view words; std::string_view order; };
+    // "come here", "mount up" and "get off your mount" likewise reached only the AI chat (Karrz, 2026-11-08).
+    static constexpr std::array<Alias, 16> kAliases = { {
+        { "wait", "stay" }, { "wait here", "stay" }, { "stay here", "stay" }, { "wait for me", "stay" }, { "hold position", "stay" },
+        { "follow me", "follow" }, { "come with me", "follow" }, { "with me", "follow" }, { "come here", "come" },
+        { "mount up", "mount" }, { "get mounted", "mount" }, { "get off your mount", "dismount" },
+        { "\xD0\xBF\xD0\xBE \xD0\xBA\xD0\xBE\xD0\xBD\xD1\x8F\xD0\xBC", "mount" },                      // "по коням"
+        { "\xD0\xB6\xD0\xB4\xD0\xB8", "stay" },                                                        // "жди"
+        { "\xD1\x81\xD1\x82\xD0\xBE\xD0\xB9", "stay" },                                                // "стой"
+        { "\xD0\xB7\xD0\xB0 \xD0\xBC\xD0\xBD\xD0\xBE\xD0\xB9", "follow" },                              // "за мной"
+    } };
+    if (!arg_order && !owner_word)
+    {
+        std::string_view said = order;   // "wait here!" / "follow me." count too
+        while (!said.empty() && (said.back() == '!' || said.back() == '.' || said.back() == ' '))
+            said.remove_suffix(1);
+        for (Alias const& a : kAliases)
+            if (said == a.words)
+                return std::string(a.order);
+    }
     if (!arg_order && !owner_word && std::find(kGroupOrders.begin(), kGroupOrders.end(), order) == kGroupOrders.end())
         return std::nullopt;
     if (order == "assist")

@@ -17,5 +17,10 @@
     <Binding name="CLICK ForeverBotsKeyCome:LeftButton" category="ADDONS"/>
     <Binding name="CLICK ForeverBotsKeyFallBack:LeftButton" category="ADDONS"/>
     <Binding name="CLICK ForeverBotsKeyAttackMouseover:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyPassive:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyDefensive:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyAggressive:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyIgnoreTarget:LeftButton" category="ADDONS"/>
+    <Binding name="CLICK ForeverBotsKeyIgnoreClear:LeftButton" category="ADDONS"/>
     <Binding name="CLICK ForeverBotsKeyLazy:LeftButton" category="ADDONS"/>
 </Bindings>

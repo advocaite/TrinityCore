@@ -163,10 +163,12 @@ bool TakeSlot(Slot slot, uint64 group_low, BotId bot, uint32 now_ms);
 
 // ike3 'hello' (or 'hello_follow' for a companion joining its owner). Empty when chatter is off or
 // another bot of the group greeted moments ago.
-std::string GreetLine(bool follow_owner, uint64 group_low, BotId bot, uint32 now_ms);
+// With the bot bridge's moments on (BotBridge::MomentsOn), a line that passed every gate is handed to the outside program instead,
+// which writes what the bot says: the call then returns empty and sets *to_program (when given), so the caller can still emote.
+std::string GreetLine(bool follow_owner, uint64 group_low, BotId bot, uint32 now_ms, bool* to_program = nullptr);
 // ike3 broadcast_levelup_generic / _10x / _max_level, chance-gated. Empty when nothing is to be said.
 std::string LevelUpLine(uint8 level, uint8 cls, uint8 race, uint32 zone_id, uint32 area_id,
-                        uint64 group_low, BotId bot, uint32 now_ms);
+                        uint64 group_low, BotId bot, uint32 now_ms, bool* to_program = nullptr);
 
 // ---- event entry points (world/map thread; each pushes at most one ChatIntent) ----
 
@@ -192,7 +194,8 @@ void SayGoodbye(Player* bot, Player* owner);
 enum class Banter : uint8 { Ready, Wipe, Thanks, Ouch, BossKill };
 
 // bot worker: the line to say now for `kind`, or empty (gates / roll / cooldown said no). The caller emits it.
-std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s);
+// Handed to the bot bridge's program like GreetLine (empty, *to_program set).
+std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s, bool* to_program = nullptr);
 // A boss (dungeon boss or world boss) died to `killer` or a group member. Called by the kill listener for any
 // killer. One nearby companion of the killer's group may say "gg" and one may bow (the killer is a real player,
 // "the owner finished the boss") or cheer.

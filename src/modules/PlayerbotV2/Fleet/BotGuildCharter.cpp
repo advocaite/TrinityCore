@@ -4,6 +4,9 @@
 // founder bookkeeping.
 
 #include "BotGuildCharter.h"
+#include "../Bot/BotAI.h"           // BotSignOfferedCharter: skip bots running their own charter
+#include "../Bot/BotRegistry.h"
+#include "../Services.h"
 
 #include "CharacterCache.h"
 #include "Creature.h"
@@ -17,10 +20,14 @@
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "PetitionMgr.h"
+#include "PetitionPackets.h"
 #include "Player.h"
 #include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
+#include "../Bot/BotRegistry.h"
+#include "../Services.h"
+#include "../Util/ConfigReader.h"
 
 // Petition item entry — copied from PetitionsHandler.cpp's #define.
 // Kept inline rather than as a header constant because the upstream
@@ -208,6 +215,84 @@ CharterSignResult BotSignGuildCharter(
     return CharterSignResult::Ok;
 }
 
+CharterSignResult BotSignOfferedCharter(
+    Player* signer,
+    ObjectGuid petition_guid)
+{
+    if (!signer) return CharterSignResult::NoPetition;
+
+    Petition* petition = sPetitionMgr->GetPetition(petition_guid);
+    CharterSignResult result = CharterSignResult::Ok;
+
+    if (!petition)
+        result = CharterSignResult::NoPetition;
+    else if (petition->OwnerGuid == signer->GetGUID())
+        result = CharterSignResult::OwnerCantSign;
+    else if (signer->GetGuildId() || signer->GetGuildIdInvited())
+        result = CharterSignResult::SignerInGuild;
+    else if (!sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD) &&
+             signer->GetTeam() != sCharacterCache->GetCharacterTeamByGuid(petition->OwnerGuid))
+        result = CharterSignResult::WrongFaction;
+    else if (petition->Signatures.size() >= 10)
+        result = CharterSignResult::SignaturesFull;
+    else
+    {
+        for (Signature const& sig : petition->Signatures)
+            if (sig.second == signer->GetGUID())
+                result = CharterSignResult::AlreadySigned;
+
+        if (result == CharterSignResult::Ok)
+            if (BotAI* ai = ::Playerbot::Services::Registry().ai(signer->GetGUID().GetCounter()))
+                if (ai->guild_charter_active())
+                    result = CharterSignResult::SignerBusy;
+    }
+
+    TC_LOG_INFO("playerbot.v2",
+        "[charter_sign] bot={} charter={} owner={} result={}",
+        signer->GetName(), petition_guid.GetCounter(),
+        petition ? petition->OwnerGuid.GetCounter() : 0, uint32(result));
+
+    if (!petition)
+        return result;
+
+    Player* owner = ObjectAccessor::FindConnectedPlayer(petition->OwnerGuid);
+
+    if (result == CharterSignResult::AlreadySigned)
+    {
+        if (owner)
+        {
+            WorldPackets::Petition::PetitionSignResults packet;
+            packet.Item = petition_guid;
+            packet.Player = signer->GetGUID();
+            packet.Error = int32(PETITION_SIGN_ALREADY_SIGNED);
+            owner->SendDirectMessage(packet.Write());
+        }
+        return result;
+    }
+
+    if (result != CharterSignResult::Ok)
+        return result;
+
+    petition->AddSignature(signer->GetSession()->GetAccountId(), signer->GetGUID(), /*isLoading*/ false);
+
+    if (owner)
+    {
+        if (Item* item = owner->GetItemByGuid(petition_guid))
+        {
+            item->SetPetitionNumSignatures(static_cast<uint32>(petition->Signatures.size()));
+            item->SetState(ITEM_CHANGED, owner);
+        }
+
+        WorldPackets::Petition::PetitionSignResults packet;
+        packet.Item = petition_guid;
+        packet.Player = signer->GetGUID();
+        packet.Error = int32(PETITION_SIGN_OK);
+        owner->SendDirectMessage(packet.Write());
+    }
+
+    return result;
+}
+
 CharterTurnInResult BotTurnInGuildCharter(
     Player* bot,
     Creature* petitioner_npc,
@@ -299,6 +384,17 @@ RecruitResult BotRecruitToGuild(
     // enforce a cap, so we gate here.
     if (g->GetMembersCount() >= /*per-bot-guild cap pulled from manager*/ 75u)
         return RecruitResult::GuildFull;
+
+    // A real player is never put into a bot guild without asking (this path used to add anyone guildless nearby, players
+    // included). PlayerbotV2.Guilds.InvitePlayers = 0 (default): bots only. 1: the player gets a normal guild invite.
+    if (!Services::Registry().has(target->GetGUID().GetCounter()))
+    {
+        if (!Services::Config().guilds_invite_players() || !recruiter->GetSession())
+            return RecruitResult::BadTarget;
+        g->HandleInviteMember(recruiter->GetSession(), target->GetName());
+        out_guild_id = gid;
+        return RecruitResult::Invited;
+    }
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     const bool ok = g->AddMember(trans, target->GetGUID());

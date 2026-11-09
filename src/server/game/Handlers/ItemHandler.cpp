@@ -524,7 +524,7 @@ void WorldSession::HandleBuybackItem(WorldPackets::Item::BuyBackItem& packet)
         uint32 price = _player->m_activePlayerData->BuybackPrice[packet.Slot - BUYBACK_SLOT_START];
         if (!_player->HasEnoughMoney(uint64(price)))
         {
-            _player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, pItem->GetEntry(), 0);
+            _player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, 0);
             return;
         }
 
@@ -542,7 +542,7 @@ void WorldSession::HandleBuybackItem(WorldPackets::Item::BuyBackItem& packet)
         return;
     }
     else
-        _player->SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, 0, 0);
+        _player->SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, 0);
 }
 
 void WorldSession::HandleBuyItemOpcode(WorldPackets::Item::BuyItem& packet)
@@ -1237,6 +1237,9 @@ bool WorldSession::CanUseBank(ObjectGuid bankerGUID) const
     if (!isUsingBankCommand)
     {
         Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(bankerGUID, UNIT_NPC_FLAG_BANKER, UNIT_NPC_FLAG_2_NONE);
+        // Classic 1.60 Legacy perk Personal Banking 1225493: the bank opened through an innkeeper (Player::OnGossipSelect)
+        if (!creature && GetPlayer()->HasAura(1225493))
+            creature = GetPlayer()->GetNPCIfCanInteractWith(bankerGUID, UNIT_NPC_FLAG_INNKEEPER, UNIT_NPC_FLAG_2_NONE);
         if (!creature)
             return false;
     }

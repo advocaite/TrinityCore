@@ -172,7 +172,10 @@ inline bool SpareNow(Spare const& rule, float enemyHpPct, bool gateAlive) { retu
 // that does not carry the aura (the lowest-GUID one whose taunt is ready) taunts the enemy. A tank carrying the aura stops
 // attacking that enemy while a clean tank exists, so the swap is not undone. Paladins have no taunt in 1.12, so only
 // warriors and druids can take over.
-struct TankSwap { uint32_t enemy; uint32_t debuffAura; uint32_t stacks; };
+// <takerStacks>: the taker may carry up to this many stacks itself. An aura the enemy puts on everyone in sight (Firemaw's Flame Buffet) lands
+// on the clean tank as it walks out from cover, before it can taunt: with 0 it was never clean once in reach (bwl_firemaw 4f7b18e3 run 2:
+// 182 walk-outs, no swap).
+struct TankSwap { uint32_t enemy; uint32_t debuffAura; uint32_t stacks; uint32_t takerStacks = 0; };
 
 // While <enemy> is alive and fighting, matching bots stay at least <radius> yards from it (point-blank AoE such as Blast Wave).
 // Do not use Who::Tank / Anyone for melee-range bosses: only bots that do not have to stand next to the enemy.
@@ -181,6 +184,19 @@ struct AvoidEnemy { uint32_t enemy; float radius; Who who; float hpMax = 100.0f;
 // While a matching bot carries at least <stacks> stacks of <aura> (a debuff the enemy puts on whoever hits it: Golemagg's Magma Splash), it stays
 // <radius> yards from every <enemy> that is not hitting it, until the aura falls off. The bot the enemy is hitting (its tank) is never moved.
 struct AvoidOnStacks { uint32_t enemy; uint32_t aura; uint32_t stacks; float radius; Who who; };
+
+// A stacking aura that <enemy> puts on everyone in its line of sight, whatever the range (Firemaw's Flame Buffet: 100 y, refreshed on
+// every hit, so the stacks only fall off out of sight). A matching bot that is not the enemy's victim and carries at least <stacks>
+// stacks walks to the nearest reachable spot the enemy cannot see and stays there until the aura has fallen off, then fights again.
+// <stacks> 0: the bot waits out of sight the whole fight unless the enemy is on it (the off-tanks, clean for a TankSwap on the same aura).
+// Above 0 each bot adds its guid modulo 3, so the raid does not leave all at once. <seeTank>: the spot must also see the main tank within
+// 38 y (healers keep healing it from there); a bot with no such spot falls through to the next rule that matches it.
+struct BreakSight { uint32_t enemy; uint32_t aura; uint32_t stacks; Who who; bool seeTank = false; };
+
+// A breath on a fixed clock that hits everyone <enemy> can see (Chromaggus: caster-centred, 100 y, line of sight only). Matching bots
+// that are not its victim walk to a spot it cannot see from <leadMs> before each breath is due until <afterMs> after, and whenever it
+// is casting one of <spells> (the clock slipped). Breath k is due <firstMs> + k * <periodMs> after the enemy entered combat.
+struct HideBeforeBreath { uint32_t enemy; std::vector<uint32_t> spells; uint32_t firstMs; uint32_t periodMs; uint32_t leadMs; uint32_t afterMs; Who who; };
 
 // Line hazard for a breath that sweeps a straight corridor (Onyxia's Deep Breath). When <enemy> is casting <castSpell> (or carries
 // it as an aura), or is flying at >= 2.5x run speed (the breath pass itself), the corridor is latched for about 10 seconds: it
@@ -253,7 +269,15 @@ struct FaceAway { uint32_t enemy; float hpMax = 100.0f; float hpMin = 0.0f; floa
 
 // While <anchor> is fighting, the players that hold an <enemy> stand <reach> yards past the spot the anchor stood on when the fight began, away from the
 // raid's centre at that moment, side by side <spacing> yards apart (Majordomo: his tank drags him out, each Elite tank one Elite, all visibly apart).
-struct TankSpot { uint32_t anchor; uint32_t enemy; float reach; float spacing; };
+// fixed: the row is centred on the world point (x, y) and runs along rowDeg (world bearing), whatever the raid does; the anchor only has to be
+// alive and in the fight. A fixed rule with reach > 0 is an arc instead: every slot <reach> yards from (x, y), neighbours <spacing> apart, the
+// middle of the arc on bearing rowDeg (a camp at (x, y) then has every tank's pile at the same distance). also: further entries whose holders share the one row (adds of any colour), so no two tanks get the same slot.
+struct TankSpot { uint32_t anchor; uint32_t enemy; float reach; float spacing; bool fixed = false; float x = 0.0f, y = 0.0f, rowDeg = 0.0f;
+                  std::vector<uint32_t> also = {}; };
+inline bool InTankSpot(TankSpot const& rule, uint32_t entry)
+{
+    return entry == rule.enemy || std::find(rule.also.begin(), rule.also.end(), entry) != rule.also.end();
+}
 
 // While <enemy> is alive and fighting, matching bots stand in the sector behind it: <halfAngleDeg> either side of the line
 // straight behind where it faces, between <minDist> and <maxDist> yards. A bot outside walks to the nearest such spot on its
@@ -277,6 +301,10 @@ struct ResistPotion { uint32_t enemy; uint32_t item; Who who; };
 // kills the carrier or the carrier's neighbours and the absorb is what carries it (Living Bomb: 3200 fire to the carrier, a caster under
 // 3200 health dies of its own bomb). The boss-wide ResistPotion order is spent by the first Inferno before the next bomb lands.
 struct CarrierPotion { uint32_t aura; uint32_t item; };
+
+// A member that carries <aura> uses <item> as soon as it can act, whatever the boss order says: the aura is one no dispel removes and the
+// item is its cure (Brood Affliction: Bronze, only Hourglass Sand takes it off). The kit stocks it (Classic::RaidConsumable::combat).
+struct CureItem { uint32_t aura; uint32_t item; };
 
 // Phase windows (hpMax / hpMin on AvoidFrontal, Spread, Stand, AvoidEnemy, StayNear): the rule only applies while the enemy's
 // health percent is within [hpMin, hpMax] (Onyxia's Fireball spread is phase 2: 65..40). Defaults 100 / 0 = always.
@@ -307,6 +335,8 @@ struct RaidRules
     std::vector<TankSwap> tankSwap;
     std::vector<AvoidEnemy> avoidEnemy;
     std::vector<AvoidOnStacks> avoidOnStacks;
+    std::vector<BreakSight> breakSight;
+    std::vector<HideBeforeBreath> hideBeforeBreath;
     std::vector<AvoidBreath> avoidBreath;
     std::vector<BreathSafe> breathSafe;
     std::vector<MeleeSoak> meleeSoak;
@@ -322,6 +352,7 @@ struct RaidRules
     std::vector<StandFlank> standFlank;
     std::vector<ResistPotion> resistPotion;
     std::vector<CarrierPotion> carrierPotion;
+    std::vector<CureItem> cureItem;
     std::vector<uint32_t> retaunt;   // bosses whose threat a Blink, a fear or a threat reset (Ragnaros' Wrath) can leave on a non-tank: a tank taunts them back at once (ElectRetaunt)
     std::vector<ThreatDrop> threatDrop;   // bosses that cut their tank's threat on a schedule (ThreatDropFraction)
     std::vector<uint32_t> noDispel;   // auras nobody removes (removing them hurts: Wyvern Sting, Mutating Injection)
@@ -330,6 +361,10 @@ struct RaidRules
     std::vector<uint32_t> tankLast;    // a mob the tanks take only when no other free mob is left (Majordomo: he does little damage and cannot die)
     std::vector<uint32_t> offTankMob;  // a boss the second tank holds from the first second (Majordomo); no area taunt while he is up, the tanks keep their mobs
     std::vector<uint32_t> interruptFirst;   // casts the PvE coordinator's kick election takes before any other (heals, sheep)
+    // Encounters (an enemy entry that is up during them) where a DPS looking for a target takes an enemy a tank holds before any other,
+    // then the higher priority, then the most hurt one: wave fights where adds keep coming, an untanked one only means a threat hold, and
+    // the raid has to finish one before the next (Victor Nefarius' drakonids).
+    std::vector<uint32_t> focusHeldLowest;
 };
 
 // How long the corridor of a cast breath stays open from the first sighting of the cast. Onyxia's damage is one instant at the end of the 5 s cast
@@ -363,6 +398,11 @@ RaidRules const* RulesForMap(uint32_t mapId);
 // True when the raid layer decides what happens to <aura> on this map: it elects the dispel itself (dispel,
 // controlledMember) or nobody may remove it (noDispel). The generic dispel assignment leaves these alone.
 bool OwnsAura(uint32_t mapId, uint32_t aura);
+
+// True when the map's rules say nobody removes <aura> (noDispel). A cure that takes every debuff of the type at once (a cleansing
+// totem's pulse, Stoneform) or keeps dispelling after its cast (Abolish Poison, Abolish Disease) must not reach its carrier either:
+// it would take the kept aura with the others (Hakkar: Poisonous Blood 24321 under a Poison Cleansing Totem).
+bool KeepsAura(uint32_t mapId, uint32_t aura);
 
 // True when the map's rules say this cast is kicked before any other cast in reach (an enemy heal, a polymorph). Rules are
 // static data, so the PvE coordinator may call it from its planning pass.

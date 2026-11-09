@@ -33,8 +33,12 @@ TC_GAME_API void ReleaseNavLockAfterFault();
 // 74*4.0f=296y number_of_points*interval = max_path_len
 // this is way more than actual evade range
 // I think we can safely cut those down even more
-#define MAX_PATH_LENGTH         74
-#define MAX_POINT_PATH_LENGTH   74
+#define DEFAULT_PATH_LENGTH         74
+#define DEFAULT_POINT_PATH_LENGTH   74
+// Bot players walk far travel legs (Westfall to the Deadmines entrance) that the 74 polygon budget cut short, so the bot stopped
+// partway. Their paths may use up to 512 polygons and points (512*4.0f = 2048y); every other unit keeps the default above.
+#define MAX_PATH_LENGTH             512
+#define MAX_POINT_PATH_LENGTH       512
 
 #define SMOOTH_PATH_STEP_SIZE   4.0f
 #define SMOOTH_PATH_SLOP        0.3f
@@ -84,7 +88,7 @@ class TC_GAME_API PathGenerator
 
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }
-        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); }
+        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), _maxPointPathLimit); }
         void SetUseRaycast(bool useRaycast) { _useRaycast = useRaycast; }
 
         // result getters
@@ -128,7 +132,9 @@ class TC_GAME_API PathGenerator
 
         bool _useStraightPath;  // type of path will be generated
         bool _forceDestination; // when set, we will always arrive at given point
-        uint32 _pointPathLimit; // limit point path size; min(this, MAX_POINT_PATH_LENGTH)
+        uint32 _pointPathLimit; // limit point path size; min(this, _maxPointPathLimit)
+        uint32 _polyPathLimit;      // polygon budget of findPath/raycast: DEFAULT_PATH_LENGTH, MAX_PATH_LENGTH for a bot player
+        uint32 _maxPointPathLimit;  // point budget ceiling: DEFAULT_POINT_PATH_LENGTH, MAX_POINT_PATH_LENGTH for a bot player
         bool _useRaycast;       // use raycast if true for a straight line path
 
         G3D::Vector3 _startPosition;        // {x, y, z} of current location
@@ -171,7 +177,7 @@ class TC_GAME_API PathGenerator
         void SetStartPosition(G3D::Vector3 const& point) { _startPosition = point; }
         void SetEndPosition(G3D::Vector3 const& point) { _actualEndPosition = point; _endPosition = point; }
         void SetActualEndPosition(G3D::Vector3 const& point) { _actualEndPosition = point; }
-        void NormalizePath();
+        void NormalizePath(bool meshPoints = true);
 
         void Clear()
         {
@@ -185,6 +191,7 @@ class TC_GAME_API PathGenerator
 
         dtPolyRef GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* Point, float* Distance = nullptr) const;
         dtPolyRef GetPolyByLocation(float const* Point, float* Distance) const;
+        dtPolyRef PreferPolyAtHeight(float const* point, float const* extents, dtPolyRef nearestRef, float* nearestPoint) const;
         bool HaveTile(G3D::Vector3 const& p) const;
 
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
@@ -198,8 +205,9 @@ class TC_GAME_API PathGenerator
 
         // smooth path aux functions
         uint32 FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited);
+        // steerPos carries startPos's height; steerPosHeight is the steer point's own height on the navmesh.
         bool GetSteerTarget(float const* startPos, float const* endPos, float minTargetDist, dtPolyRef const* path, uint32 pathSize, float* steerPos,
-                            unsigned char& steerPosFlag, dtPolyRef& steerPosRef);
+                            unsigned char& steerPosFlag, dtPolyRef& steerPosRef, float& steerPosHeight);
         dtStatus FindSmoothPath(float const* startPos, float const* endPos,
                               dtPolyRef const* polyPath, uint32 polyPathSize,
                               float* smoothPath, int* smoothPathSize, uint32 maxSmoothPathSize);

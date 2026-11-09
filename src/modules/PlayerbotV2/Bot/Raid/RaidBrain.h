@@ -67,7 +67,8 @@ public:
     // Talons' random Elemental Shield vulnerability). avoid: it is immune to the school (the Plague Slime's colour, a
     // gargoyle's Stoneskin), takes at most half damage from it, or reflects it (an Anubisath Sentinel's reflect). Only enemies with a non-zero mask are listed. The PvE
     // coordinator copies them into each bot's PveOrder school hints. nullptr = no plan or nothing to say.
-    struct EnemySchools { ObjectGuid target; uint8_t prefer_mask = 0; uint8_t avoid_mask = 0; };
+    // reflect_mask: the part of avoid_mask the enemy reflects (an area spell must not touch it; immunity or resistance only wastes that hit).
+    struct EnemySchools { ObjectGuid target; uint8_t prefer_mask = 0; uint8_t avoid_mask = 0; uint8_t reflect_mask = 0; };
     std::vector<EnemySchools> const* SchoolsFor(uint64_t group_low, uint32_t map_id) const
     {
         auto it = schools_.find(FocusKey(group_low, map_id));

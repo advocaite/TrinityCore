@@ -34,7 +34,7 @@ inline Config const& Cfg()
     static Config const c = []
     {
         Config k;
-        k.errands           = sConfigMgr->GetBoolDefault("Playerbot.World.Town.Errands", true);
+        k.errands           = sConfigMgr->GetBoolDefault("Playerbot.World.Town.Errands", true, true);
         k.radius            = float(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.ErrandRadius", 300, true), 60, 1000));
         k.linger_min_ms     = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.LingerMinSec", 4, true), 0, 300)) * 1000u;
         k.linger_max_ms     = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.LingerMaxSec", 12, true), 0, 600)) * 1000u;
@@ -43,8 +43,8 @@ inline Config const& Cfg()
         k.inn_cap           = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.InnCap", 4, true), 0, 100));
         k.mailbox_cap       = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.MailboxCap", 2, true), 0, 100));
         k.inn_share_pct     = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.InnSharePct", 50, true), 0, 100));
-        k.exits             = sConfigMgr->GetBoolDefault("Playerbot.World.Town.Exits", true);
-        k.smooth_walk       = sConfigMgr->GetBoolDefault("Playerbot.World.Town.SmoothWalk", true);
+        k.exits             = sConfigMgr->GetBoolDefault("Playerbot.World.Town.Exits", true, true);
+        k.smooth_walk       = sConfigMgr->GetBoolDefault("Playerbot.World.Town.SmoothWalk", true, true);
         k.smooth_walk_yards = float(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.SmoothWalkYards", 200, true), 60, 240));
         k.nudge_yards       = float(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.PlayerNudgeYards", 5, true), 0, 30));
         k.nudge_ms          = std::uint32_t(std::clamp<int>(sConfigMgr->GetIntDefault("Playerbot.World.Town.PlayerNudgeSec", 6, true), 1, 600)) * 1000u;

@@ -14,6 +14,17 @@ namespace Playerbot::V2 {
 // Text of the add-on's greeting to the server.
 inline constexpr std::string_view kAddonHelloText = "hello";
 
+// A ".bot ..." command the add-on sends to itself under the order prefix instead of saying it: the client blocks chat sent
+// from an add-on timer (Quick party adds its second and later bots a moment apart), addon messages are not blocked. Only
+// ".bot " lines count; the server runs them like the same line typed in /say, with the player's own rights.
+inline constexpr std::string_view kAddonCommandPrefix = ".bot ";
+inline bool IsAddonBotCommand(std::string_view text)
+{
+    if (text.size() <= kAddonCommandPrefix.size() || text.substr(0, kAddonCommandPrefix.size()) != kAddonCommandPrefix)
+        return false;
+    return text.find_first_not_of(' ', kAddonCommandPrefix.size()) != std::string_view::npos;
+}
+
 class AddonHintTracker
 {
 public:

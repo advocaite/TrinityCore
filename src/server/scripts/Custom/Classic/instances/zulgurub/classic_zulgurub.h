@@ -82,6 +82,9 @@ enum ClassicZulGurubEntries : uint32
     CLASSIC_ZG_SPELL_HAKKAR_POWER        = 24692,
     CLASSIC_ZG_SPELL_HAKKAR_POWER_DOWN   = 24693,
 
+    // classic_boss_thekal / the zealots: DoAction() when a partner's Resurrection lands on them
+    CLASSIC_ZG_ACTION_ZEALOT_RESURRECT   = 1,
+
     CLASSIC_ZG_NPC_LORKHAN               = 11347,
     CLASSIC_ZG_NPC_ZATH                  = 11348,
     CLASSIC_ZG_NPC_THEKAL                = 14509,

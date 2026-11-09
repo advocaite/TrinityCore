@@ -81,6 +81,10 @@ constexpr uint32 DEMORALIZING_ROAR  = 99;
 constexpr uint32 ENRAGE             = 5229;
 constexpr uint32 FRENZIED_REGEN     = 22842;
 constexpr uint32 BASH               = 5211;
+// Forever Feral talent (level 25; trainer ranks 1328616 at 34, 414644, 1235826, 1235827): 15 rage, a bleed that stacks to 5 on the
+// victim, 3 s ticks. The bot casts the highest rank it knows (HighestKnownRank) and find_aura matches any rank.
+constexpr uint32 LACERATE           = 1328617;
+constexpr uint8  kLacerateStacks    = 5;
 // Restoration
 constexpr uint32 HEALING_TOUCH      = 5185;
 constexpr uint32 REGROWTH           = 8936;
@@ -685,6 +689,17 @@ bool ShouldFaerieFireBear(ApPredicateContext const& ctx)
         && !ctx.bot.has_aura(FAERIE_FIRE_FERAL, ctx.bot.victim());
 }
 
+// Lacerate: the bear's single-target threat, like a warrior's Sunder. Stack it to 5 on the victim, then keep it up when under 4 s are
+// left. Maul only after: both cost rage, and Lacerate's bleed and stack threat are worth more per point once the talent is taken.
+bool ShouldLacerate(ApPredicateContext const& ctx)
+{
+    if (!HasLiveTarget(ctx) || !InBear(ctx) || Rage(ctx) < 15 || !(Ready(ctx, LACERATE) && ctx.bot.victim_in_spell_range(LACERATE)))
+        return false;
+    AuraEntry const* mine = ctx.bot.find_aura(LACERATE, ctx.bot.victim());
+    return !mine || mine->stacks < kLacerateStacks || mine->remaining.count() < 4000;
+}
+void DoLacerate(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(LACERATE, ctx.bot.victim()); }
+
 bool ShouldMaul(ApPredicateContext const& ctx)
 {
     return HasLiveTarget(ctx) && InBear(ctx) && Rage(ctx) >= 15 && (Ready(ctx, MAUL) && ctx.bot.victim_in_spell_range(MAUL));
@@ -705,7 +720,8 @@ ApRule const kBearRules[] = {
     { ShouldSwipe,            DoSwipe,            "classic_bear:swipe" },
     { ShouldBearSpreadFaerieFire, DoBearSpreadFaerieFire, "classic_bear:spread_faerie_fire" },
     { ShouldFaerieFireBear,   DoFaerieFireFeral,  "classic_bear:faerie_fire_feral" },
-    { ShouldMaul,             DoMaul,             "classic_bear:maul" },
+    { ShouldLacerate,         DoLacerate,         "classic_bear:lacerate" },
+    { ShouldMaul,            DoMaul,             "classic_bear:maul" },
     { HasLiveTarget,          DoAutoAttack,       "classic_bear:auto_attack" },
 };
 

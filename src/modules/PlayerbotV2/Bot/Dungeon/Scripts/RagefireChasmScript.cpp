@@ -51,6 +51,38 @@ DungeonAdvice RagefireChasmClassicAdvice()
         { -376.8f, 209.2f, -21.8f },   // Jergosh the Invoker
         { -384.9f, 146.0f, 7.8f },   // Bazzalan
     };
+    // The crumb route through the four vanilla bosses in order. The shared route table's map 389 chain is the retail remake's
+    // (Adarogg's pit, then up to Koranthal's walkway): it never goes down to Oggleflint, its crumb nearest him is the walkway 18 yards
+    // above his floor, and the tank followed it into the pit's dead end and back up onto that ledge, where it stood for the rest of
+    // the run (0.1.24 rfc_oggleflint). Oggleflint's floor is reached from the pit through the low tunnel east (-233,-8 -> -192,0 ->
+    // -151,6). Generated from the server's map 389 navmesh: the full Detour route entrance -> Oggleflint -> Taragaman -> Jergosh ->
+    // Bazzalan, sampled every 20 yards (mmap_probe <mmaps> 389 --crumbs 20 <boss> <next boss>, one leg per boss); each crumb pair is a
+    // complete path within the 74-polygon cap, and each boss's nearest crumb is the one on its spawn.
+    a.route_waypoints = {
+        { 0.8f, -8.2f, -15.3f }, { -4.6f, -26.6f, -20.8f }, { -15.7f, -40.2f, -21.3f }, { -35.6f, -39.7f, -21.5f },
+        { -55.4f, -38.8f, -20.1f }, { -75.2f, -37.8f, -18.5f }, { -93.4f, -37.0f, -26.3f }, { -112.6f, -36.1f, -30.8f },
+        { -132.4f, -35.2f, -32.8f }, { -152.1f, -34.3f, -35.5f }, { -170.8f, -33.4f, -41.7f }, { -190.2f, -32.5f, -43.8f },
+        { -209.6f, -31.6f, -51.1f }, { -228.1f, -30.8f, -55.6f }, { -247.8f, -29.8f, -58.1f }, { -259.9f, -14.9f, -57.6f },
+        { -251.3f, -8.9f, -62.5f }, { -231.4f, -8.2f, -61.6f }, { -211.8f, -4.1f, -61.5f }, { -192.4f, -0.1f, -59.6f },
+        { -174.1f, 2.4f, -52.0f }, { -156.6f, 4.8f, -42.5f }, { -149.4f, 18.8f, -38.3f },
+        { -147.5f, 38.7f, -38.6f },   // 23 Oggleflint
+        { -149.4f, 18.8f, -38.3f }, { -156.6f, 4.8f, -42.5f }, { -174.1f, 2.4f, -52.0f }, { -192.4f, -0.1f, -59.6f },
+        { -211.8f, -4.1f, -61.5f }, { -231.4f, -8.2f, -61.6f }, { -251.2f, -8.9f, -62.5f }, { -270.7f, -11.9f, -63.0f },
+        { -285.0f, -24.0f, -59.6f }, { -295.7f, -35.6f, -60.5f }, { -299.7f, -16.9f, -55.9f }, { -297.6f, 0.5f, -47.7f },
+        { -278.3f, 4.8f, -48.3f }, { -258.9f, 8.4f, -49.5f }, { -239.7f, 12.1f, -44.8f }, { -223.7f, 19.4f, -41.1f },
+        { -204.6f, 21.3f, -36.5f }, { -185.9f, 19.4f, -31.4f }, { -166.7f, 17.3f, -28.2f }, { -147.9f, 15.2f, -21.8f },
+        { -128.2f, 16.2f, -19.5f }, { -118.5f, 31.8f, -17.4f }, { -120.2f, 51.3f, -18.7f }, { -135.2f, 64.0f, -22.1f },
+        { -152.3f, 72.8f, -21.1f }, { -171.1f, 79.6f, -20.7f }, { -186.6f, 90.6f, -23.3f }, { -191.4f, 109.7f, -23.4f },
+        { -194.6f, 128.7f, -22.1f }, { -197.6f, 147.3f, -24.6f }, { -215.8f, 151.5f, -20.2f }, { -235.7f, 150.5f, -18.7f },
+        { -244.7f, 150.1f, -18.7f },   // 56 Taragaman the Hungerer
+        { -264.6f, 151.5f, -18.8f }, { -283.5f, 152.8f, -25.4f }, { -293.6f, 168.9f, -21.0f }, { -298.5f, 187.8f, -23.9f },
+        { -306.3f, 206.1f, -24.6f }, { -320.9f, 214.5f, -20.4f }, { -340.9f, 213.4f, -21.0f }, { -360.7f, 211.1f, -21.7f },
+        { -376.8f, 209.2f, -21.5f },   // 65 Jergosh the Invoker
+        { -364.6f, 224.8f, -20.0f }, { -350.8f, 233.1f, -19.8f }, { -332.8f, 235.9f, -15.4f }, { -336.2f, 248.4f, -7.9f },
+        { -354.7f, 247.2f, -6.9f }, { -372.2f, 238.5f, -4.1f }, { -384.6f, 226.8f, -0.3f }, { -398.5f, 212.8f, -0.4f },
+        { -402.1f, 195.6f, 4.4f }, { -398.3f, 177.9f, 11.3f }, { -391.3f, 161.3f, 8.3f },
+        { -384.9f, 146.0f, 8.0f },   // 77 Bazzalan
+    };
     return a;
 }
 

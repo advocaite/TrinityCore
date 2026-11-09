@@ -21,6 +21,7 @@
 #include "BattlegroundScore.h"
 #include "BattlegroundScript.h"
 #include "ChatTextBuilder.h"
+#include "Config.h"
 #include "Creature.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
@@ -68,20 +69,19 @@ Battleground::Battleground(BattlegroundTemplate const* battlegroundTemplate) : _
 {
     ASSERT(_battlegroundTemplate, "Nonexisting Battleground Template passed to battleground ctor!");
 
+    m_QueueID           = BATTLEGROUND_QUEUE_NONE;
     m_InstanceID        = 0;
     m_Status            = STATUS_NONE;
     m_ClientInstanceID  = 0;
     m_EndTime           = 0;
     m_InvitedAlliance   = 0;
     m_InvitedHorde      = 0;
-    m_ArenaType         = 0;
     _winnerTeamId       = PVP_TEAM_NEUTRAL;
     m_StartTime         = 0;
     m_ResetStatTimer    = 0;
     m_ValidStartPositionTimer = 0;
     m_Events            = 0;
     m_StartDelayTime    = 0;
-    m_IsRated           = false;
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
 
@@ -790,6 +790,14 @@ void Battleground::EndBattleground(Team winner)
         if (marks.MapId == GetBgMap()->GetId())
             classicMarks = &marks;
 
+    // Classic 1.60: PvP rank. The rank is the renown track of faction 2800 "PvP Rank Points" (renown currency 3473, rank 1 at 750
+    // points ... rank 14 at 24750 in all, RenownThresholdCurveID 103650). Battlegrounds are the main source of rank points on the
+    // official realm; nothing in the client data pays them (no spell or quest reward), so the server gives them when a battle ends.
+    static constexpr uint32 ClassicPvPRankFactionID = 2800;
+    FactionEntry const* classicPvPRankFaction = isBattleground() ? sFactionStore.LookupEntry(ClassicPvPRankFactionID) : nullptr;
+    int32 const classicRankPointsWin = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundWin", 250);
+    int32 const classicRankPointsLoss = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundLoss", 100);
+
     WorldPackets::Battleground::PVPMatchComplete pvpMatchComplete;
     pvpMatchComplete.Winner = GetWinner();
     pvpMatchComplete.Duration = std::chrono::duration_cast<Seconds>(Milliseconds(std::max<int32>(0, (GetElapsedTime() - BG_START_DELAY_2M))));
@@ -855,6 +863,11 @@ void Battleground::EndBattleground(Team winner)
             else if (GetInProgressDuration() >= 10min)
                 player->CastSpell(player, classicMarks->Lose, true);
         }
+
+        // Classic 1.60: rank points for the battle (winners more, losers less), see classicPvPRankFaction above
+        if (classicPvPRankFaction)
+            if (int32 rankPoints = team == winner ? classicRankPointsWin : classicRankPointsLoss; rankPoints > 0)
+                player->GetReputationMgr().ModifyReputation(classicPvPRankFaction, rankPoints, false, true);
 
         // Reward winner team
         if (team == winner)
@@ -1101,8 +1114,8 @@ void Battleground::StartBattleground()
     // and it doesn't matter if we call StartBattleground() more times, because m_Battlegrounds is a map and instance id never changes
     sBattlegroundMgr->AddBattleground(this);
 
-    if (m_IsRated)
-        TC_LOG_DEBUG("bg.arena", "Arena match type: {} started.", m_ArenaType);
+    if (isRated())
+        TC_LOG_DEBUG("bg.arena", "Arena match type: {} started.", GetArenaType());
 }
 
 void Battleground::TeleportPlayerToExploitLocation(Player* player)
@@ -1302,7 +1315,7 @@ void Battleground::EventPlayerLoggedOut(Player* player)
 // This method should be called only once ... it adds pointer to queue
 void Battleground::AddToBGFreeSlotQueue()
 {
-    if (!m_InBGFreeSlotQueue && isBattleground())
+    if (!m_InBGFreeSlotQueue && isBattleground() && !isRated())
     {
         sBattlegroundMgr->AddToBGFreeSlotQueue(this);
         m_InBGFreeSlotQueue = true;
@@ -1314,7 +1327,7 @@ void Battleground::RemoveFromBGFreeSlotQueue()
 {
     if (m_InBGFreeSlotQueue)
     {
-        sBattlegroundMgr->RemoveFromBGFreeSlotQueue(GetMapId(), m_InstanceID);
+        sBattlegroundMgr->RemoveFromBGFreeSlotQueue(this);
         m_InBGFreeSlotQueue = false;
     }
 }
@@ -1630,7 +1643,10 @@ void Battleground::SetBracket(PVPDifficultyEntry const* bracketEntry)
 
 void Battleground::RewardXPAtKill(Player* killer, Player* victim)
 {
-    if (sWorld->getBoolConfig(CONFIG_BG_XP_FOR_KILL) && killer && victim)
+    // Honor from a battleground kill must not depend on Battleground.GiveXPForKills - that switch only
+    // decides whether kills also grant XP (see KillRewarder::_RewardPlayer). Before, the whole reward
+    // call was skipped when it was off, so a battleground kill paid no honor and counted no HK.
+    if (killer && victim)
     {
         Player* killers[] = { killer };
         KillRewarder(Trinity::IteratorPair(std::begin(killers), std::end(killers)), victim, true).Reward();

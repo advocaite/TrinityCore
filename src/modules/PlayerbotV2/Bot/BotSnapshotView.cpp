@@ -18,6 +18,7 @@
 #include <vector>
 #include "World.h"
 #include "SpellFamily.h"
+#include "GroupControl.h"
 
 namespace Playerbot {
 
@@ -855,6 +856,10 @@ NearbyUnit const* BotSnapshotView::assigned_tank_mob() const
     PveOrder const& po = s_->pve_order;
     if (!po.active || po.tank_target.IsEmpty())
         return nullptr;
+    // The coordinator's pass already skips a raid-forbidden mob, but its order is a pass older than the raid brain's.
+    RaidOrder const& ro = s_->raid_order;
+    if (ro.active && std::find(ro.forbidden_targets.begin(), ro.forbidden_targets.end(), po.tank_target) != ro.forbidden_targets.end())
+        return nullptr;
     for (auto const& e : s_->combat.nearby_enemies)
         if (e.guid == po.tank_target)
             return e.hp > 0 ? &e : nullptr;
@@ -958,6 +963,11 @@ static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float rang
     float ctl_leash = Services::Config().behavior_passive_leash_yd();
     if (ctl_leash <= 0.f && s.instance_ctx.is_in_instance)
         ctl_leash = kPickupLeashYd;
+    // Every mob here is loose on a group member: the group's fight, which reaches GroupControl::kFightJoinYd from the player. With the
+    // passive leash (25 y) a warlock's tank left a mob beating his healer 37 y from him (UBRS 2026-10-28 22:09:45, Hadley); the
+    // healer leash above still keeps the pickup where the healers see it.
+    if (ctl_leash > 0.f)
+        ctl_leash = std::max(ctl_leash, GroupControl::kFightJoinYd);
     if ((leash || controller_leash) && ctl_leash > 0.f && !controller.IsEmpty())
         for (auto const& f : s.combat.nearby_friends)
             if (f.guid == controller) { owner_unit = &f; break; }
@@ -967,6 +977,15 @@ static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float rang
         if (ThreatVictim(e.victim_kind) != ThreatVictim::Member) continue;
         if (s.pve_order.active && s.pve_order.claimed_by_other_tank(e.guid) && LooseOnMemberMs(e.guid, s.published_at_ms) < kClaimStaleMs) continue;
         if (OtherTankTakesLoose(s, e)) continue;
+        // The raid brain forbids it to this bot (a fixed tank row's tank waits at its slot for an add still far out): a pickup or a taunt
+        // would pull the tank off its slot all the same (bwl_nefarian 1109a: tanks left the arc for drakonids 40-60 y out and died there).
+        if (s.raid_order.active && std::find(s.raid_order.forbidden_targets.begin(), s.raid_order.forbidden_targets.end(), e.guid) !=
+                                       s.raid_order.forbidden_targets.end())
+            continue;
+        // The line-of-sight pull (PveOrder::sight_pull): a mob standing off out of the group's sight is on its way to the spot; a tank
+        // that walks out to it takes the fight back to where it stood (smlibrary_loksey 8d2fd499aa: Taunt reach 4 y, the tank walked 30 y
+        // to the Beastmaster on the priest).
+        if (s.pve_order.active && s.pve_order.sight_pull_mob(e.guid)) continue;
         if (leash && BeyondHealerLeash(s, e.x, e.y))
         {
             static std::atomic<uint32> s_hleash_log{ 0 };

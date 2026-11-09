@@ -9,6 +9,7 @@
 #include "MapManager.h"
 #include "MMapManager.h"
 #include "MMapDefines.h"
+#include "FollowMovementGenerator.h"
 #include "MotionMaster.h"
 #include "MoveSplineInit.h"
 #include "Object.h"
@@ -22,6 +23,7 @@
 #include "Config.h"
 #include "GameTime.h"
 #include "Fleet/CityLayer.h"
+#include "BotSwim.h"
 #include <unordered_map>
 
 #include "DetourCommon.h"
@@ -149,6 +151,22 @@ bool SnapToGround(Player* p, float x, float y, float& z)
 
     float const original = z;
 
+    // Every step below can end on the terrain grid far under a floating floor: Map::GetHeight bounds only its vmap probe, and with no
+    // model under (x, y) it returns the grid's height however far below (Hall of Thanes: the floor at z 500, the grid at 0). Where the
+    // navmesh has a walkable surface at the asked level, that surface is the ground: hot_faldrim (0.1.26 RC8) sent the tank's advance
+    // steps to z 0, Detour found no polygon there, and the group stood 50-60 s twice while the tank refused the same step.
+    auto const far_below = [&](float found)
+    {
+        constexpr float kMaxDownwardSnapY = 40.0f;   // GroundZ's search depth
+        if (found >= original - kMaxDownwardSnapY)
+            return false;
+        Position np;
+        if (!NearestNavPoint(p, x, y, original, 3.0f, 6.0f, np))
+            return false;
+        z = np.GetPositionZ();
+        return true;
+    };
+
     // Step 1: UpdateAllowedPositionZ — same vmap/mmap composite TC uses
     // in Player::SetPosition. Wrap in try/catch because BIH::subdivide
     // throws "invalid node overlap" during dynamic GO churn (BG flags,
@@ -173,7 +191,10 @@ bool SnapToGround(Player* p, float x, float y, float& z)
     // find any ground/water. Detect that and fall through to the explicit
     // probes; otherwise we're done.
     if (std::fabs(z - original) > 0.05f)
+    {
+        far_below(z);
         return true;
+    }
 
     // Step 2: GetWaterOrGroundLevel — swim-aware lookup with the player's
     // collision height accounted for. Best for shoreline / waterfall cases
@@ -183,7 +204,8 @@ bool SnapToGround(Player* p, float x, float y, float& z)
                                                &ground, /*swim*/ false);
     if (wog > INVALID_HEIGHT)
     {
-        z = wog;
+        if (!far_below(wog))
+            z = wog;
         return true;
     }
 
@@ -208,7 +230,8 @@ bool SnapToGround(Player* p, float x, float y, float& z)
         constexpr float kMaxUpwardSnapY = 30.0f;
         if (topdown <= original + kMaxUpwardSnapY)
         {
-            z = topdown;
+            if (!far_below(topdown))
+                z = topdown;
             return true;
         }
         // Outdoor terrain far above a dungeon — keep the caller's z.
@@ -223,6 +246,21 @@ bool SnapToGround(Player* p, float x, float y, float& z)
 }
 
 // ---- GroundZ ----------------------------------------------------------------
+
+// A height Map::GetHeight took from the terrain grid (no model under the probe) that lies well below the caller's z, on a dungeon map.
+// Under a dungeon's buildings the grid is filler, not ground: where the probe falls through a gap in the floor model it hands back the
+// grid however near it lies. SM Library (map 189, the hall floor at z 18.5 over a grid at 0): move targets at the edge of the entrance
+// hall's open middle came back at z 0 ("[ground] Scnmage move_to z hint=18.6 ground=0.0", smlibrary_loksey 0.1.28h), and in 0.1.28g
+// the tank and the priest stood at z 0.0 under the floor for ten minutes while the navmesh there lies at z 19-21. A gap of a few yards
+// is a step or a stair; more is not a floor the caller asked about.
+static bool GridFillerBelow(Map* m, Player* p, float x, float y, float zHint, float g)
+{
+    constexpr float kGridFillerGap = 6.0f;
+    if (!m->IsDungeon() || g >= zHint - kGridFillerGap)
+        return false;
+    float const grid = m->GetGridHeight(p->GetPhaseShift(), x, y);
+    return grid > INVALID_HEIGHT && std::fabs(g - grid) < 0.05f;
+}
 
 float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool* ok)
 {
@@ -248,7 +286,10 @@ float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool*
     {
         g = INVALID_HEIGHT;   // BIH churn race (see SnapToGround)
     }
-    if (g <= INVALID_HEIGHT)
+    // Map::GetHeight bounds only its vmap probe by the search distance: when that finds nothing it hands back the terrain grid's height
+    // however far below it lies. Over a floating hall that is no ground at all (Hall of Thanes, the floor at z 500 and the grid at 0:
+    // a stand point beside the boss came back at z 0, and the mage sent there left the hall and the run).
+    if (g <= INVALID_HEIGHT || g < zHint - kGroundProbeDown || GridFillerBelow(m, p, x, y, zHint, g))
         return zHint;
     if (ok)
         *ok = true;
@@ -287,7 +328,7 @@ bool ProbeGround(Player* p, float x, float y, float zHint, float& out)
     {
         g = INVALID_HEIGHT;   // BIH churn race (see SnapToGround)
     }
-    if (g <= INVALID_HEIGHT)
+    if (g <= INVALID_HEIGHT || g < zHint - kProbeDown || GridFillerBelow(m, p, x, y, zHint, g))   // the terrain grid far below (see GroundZ)
         return false;
     out = g;
     return true;
@@ -617,6 +658,10 @@ bool SettleToGround(Player* p, float minGap, float maxGap)
     float const gap = z - ground;
     if (gap < minGap || gap > maxGap)
         return false;
+    // On deep water a bot's z is the surface (WATER_WALK: IsInWater() is false there), and the floor is the lake bed: that is a swim,
+    // not a fall (a BG river: the bot sank to the bed and drowned).
+    if (float swimZ = 0.f; SwimLevel(p, x, y, z, swimZ))
+        return false;
     // A real player falls client-side; a bot has no client, so nothing ever moves it down. Launch the fall as a spline
     // (the same as MotionMaster::MoveFall does for creatures) so it drops to the floor and every viewer sees it land.
     Movement::MoveSplineInit init(p);
@@ -625,6 +670,104 @@ bool SettleToGround(Player* p, float minGap, float maxGap)
     init.Launch();
     p->SetFallInformation(0, ground);
     return true;
+}
+
+// ---- SwimLevel / UpdateSwimState -------------------------------------------
+
+bool SwimLevel(Player* p, float x, float y, float zHint, float& swimZ)
+{
+    if (!p || !p->IsInWorld())
+        return false;
+    Map* m = p->GetMap();
+    if (!m)
+        return false;
+    // The floor under the asked point, searched from a little above it: from the surface this finds the lake bed, from a bridge
+    // the bridge (no water under the bridge's own floor, so no swim).
+    float floor_z = INVALID_HEIGHT;
+    try
+    {
+        floor_z = m->GetHeight(p->GetPhaseShift(), x, y, zHint + 2.0f, /*vmap*/ true, 100.0f);
+    }
+    catch (...)
+    {
+        return false;   // BIH churn race (see SnapToGround)
+    }
+    if (floor_z <= INVALID_HEIGHT)
+        return false;
+    LiquidData ld{};
+    ZLiquidStatus const st = m->GetLiquidStatus(p->GetPhaseShift(), x, y, floor_z, map_liquidHeaderTypeFlags::AllLiquids, &ld,
+                                                p->GetCollisionHeight());
+    if (st == LIQUID_MAP_NO_WATER || st == LIQUID_MAP_ABOVE_WATER)
+        return false;
+    // Lava and slime are not swum: the flee and refuse rules deal with them.
+    if (ld.type_flags.HasFlag(map_liquidHeaderTypeFlags::Magma) || ld.type_flags.HasFlag(map_liquidHeaderTypeFlags::Slime))
+        return false;
+    if (!Swim::IsDeep(ld.level, floor_z, p->GetCollisionHeight()) || Swim::AskedFromAbove(zHint, ld.level))
+        return false;
+    swimZ = Swim::SwimZ(ld.level, p->GetCollisionHeight());
+    return true;
+}
+
+void UpdateSwimState(Player* p)
+{
+    if (!p || !p->IsInWorld() || p->IsBeingTeleported())
+        return;
+    bool const flagged = p->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    // Cheap first: no liquid at all here (the status the core keeps from the last relocation) and not swimming.
+    if (!flagged && p->GetLiquidStatus() == LIQUID_MAP_NO_WATER)
+        return;
+
+    // Twice a second per bot is enough: the flag only changes the animation and the speed of the next spline. World thread only.
+    static std::unordered_map<uint64, uint32> s_swimCheckAt;
+    uint32 const now = GameTime::GetGameTimeMS();
+    uint32& at = s_swimCheckAt[p->GetGUID().GetCounter()];
+    if (at != 0 && now - at < 500u)
+        return;
+    at = now ? now : 1u;
+
+    float const x = p->GetPositionX(), y = p->GetPositionY(), z = p->GetPositionZ();
+    float swimZ = 0.f;
+    // A ghost walks the lake bed to its corpse (no breath, no drowning); flying, a taxi, a ship, a vehicle and water walking keep
+    // their own movement.
+    bool const deep = p->IsAlive() && !p->IsFlying() && !p->IsInFlight() && !p->GetTransport() && !p->GetVehicle() &&
+        !p->HasAuraType(SPELL_AURA_WATER_WALK) && !p->HasAuraType(SPELL_AURA_HOVER) && SwimLevel(p, x, y, z, swimZ);
+    if (p->SetSwim(deep))
+    {
+        static uint32 s_flagLogged = 0;
+        if (s_flagLogged++ < 500)
+            TC_LOG_INFO("playerbot.v2", "[swim] {} {} swimming at ({:.1f},{:.1f},{:.1f})", p->GetName(), deep ? "starts" : "stops", x, y, z);
+    }
+    if (!deep)
+        return;
+
+    // Standing still in deep water: float at the swim z. A bot that walked down to the lake bed (a goal's ground z) comes up before it
+    // drowns, and one left on top of the water by a path along the navmesh's water polygons sinks in to swim. Never while a move,
+    // a cast or a root is running: the next spline starts from where the bot is. A follower standing by its leader settles too (the
+    // follow generator waits while the leader stands, and paths again from the swim z when he moves).
+    MovementGeneratorType const gen = p->GetMotionMaster()->GetCurrentMovementGeneratorType();
+    if (p->isMoving() || p->IsFalling() || (gen != IDLE_MOTION_TYPE && gen != FOLLOW_MOTION_TYPE) ||
+        p->HasUnitState(UNIT_STATE_NOT_MOVE) || p->IsNonMeleeSpellCast(false) || !Swim::NeedsSettle(z, swimZ))
+        return;
+    // A follower settles only where it stays in its follow range. The follow generator measures that range in 3D and, once the follower
+    // is out of it, paths again to a navmesh point by the leader, which in water is the surface: a settle that took the follower out
+    // of range was undone at the leader's next step and the two took turns (lake_swim 2026-11-09: a follower 2 y behind a leader on
+    // the surface, settled down and lifted back up 14 times in 25 s). Left where it is, it still swims (the flag above).
+    if (gen == FOLLOW_MOTION_TYPE)
+    {
+        auto const* follow = static_cast<FollowMovementGenerator const*>(p->GetMotionMaster()->GetCurrentMovementGenerator());
+        Unit const* leader = follow ? follow->GetTarget() : nullptr;
+        if (!leader || leader->GetMapId() != p->GetMapId() ||
+            !Swim::SettleKeepsFollowRange(x - leader->GetPositionX(), y - leader->GetPositionY(), swimZ - leader->GetPositionZ(),
+                                          p->GetCombatReach() + leader->GetCombatReach() + follow->GetRange()))
+            return;
+    }
+    Movement::MoveSplineInit init(p);
+    init.MoveTo(x, y, swimZ, /*generatePath*/ false);
+    init.Launch();
+    static uint32 s_settleLogged = 0;
+    if (s_settleLogged++ < 500)
+        TC_LOG_INFO("playerbot.v2", "[swim_settle] {} at ({:.1f},{:.1f}) z {:.1f} -> {:.1f} ({})", p->GetName(), x, y, z, swimZ,
+                    z < swimZ ? "up from the floor" : "down from the surface");
 }
 
 // ---- PostTeleportSnap -------------------------------------------------------

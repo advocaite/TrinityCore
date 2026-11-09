@@ -367,6 +367,7 @@ class TC_GAME_API Item : public Object
         Optional<uint32> GetDisenchantLootId() const;
         Optional<uint16> GetDisenchantSkillRequired() const;
         static ItemDisenchantLootEntry const* GetBaseDisenchantLoot(ItemTemplate const* itemTemplate, uint32 quality, uint32 itemLevel);
+        static bool HasOwnDisenchantLoot(ItemTemplate const* itemTemplate);
         void SetFixedLevel(uint8 level);
         std::span<ItemEffectEntry const* const> GetEffects() const { return { _bonusData.Effects.data(), _bonusData.EffectCount }; }
         uint32 GetItemLimitCategory() const { return _bonusData.LimitCategory; }

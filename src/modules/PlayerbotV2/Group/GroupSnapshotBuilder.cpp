@@ -9,6 +9,7 @@
 #include "Player.h"
 #include "Pet.h"
 #include "Group.h"
+#include "Transport.h"   // ship_guid: the member's ship or zeppelin
 #include "GameTime.h"
 #include "Unit.h"
 #include "ObjectAccessor.h"
@@ -25,6 +26,7 @@
 #include <string_view>
 #include <unordered_map>
 #include "SharedDefines.h"
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 
 namespace Playerbot {
 
@@ -288,7 +290,8 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
         m.cls     = slot._class;
         m.subgroup = slot.group;
         m.is_bot  = Services::Initialized() &&
-                    Services::Lifecycle().is_bot(slot.guid.GetCounter());
+                    Services::Lifecycle().is_bot(slot.guid.GetCounter()) &&
+                    !Scenario::IsScenarioHuman(slot.guid.GetCounter());   // a player-led scenario's stand-in is the player
 
         // Live state from the actual Player if they're online & in-world.
         if (Player* mp = ObjectAccessor::FindConnectedPlayer(slot.guid))
@@ -303,6 +306,9 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
             m.in_combat    = mp->IsInCombat();
             m.is_controlled = mp->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED);
             m.is_mounted   = mp->IsMounted();
+            m.in_flight    = mp->IsInFlight();
+            if (Transport const* ship = dynamic_cast<Transport const*>(mp->GetTransport()))
+                m.ship_guid = ship->GetGUID();
             m.is_alive     = mp->IsAlive();
             m.rez_pending  = mp->IsResurrectRequested();
             m.is_ghost     = mp->HasPlayerFlag(PLAYER_FLAGS_GHOST);

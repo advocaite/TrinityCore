@@ -80,6 +80,21 @@ uint32 Authentication::HandleLogon(Session* session, ClientBuild::Program::Id pr
 uint32 Authentication::HandleVerifyAuthToken(Session* session, std::string_view authToken,
     std::function<void(uint32)> sendResponse, std::function<void(AccountInfo const*, std::string_view)> sendLogonComplete)
 {
+    // one login in flight per connection: a client repeating the logon request queued a new chain of login database queries for each
+    // one, and a connection that is already logged in has nothing to log in again
+    if (!session->TryBeginLogin())
+    {
+        TC_LOG_DEBUG("session", "{} sent a logon request while {}, refused", session->GetClientInfo(), session->IsAuthed() ? "logged in" : "one is running");
+        return ERROR_DENIED;
+    }
+
+    // every way the check ends answers the client through sendResponse: the login is over then
+    sendResponse = [session, sendResponse = std::move(sendResponse)](uint32 result)
+    {
+        session->EndLogin();
+        sendResponse(result);
+    };
+
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ACCOUNT_INFO);
     stmt->setString(0, authToken);
 

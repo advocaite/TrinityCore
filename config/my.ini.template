@@ -1,0 +1,11 @@
+# Template: copy to my.ini and replace the two @...@ paths for this machine (my.ini is git-ignored).
+[mysqld]
+basedir=@MYSQL_BASEDIR@
+datadir=@MYSQL_DATADIR@
+port=3306
+bind-address=127.0.0.1
+skip-log-bin
+max_allowed_packet=128M
+innodb_buffer_pool_size=1G
+innodb_buffer_pool_instances=2
+character-set-server=utf8mb4

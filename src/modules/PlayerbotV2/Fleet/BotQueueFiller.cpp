@@ -1265,10 +1265,10 @@ Placement ChoosePlacement(Team team, uint32 need, uint32 bg_type_id, uint8 brack
             best_humans = humans; best_bots = bots;
         }
     };
-    BattlegroundTemplate const* tmpl = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id));
-    if (!tmpl) return best;
-    for (int32 map_id : tmpl->MapIDs)
-        for (Battleground* bg : sBattlegroundMgr->GetBGFreeSlotQueueStore(map_id))
+    if (!sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id))) return best;
+    // a running instance of this type can sit in its own queue's list or in a random/brawl queue's list
+    for (auto const& [_, free_slot_store] : sBattlegroundMgr->GetBGFreeSlotQueues())
+        for (Battleground* bg : free_slot_store)
             if (bg && uint32(bg->GetTypeID()) == bg_type_id) consider(bg);
     // full instances leave the free-slot store: reach them through the bots inside
     for (BotId id : Services::Lifecycle().snapshot_ids())

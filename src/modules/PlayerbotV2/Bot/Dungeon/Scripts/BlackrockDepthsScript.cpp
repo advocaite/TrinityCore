@@ -102,6 +102,9 @@ public:
         // Boss progression — BRD has 16+ encounters in a sprawling layout.
         // Tank-advance picks closest alive; multi-hour clears need
         // progression_waypoints to truly automate.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             9018,   // High Interrogator Gerstahn
             9025,   // Lord Roccor
@@ -114,7 +117,6 @@ public:
             9016,   // Bael'Gar
             9033,   // General Angerforge
             8983,   // Golem Lord Argelmach
-            9537,   // Hurley Blackbreath (rare/event)
             9502,   // Phalanx
             9543,   // Ribbly Screwspigot
             9499,   // Plugger Spazzring

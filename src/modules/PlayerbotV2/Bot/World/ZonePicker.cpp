@@ -42,6 +42,7 @@
 #include "CreatureData.h"
 #include "../../Services.h"
 #include "../../Travel/QuestHubDatabase.h"
+#include "../ChannelTalk.h"
 
 #include <array>
 #include <cstring>
@@ -374,6 +375,31 @@ bool VanillaZoneLevelRange(uint32 zone_id, uint8& lo, uint8& hi)
         return true;
     }
     return false;
+}
+
+std::string VanillaLevelPlaces(uint8 level)
+{
+    std::string zones;
+    for (VanillaZone const& z : kVanillaZones)
+    {
+        if (level < z.lo || level > z.hi || (z.lo == 1 && level > 10) || z.zone == 16593)
+            continue;
+        AreaTableEntry const* e = sAreaTableStore.LookupEntry(z.zone);
+        if (!e)
+            continue;
+        zones += std::string(zones.empty() ? "" : ", ") + e->AreaName[LOCALE_enUS];
+    }
+    std::string dungeons;
+    for (ChannelTalk::Dungeon const& d : ChannelTalk::kDungeons)
+        if (level + 2 >= d.lo && level <= d.hi)
+            dungeons += std::string(dungeons.empty() ? "" : ", ") + d.name;
+    std::string out = "Real places for level " + std::to_string(uint32(level)) + ": zones " + (zones.empty() ? std::string("(a starting zone)") : zones);
+    out += "; dungeons " + (dungeons.empty() ? std::string("none yet") : dungeons) + ".";
+    if (level >= 58)
+        out += " At 60 people run Blackrock Depths, Stratholme, Scholomance, Dire Maul and Blackrock Spire, raid Molten Core, Onyxia, "
+               "Blackwing Lair and Zul'Gurub, farm gold and reputation, and do PvP; they don't level or grind in low zones.";
+    out += " Name only these (or none).";
+    return out;
 }
 
 bool IsVanillaCapitalZone(uint32 zone_id)

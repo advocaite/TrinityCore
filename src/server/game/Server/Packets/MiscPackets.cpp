@@ -18,6 +18,7 @@
 #include "MiscPackets.h"
 #include "PacketOperators.h"
 #include "Player.h"
+#include "Weather.h"
 
 namespace WorldPackets::Misc
 {
@@ -325,7 +326,7 @@ void ResurrectResponse::Read()
 
 WorldPacket const* Weather::Write()
 {
-    _worldPacket << uint32(WeatherID);
+    _worldPacket << uint32(GetClientWeatherId(WeatherID));
     _worldPacket << float(Intensity);
     _worldPacket << Bits<1>(Abrupt);
     _worldPacket.FlushBits();

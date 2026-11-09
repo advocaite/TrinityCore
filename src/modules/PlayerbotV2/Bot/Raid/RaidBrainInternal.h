@@ -67,6 +67,11 @@ bool Ready(Player* p, uint32_t spellId, Unit* target, bool hostile);
 bool Busy(Player* p);
 uint32_t Stacks(Unit* u, uint32_t aura);
 Member* FindMember(Plan& plan, Player* p);
+// Target schools (RaidBrain.cpp, PublishTargets): what an enemy avoids, whose resistances stand for the raid's casters, what a member deals.
+// reflect (optional): the schools of <avoid> the enemy turns back on the caster, the only ones an area spell must keep off it.
+void EnemySchoolMasks(Unit* enemy, Unit const* caster, uint8_t& prefer, uint8_t& avoid, uint8_t* reflect = nullptr);
+Unit const* SchoolReferenceCaster(Plan const& plan);
+uint8_t MemberDamageSchools(Member const& m, Player* mainTank);
 
 // One election round for a plan: no two bots get the same job.
 struct Election
@@ -99,6 +104,11 @@ void BwlMechanicsElect(Election& e, uint32_t now);
 void BwlPrePull(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders, std::ostringstream& dump, uint32_t now);
 // A boss fight script (RaidFightScript.h): after the rule passes, overwrites the DPS bots' target and start wait for the scripted boss.
 void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders, uint32_t now, std::ostringstream& dump);
+// Zul'Gurub (RaidMechanics_ZG.cpp): the enemy a scripted fight's DPS must kill now whatever the kill order says (a Son of Hakkar before Blood
+// Siphon; nullptr = none), and the movement the fight needs (the raid gathers on that Son as it dies).
+Unit* ZgForcedFocus(Plan const& plan, uint32_t now);
+bool ZgMechanicsMove(Plan const& plan, Member const& self, uint32_t now, RaidOrder& out);
+void ZgMechanicsElect(Election& e, uint32_t now);
 
 bool Aq40MechanicsMove(Plan const& plan, Member const& self, uint32_t now, RaidOrder& out);
 void Aq40MechanicsElect(Election& e, uint32_t now);

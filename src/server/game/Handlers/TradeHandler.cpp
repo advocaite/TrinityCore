@@ -147,6 +147,8 @@ void WorldSession::moveItems(Item* myItems[], Item* hisItems[])
                 // adjust time (depends on /played)
                 if (*myItems[i]->m_itemData->CreatePlayedTime)
                     myItems[i]->SetCreatePlayedTime(trader->GetTotalPlayedTime() - (_player->GetTotalPlayedTime() - myItems[i]->m_itemData->CreatePlayedTime));
+                TC_LOG_INFO("playerbot.v2", "[loot_trade] {} {} x{} from {} to {}", myItems[i]->GetEntry(), myItems[i]->GetTemplate()->GetDefaultLocaleName(),
+                    myItems[i]->GetCount(), _player->GetName(), trader->GetName());
                 // store
                 trader->MoveItemToInventory(traderDst, myItems[i], true, true);
             }
@@ -165,6 +167,8 @@ void WorldSession::moveItems(Item* myItems[], Item* hisItems[])
                 // adjust time (depends on /played)
                 if (*hisItems[i]->m_itemData->CreatePlayedTime)
                     hisItems[i]->SetCreatePlayedTime(_player->GetTotalPlayedTime() - (trader->GetTotalPlayedTime() - hisItems[i]->m_itemData->CreatePlayedTime));
+                TC_LOG_INFO("playerbot.v2", "[loot_trade] {} {} x{} from {} to {}", hisItems[i]->GetEntry(), hisItems[i]->GetTemplate()->GetDefaultLocaleName(),
+                    hisItems[i]->GetCount(), trader->GetName(), _player->GetName());
                 // store
                 _player->MoveItemToInventory(playerDst, hisItems[i], true, true);
             }

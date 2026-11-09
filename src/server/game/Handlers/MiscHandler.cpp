@@ -414,11 +414,17 @@ void WorldSession::HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateCh
     }
 
     _player->SetStandState(packet.StandState);
+    UpdateCampfireRest(packet.StandState);
+}
 
-    // Classic 1.60 (WoW Forever): sitting near a campfire (spell focus 4) starts a 60 s rest (1289723) that gives Boosted Rest
-    // (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it)
+// Classic 1.60 (WoW Forever): sitting near a campfire (spell focus 4) starts a 60 s rest (1289723) that gives Boosted Rest
+// (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it).
+// Also called for the sit text emote: a typed /sit in another language (ruRU "/сесть", 2026-11-05 report) can reach the server
+// only as the emote, without a stand state change, and then the rest never started.
+void WorldSession::UpdateCampfireRest(uint8 standState)
+{
     static constexpr uint32 SPELL_CAMPFIRE_REST = 1289723;
-    if (packet.StandState == UNIT_STAND_STATE_SIT)
+    if (standState == UNIT_STAND_STATE_SIT)
     {
         if (!_player->HasAura(SPELL_CAMPFIRE_REST))
             if (GameObject* fire = _player->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, 15.0f))

@@ -110,9 +110,95 @@ std::array<ClassicAQ20SquadSlot, 5> const ClassicAQ20AndorovSquad =
     { CLASSIC_AQ20_NPC_KALDOREI_ELITE,  -8535.95f, 1484.21f, 32.3366f, 4.06662f, 4.929f, 2.1f }
 }};
 
+// VMaNGOS creature_movement_template 15471 (migration 20240619170801): once Kurinnaxx is dead the squad walks from its spawn to the
+// camp. The last point (-8870.72 1648.40) is listed twice there with 1 s waits; the walk ends on it once.
+std::array<Position, 12> const ClassicAQ20AndorovCampPath =
+{{
+    { -8583.434f, 1453.6205f, 31.924183f },
+    { -8623.171f, 1470.4077f, 31.90701f },
+    { -8638.66f,  1486.67f,   32.8086f },
+    { -8652.15f,  1500.83f,   32.6656f },
+    { -8668.32f,  1520.76f,   32.0071f },
+    { -8694.01f,  1552.81f,   32.0866f },
+    { -8710.79f,  1571.02f,   26.5108f },
+    { -8737.69f,  1596.18f,   21.5802f },
+    { -8771.53f,  1614.14f,   21.5793f },
+    { -8809.16f,  1622.42f,   20.1552f },
+    { -8845.42f,  1633.81f,   19.7999f },
+    { -8870.72f,  1648.4f,    21.5113f, 5.63741f }
+}};
+
+// VMaNGOS creature_movement_special 15471 (migration 20221127232342): the walk from the camp to the valley when the event starts
+std::array<Position, 4> const ClassicAQ20AndorovValleyPath =
+{{
+    { -8881.382813f, 1611.213135f, 21.441124f },
+    { -8894.543945f, 1589.428223f, 21.454288f },
+    { -8916.958008f, 1557.906372f, 21.431034f },
+    { -8939.951172f, 1551.126953f, 21.566868f, 2.877214f }
+}};
+
+// Squad positions at the camp (creature_movement_scripts 1547101, generic_scripts 153912) and in the valley (creature_movement_scripts
+// 1547103); slot 0 = Andorov, 1..4 = the elites in VMaNGOS guid order 301312..301315
+std::array<Position, 5> const ClassicAQ20SquadCampPos =
+{{
+    { -8870.721f, 1648.401f, 21.51133f, 5.637414f },
+    { -8868.31f,  1651.6f,   21.5113f,  5.45f },
+    { -8869.52f,  1650.0f,   21.5113f,  5.48f },
+    { -8871.92f,  1646.8f,   21.5113f,  5.78f },
+    { -8873.13f,  1645.21f,  21.5113f,  5.44f }
+}};
+
+std::array<Position, 5> const ClassicAQ20SquadValleyPos =
+{{
+    { -8939.951172f, 1551.126953f, 21.566868f, 2.877214f },
+    { -8937.8f,  1556.23f, 21.4079f, 2.97824f },
+    { -8939.17f, 1554.02f, 21.5905f, 2.89695f },
+    { -8940.74f, 1548.23f, 21.6848f, 2.6754f },
+    { -8941.52f, 1545.34f, 21.8723f, 2.96206f }
+}};
+
+// generic_scripts 1547105: Andorov leaves once Rajaxx is dead; each move has its VMaNGOS delay and travel time (ms)
+struct ClassicAQ20TimedMove
+{
+    uint32 At;
+    uint32 Travel;
+    Position Pos;
+};
+
+std::array<ClassicAQ20TimedMove, 4> const ClassicAQ20AndorovLeavePath =
+{{
+    {  3000, 3967, { -8969.76f, 1547.85f, 22.0191f } },
+    {  7000, 6114, { -8941.51f, 1552.21f, 21.7021f } },
+    { 12000, 4472, { -8917.92f, 1563.85f, 21.4079f } },
+    { 15000, 6462, { -8888.59f, 1593.67f, 21.4053f } }
+}};
+
+// generic_scripts 153911 .. 153851 and 153411: the waves in order. Each wave is the creature_formations group (VMaNGOS creature_groups)
+// led by that captain; SuccessText / SuccessSound is what General Rajaxx does once the wave is dead (after the last one he comes himself).
+struct ClassicAQ20Wave
+{
+    uint32 LeaderEntry;
+    uint32 SuccessText;
+    uint32 SuccessSound;
+};
+
+std::array<ClassicAQ20Wave, 7> const ClassicAQ20Waves =
+{{
+    { CLASSIC_AQ20_NPC_CAPTAIN_QEEZ,   0,                              CLASSIC_AQ20_SOUND_RAJAXX_WAVE_1 },
+    { CLASSIC_AQ20_NPC_CAPTAIN_TUUBID, CLASSIC_AQ20_SAY_RAJAXX_WAVE_2, CLASSIC_AQ20_SOUND_RAJAXX_WAVE_2 },
+    { CLASSIC_AQ20_NPC_CAPTAIN_DRENN,  CLASSIC_AQ20_SAY_RAJAXX_WAVE_3, CLASSIC_AQ20_SOUND_RAJAXX_WAVE_3 },
+    { CLASSIC_AQ20_NPC_CAPTAIN_XURREM, CLASSIC_AQ20_SAY_RAJAXX_WAVE_4, CLASSIC_AQ20_SOUND_RAJAXX_WAVE_4 },
+    { CLASSIC_AQ20_NPC_MAJOR_YEGGETH,  CLASSIC_AQ20_SAY_RAJAXX_WAVE_5, CLASSIC_AQ20_SOUND_RAJAXX_WAVE_5 },
+    { CLASSIC_AQ20_NPC_MAJOR_PAKKON,   CLASSIC_AQ20_SAY_RAJAXX_WAVE_6, CLASSIC_AQ20_SOUND_RAJAXX_WAVE_6 },
+    { CLASSIC_AQ20_NPC_COLONEL_ZERRAN, CLASSIC_AQ20_SAY_RAJAXX_ENGAGE, CLASSIC_AQ20_SOUND_RAJAXX_ENGAGE }
+}};
+
 enum ClassicAQ20InstanceMisc : uint32
 {
     CLASSIC_AQ20_GO_AQ_DOOR              = 176149,
+
+    // VMaNGOS creature_linking_template (migration 20240407052628): the captains aggro with Rajaxx within this range
+    CLASSIC_AQ20_CAPTAIN_LINK_RANGE      = 150,
     CLASSIC_AQ20_FACTION_CENARION_CIRCLE = 609,
 
     // generic_scripts 154710 texts
@@ -175,7 +261,13 @@ public:
             m_uiRajaxxEventResetTimer = 2000;
             m_bRajaxxEventIsToReset = false;
             m_squadRespawnTimer.fill(0);
-            m_andorovScriptTimer = 0;
+            m_andorovStep = AndorovStep::None;
+            m_andorovStepTime = 0;
+            m_andorovStepStage = 0;
+            m_squadAtCamp = false;
+            m_waveIndex = 0;
+            m_waveTimeLeft = 0;
+            m_waveCheckTimer = 0;
         }
 
         ObjectGuid m_uiKurinnaxxGUID, m_uiBuruGUID, m_uiAyamissGUID, m_uiMoamGUID, m_uiOssirianGUID, m_uiAndorovGUID;
@@ -207,7 +299,37 @@ public:
         // Andorov squad (summoned, see ClassicAQ20AndorovSquad)
         std::array<ObjectGuid, 5> m_squadGuids;
         std::array<uint32, 5> m_squadRespawnTimer;   // ms, 0 = no pending respawn
-        uint32 m_andorovScriptTimer;                  // generic_scripts 154710 delayed text
+        bool m_squadAtCamp;                           // once the squad walked to the camp it (re)spawns there (VMaNGOS home positions)
+
+        // The Andorov event timeline, driven from Update(): VMaNGOS generic_scripts 154710, creature_movement_scripts 1547102 / 1547103,
+        // the scripted map events of generic_scripts 1539x1, 153912 (failure), 153410 / 153411 (Rajaxx), creature_ai_events 1547104 /
+        // 1547105 and generic_scripts 1547105 (Andorov leaves)
+        enum class AndorovStep : uint8
+        {
+            None,
+            WalkToCamp,     // creature_movement_template 15471
+            Start,          // generic_scripts 154710
+            WalkToValley,   // creature_movement_special 15471
+            Valley,         // creature_movement_scripts 1547102 + 1547103
+            Waves,          // the seven scripted map events
+            Rajaxx,         // generic_scripts 153410
+            Done,           // creature_ai_events 1547104 / 1547105: out-of-combat timers once Rajaxx is dead
+            Leave           // generic_scripts 1547105
+        };
+        AndorovStep m_andorovStep;
+        uint32 m_andorovStepTime;    // ms since the step began (Done: out-of-combat ms)
+        uint32 m_andorovStepStage;   // delayed commands of the step already run
+
+        // The wave groups, built from the spawn data and creature_formations when the event starts
+        struct WaveSpawn
+        {
+            ObjectGuid::LowType SpawnId;
+            uint8 Wave;
+        };
+        std::vector<WaveSpawn> m_waveSpawns;
+        uint8 m_waveIndex;
+        uint32 m_waveTimeLeft;       // ms left of the scripted map event's time limit
+        uint32 m_waveCheckTimer;     // VMaNGOS checks the event's conditions every second
 
         bool IsEncounterInProgress() const override
         {
@@ -258,6 +380,22 @@ public:
         // VMaNGOS OnCreatureEnterCombat
         void OnCreatureEnterCombat(Creature* pCreature)
         {
+            // creature_linking_template FLAG_AGGRO_ON_AGGRO: the captains join when Rajaxx is pulled past them
+            if (pCreature->GetEntry() == CLASSIC_AQ20_NPC_RAJAXX)
+            {
+                Unit* pEnemy = pCreature->GetVictim();
+                if (!pEnemy)
+                    pEnemy = pCreature->GetThreatManager().GetCurrentVictim();
+                if (!pEnemy)
+                    return;
+                for (uint32 i = CLASSIC_AQ20_DATA_QEEZ; i <= CLASSIC_AQ20_DATA_ZERRAN; ++i)
+                    if (Creature* pCaptain = instance->GetCreature(GetGuidData(i)))
+                        if (pCaptain->IsAlive() && !pCaptain->IsInCombat() && pCaptain->IsAIEnabled() &&
+                            pCaptain->IsWithinDist(pCreature, float(CLASSIC_AQ20_CAPTAIN_LINK_RANGE)))
+                            pCaptain->AI()->AttackStart(pEnemy);
+                return;
+            }
+
             if (!ClassicAQ20IsRajaxxWaveEntry(pCreature->GetEntry()))
                 return;
 
@@ -274,9 +412,8 @@ public:
                 if (Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID))
                 {
                     if (!pAndorov->IsAlive())
-                        pAndorov = RespawnSquadMember(0, pAndorov);
-                    if (pAndorov)
-                        StartAndorovScript(pAndorov);
+                        RespawnSquadMember(0, pAndorov);
+                    // generic_scripts 154710 (see SetData)
                     SetData(CLASSIC_AQ20_TYPE_GENERAL_ANDOROV, IN_PROGRESS);
                 }
             }
@@ -286,6 +423,14 @@ public:
         // VMaNGOS OnCreatureEvade
         void OnCreatureEvade(Creature* pCreature)
         {
+            if (pCreature->GetEntry() == CLASSIC_AQ20_NPC_RAJAXX)
+            {
+                // TC keeps the encounter (and the instance entry block) in progress until the boss state is reset
+                if (GetBossState(CLASSIC_AQ20_TYPE_RAJAXX) == IN_PROGRESS)
+                    SetData(CLASSIC_AQ20_TYPE_RAJAXX, NOT_STARTED);
+                return;
+            }
+
             if (ClassicAQ20IsRajaxxWaveEntry(pCreature->GetEntry()))
             {
                 // If any creature from Rajaxx's wave is on evade mode, reset Rajaxx.
@@ -323,7 +468,10 @@ public:
                 case CLASSIC_AQ20_NPC_MAJOR_YEGGETH:   m_uiYeggethGUID = pCreature->GetGUID(); break;
                 case CLASSIC_AQ20_NPC_MAJOR_PAKKON:    m_uiPakkonGUID = pCreature->GetGUID(); break;
                 case CLASSIC_AQ20_NPC_COLONEL_ZERRAN:  m_uiZerranGUID = pCreature->GetGUID(); break;
-                case CLASSIC_AQ20_NPC_RAJAXX:          m_uiRajaxxGUID = pCreature->GetGUID(); break;
+                case CLASSIC_AQ20_NPC_RAJAXX:
+                    m_uiRajaxxGUID = pCreature->GetGUID();
+                    m_combatWatch[pCreature->GetGUID()] = CombatWatch();
+                    break;
                 case CLASSIC_AQ20_NPC_BURU:            m_uiBuruGUID = pCreature->GetGUID(); break;
                 case CLASSIC_AQ20_NPC_AYAMISS:         m_uiAyamissGUID = pCreature->GetGUID(); break;
                 case CLASSIC_AQ20_NPC_MOAM:            m_uiMoamGUID = pCreature->GetGUID(); break;
@@ -451,6 +599,8 @@ public:
                     }
                     if (uiData == IN_PROGRESS)
                     {
+                        if (m_uiAndorovState == IN_PROGRESS)
+                            return;   // generic_scripts 154710 already runs
                         SetAndorovSquadImmunity(false);
                         if (Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID))
                         {
@@ -459,7 +609,12 @@ public:
                         }
                     }
                     m_uiAndorovState = uiData;
+                    if (uiData == IN_PROGRESS)
+                        StartAndorovEvent();
                     break;
+                case CLASSIC_AQ20_DATA_ANDOROV_POINT:
+                    OnAndorovPointReached(uiData);
+                    return;
                 case CLASSIC_AQ20_TYPE_RAJAXX:
                     if (uiData == NOT_STARTED)
                     {
@@ -548,13 +703,7 @@ public:
             }
 
             if (GetBossState(CLASSIC_AQ20_TYPE_KURINNAXX) == DONE && GetBossState(CLASSIC_AQ20_TYPE_RAJAXX) != DONE && m_uiAndorovGUID.IsEmpty())
-            {
-                if (Creature* pAndorov = SummonAndorovSquad())
-                {
-                    pAndorov->SetGossipMenuId(CLASSIC_AQ20_ANDOROV_GOSSIP_IN_PROGRESS);
-                    // VMaNGOS MoveWaypoint(0) on the spawn's own creature_movement path (empty for guid 301311).
-                }
-            }
+                SummonAndorovSquad();   // VMaNGOS LoadCreatureSpawnWithGroup + MoveWaypoint(0): the squad walks to the camp
 
             if (m_bRajaxxEventIsToReset)
             {
@@ -579,19 +728,7 @@ public:
             }
 
             UpdateSquadRespawns(uiDiff);
-
-            if (m_andorovScriptTimer)
-            {
-                if (m_andorovScriptTimer <= uiDiff)
-                {
-                    m_andorovScriptTimer = 0;
-                    if (Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID))
-                        if (pAndorov->IsAlive())
-                            ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_START_2, pAndorov);
-                }
-                else
-                    m_andorovScriptTimer -= uiDiff;
-            }
+            UpdateAndorovEvent(uiDiff);
         }
 
         /* Private methods */
@@ -646,15 +783,418 @@ public:
             return false;
         }
 
-        // generic_scripts 154710 (Lieutenant General Andorov start script)
-        void StartAndorovScript(Creature* pAndorov)
+        /* Andorov event */
+
+        void SetAndorovStep(AndorovStep step)
         {
+            m_andorovStep = step;
+            m_andorovStepTime = 0;
+            m_andorovStepStage = 0;
+        }
+
+        // One delayed command of the current step (VMaNGOS script row delay): true once, when its delay has elapsed
+        bool AndorovStepDue(uint32 stage, uint32 atMs)
+        {
+            if (m_andorovStepStage != stage || m_andorovStepTime < atMs)
+                return false;
+            ++m_andorovStepStage;
+            return true;
+        }
+
+        // Waypoints walk; the orientation of a path's last point is its final facing
+        void MoveAndorovTo(Creature* pAndorov, uint32 pointId, Position const& pos)
+        {
+            Optional<float> finalOrient;
+            if (pos.GetOrientation() != 0.0f)
+                finalOrient = pos.GetOrientation();
+            pAndorov->GetMotionMaster()->MovePoint(pointId, pos, true, finalOrient, {}, MovementWalkRunSpeedSelectionMode::ForceWalk);
+        }
+
+        // VMaNGOS creature_groups: the elites follow Andorov while he walks
+        void FollowAndorov(Creature* pAndorov)
+        {
+            for (uint32 i = 1; i < m_squadGuids.size(); ++i)
+                if (Creature* pElite = instance->GetCreature(m_squadGuids[i]))
+                {
+                    ClassicAQ20SquadSlot const& slot = ClassicAQ20AndorovSquad[i];
+                    if (pElite->IsAlive() && !pElite->IsInCombat())
+                        pElite->GetMotionMaster()->MoveFollow(pAndorov, slot.FollowDist, ChaseAngle(slot.FollowAngle));
+                }
+        }
+
+        // creature_movement_scripts 1547101 / 1547103: Andorov stops where he is, the elites walk to their spots, and those become home
+        void PlaceSquad(std::array<Position, 5> const& positions)
+        {
+            for (uint32 i = 0; i < m_squadGuids.size(); ++i)
+            {
+                Creature* member = instance->GetCreature(m_squadGuids[i]);
+                if (!member || !member->IsAlive())
+                    continue;
+
+                member->SetHomePosition(positions[i]);
+                if (member->IsInCombat())
+                    continue;
+
+                member->GetMotionMaster()->Clear();
+                if (i == 0)
+                    member->GetMotionMaster()->MoveIdle();
+                else
+                    member->GetMotionMaster()->MovePoint(0, positions[i], true, positions[i].GetOrientation(), {},
+                        MovementWalkRunSpeedSelectionMode::ForceWalk);
+            }
+        }
+
+        // creature_movement_template 15471: the squad walks from its spawn to the camp
+        void StartCampWalk(Creature* pAndorov)
+        {
+            SetAndorovStep(AndorovStep::WalkToCamp);
+            pAndorov->SetGossipMenuId(CLASSIC_AQ20_ANDOROV_GOSSIP_IN_PROGRESS);
+            MoveAndorovTo(pAndorov, CLASSIC_AQ20_ANDOROV_POINT_CAMP_PATH, ClassicAQ20AndorovCampPath[0]);
+            FollowAndorov(pAndorov);
+        }
+
+        // classic_npc_andorov::MovementInform
+        void OnAndorovPointReached(uint32 pointId)
+        {
+            Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID);
+            if (!pAndorov || !pAndorov->IsAlive())
+                return;
+
+            if (pointId >= CLASSIC_AQ20_ANDOROV_POINT_CAMP_PATH && pointId < CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH)
+            {
+                if (m_andorovStep != AndorovStep::WalkToCamp)
+                    return;
+                uint32 const next = pointId - CLASSIC_AQ20_ANDOROV_POINT_CAMP_PATH + 1;
+                if (next < ClassicAQ20AndorovCampPath.size())
+                {
+                    MoveAndorovTo(pAndorov, CLASSIC_AQ20_ANDOROV_POINT_CAMP_PATH + next, ClassicAQ20AndorovCampPath[next]);
+                    return;
+                }
+                // creature_movement_scripts 1547101: the squad waits at the camp for the raid
+                m_andorovStep = AndorovStep::None;
+                m_squadAtCamp = true;
+                PlaceSquad(ClassicAQ20SquadCampPos);
+                pAndorov->SetGossipMenuId(CLASSIC_AQ20_ANDOROV_GOSSIP_NOT_STARTED);
+                return;
+            }
+
+            if (pointId >= CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH && pointId < CLASSIC_AQ20_ANDOROV_POINT_LEAVE_PATH)
+            {
+                if (m_andorovStep != AndorovStep::Start && m_andorovStep != AndorovStep::WalkToValley)
+                    return;
+                uint32 const next = pointId - CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH + 1;
+                if (next < ClassicAQ20AndorovValleyPath.size())
+                {
+                    MoveAndorovTo(pAndorov, CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH + next, ClassicAQ20AndorovValleyPath[next]);
+                    return;
+                }
+                // creature_movement_special 15471 point 4: creature_movement_scripts 1547102 then 1547103
+                SetAndorovStep(AndorovStep::Valley);
+            }
+        }
+
+        // generic_scripts 154710 (gossip 6629, or a wave pulled first): the whole event starts here
+        void StartAndorovEvent()
+        {
+            Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID);
+            if (!pAndorov || !pAndorov->IsAlive())
+                return;
+
+            BuildWaveSpawns();
+            m_bRajaxxEventIsToReset = false;
+            SetAndorovStep(AndorovStep::Start);
             pAndorov->HandleEmoteCommand(EMOTE_ONESHOT_SHOUT);
             ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_START_1, pAndorov);
-            m_andorovScriptTimer = 3000;
-            // TODO(classic): generic_scripts 154710 also starts waypoints (delay 2s, command 60: creature_movement_special
-            // path 15471) whose point scripts 1547102/1547103 position the elites and start the Rajaxx waves (generic_scripts
-            // 153911). The Rajaxx/Andorov wave event is DB-scripted in VMaNGOS and is not part of this C++ port.
+        }
+
+        void UpdateAndorovEvent(uint32 uiDiff)
+        {
+            if (m_andorovStep == AndorovStep::None)
+                return;
+
+            Creature* pAndorov = instance->GetCreature(m_uiAndorovGUID);
+            bool const andorovAlive = pAndorov && pAndorov->IsAlive();
+
+            switch (m_andorovStep)
+            {
+                case AndorovStep::WalkToCamp:
+                case AndorovStep::WalkToValley:
+                    // Continued by OnAndorovPointReached; without Andorov the walk (and the event, as in VMaNGOS) stops here
+                    if (!andorovAlive)
+                        m_andorovStep = AndorovStep::None;
+                    return;
+                case AndorovStep::Start:
+                case AndorovStep::Valley:
+                    if (!andorovAlive)
+                    {
+                        m_andorovStep = AndorovStep::None;
+                        return;
+                    }
+                    break;
+                case AndorovStep::Done:
+                    // creature_ai_events 1547104 / 1547105 are out-of-combat timers of phase 2 with condition 3704 (Rajaxx is dead)
+                    if (!andorovAlive || pAndorov->IsInCombat() || GetBossState(CLASSIC_AQ20_TYPE_RAJAXX) != DONE)
+                        return;
+                    break;
+                default:
+                    break;
+            }
+
+            m_andorovStepTime += uiDiff;
+
+            switch (m_andorovStep)
+            {
+                case AndorovStep::Start:
+                    if (AndorovStepDue(0, 2000))
+                    {
+                        MoveAndorovTo(pAndorov, CLASSIC_AQ20_ANDOROV_POINT_VALLEY_PATH, ClassicAQ20AndorovValleyPath[0]);
+                        FollowAndorov(pAndorov);
+                    }
+                    if (AndorovStepDue(1, 3000))
+                    {
+                        ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_START_2, pAndorov);
+                        m_andorovStep = AndorovStep::WalkToValley;
+                    }
+                    break;
+                case AndorovStep::Valley:
+                    // 1547102 (point 4, 5 s wait) then 1547103 (point 5): the squad takes position and the first wave is called
+                    if (AndorovStepDue(0, 2000))
+                    {
+                        ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_VALLEY, pAndorov);
+                        pAndorov->HandleEmoteCommand(EMOTE_ONESHOT_SHOUT);
+                    }
+                    if (AndorovStepDue(1, 5000))
+                    {
+                        pAndorov->HandleEmoteCommand(EMOTE_ONESHOT_POINT);
+                        PlaceSquad(ClassicAQ20SquadValleyPos);
+                    }
+                    if (AndorovStepDue(2, 11000))
+                    {
+                        pAndorov->HandleEmoteCommand(EMOTE_ONESHOT_READY1H);
+                        ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_READY, pAndorov);
+                    }
+                    if (AndorovStepDue(3, 13000))
+                        pAndorov->SetEmoteState(EMOTE_STATE_READY1H);
+                    if (AndorovStepDue(4, 17000))
+                        StartWave(0);
+                    break;
+                case AndorovStep::Waves:
+                    UpdateWave(uiDiff);
+                    break;
+                case AndorovStep::Rajaxx:
+                    // generic_scripts 153410: one second after his yell Rajaxx enters combat with the zone
+                    if (AndorovStepDue(0, 1000))
+                    {
+                        if (Creature* pRajaxx = instance->GetCreature(m_uiRajaxxGUID))
+                            if (pRajaxx->IsAlive() && pRajaxx->IsAIEnabled())
+                                CreatureAI::DoZoneInCombat(pRajaxx);
+                        SetAndorovStep(AndorovStep::Done);
+                    }
+                    break;
+                case AndorovStep::Done:
+                    if (AndorovStepDue(0, 5000))
+                        pAndorov->SetImmuneToNPC(true);
+                    if (AndorovStepDue(1, 130000))
+                    {
+                        // generic_scripts 1547105
+                        SetAndorovStep(AndorovStep::Leave);
+                        pAndorov->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
+                        ClassicScriptText(CLASSIC_AQ20_SAY_ANDOROV_LEAVE, pAndorov);
+                    }
+                    break;
+                case AndorovStep::Leave:
+                    for (uint32 i = 0; i < ClassicAQ20AndorovLeavePath.size(); ++i)
+                    {
+                        if (!AndorovStepDue(i, ClassicAQ20AndorovLeavePath[i].At))
+                            continue;
+                        if (!andorovAlive)
+                            continue;
+                        ClassicAQ20TimedMove const& move = ClassicAQ20AndorovLeavePath[i];
+                        // VMaNGOS gives each move its travel time; the matching speed is yards per second
+                        Optional<float> speed;
+                        float const dist = pAndorov->GetExactDist(move.Pos);
+                        if (dist > 1.0f)
+                            speed = dist / (float(move.Travel) / float(IN_MILLISECONDS));
+                        pAndorov->GetMotionMaster()->MovePoint(CLASSIC_AQ20_ANDOROV_POINT_LEAVE_PATH + i, move.Pos, true, {}, speed);
+                    }
+                    if (AndorovStepDue(uint32(ClassicAQ20AndorovLeavePath.size()), 20000))
+                    {
+                        // generic_scripts 154712 on the group: Andorov and the elites despawn for four days
+                        for (uint32 i = 0; i < m_squadGuids.size(); ++i)
+                        {
+                            if (Creature* member = instance->GetCreature(m_squadGuids[i]))
+                            {
+                                SetSquadMemberRespawnTime(member, CLASSIC_AQ20_RESPAWN_FOUR_DAYS);
+                                member->DespawnOrUnsummon(0s, Seconds(CLASSIC_AQ20_RESPAWN_FOUR_DAYS));
+                            }
+                        }
+                        m_andorovStep = AndorovStep::None;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        /* Rajaxx waves */
+
+        // The waves are the creature_formations groups (VMaNGOS creature_groups) led by the captains: every spawn of a wave entry on
+        // this map whose formation leader is one of them. Their grids are loaded so the whole wave exists when it is called.
+        void BuildWaveSpawns()
+        {
+            m_waveSpawns.clear();
+            for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
+            {
+                if (data.mapId != CLASSIC_AQ20_MAP_ID || !ClassicAQ20IsRajaxxWaveEntry(data.id))
+                    continue;
+
+                uint32 leaderEntry = data.id;
+                if (FormationInfo const* formation = sFormationMgr->GetFormationInfo(spawnId))
+                    if (CreatureData const* leader = sObjectMgr->GetCreatureData(formation->LeaderSpawnId))
+                        leaderEntry = leader->id;
+
+                for (uint8 wave = 0; wave < ClassicAQ20Waves.size(); ++wave)
+                {
+                    if (ClassicAQ20Waves[wave].LeaderEntry != leaderEntry)
+                        continue;
+                    m_waveSpawns.push_back({ spawnId, wave });
+                    instance->LoadGrid(data.spawnPoint.GetPositionX(), data.spawnPoint.GetPositionY());
+                    break;
+                }
+            }
+
+            if (m_waveSpawns.empty())
+                TC_LOG_ERROR("scripts", "classic_instance_ruins_of_ahnqiraj: no creature_formations group led by a Rajaxx captain on map {}",
+                    uint32(CLASSIC_AQ20_MAP_ID));
+        }
+
+        Creature* GetWaveCreature(ObjectGuid::LowType spawnId) const
+        {
+            auto const& store = instance->GetCreatureBySpawnIdStore();
+            auto itr = store.find(spawnId);
+            return itr != store.end() ? itr->second : nullptr;
+        }
+
+        // generic_scripts 1539x0 / 1539x1: the group enters combat with the zone and becomes the scripted map event's targets
+        void StartWave(uint8 wave)
+        {
+            m_waveIndex = wave;
+            m_waveTimeLeft = CLASSIC_AQ20_WAVE_TIME_LIMIT_MS;
+            m_waveCheckTimer = IN_MILLISECONDS;
+            m_bRajaxxEventIsToReset = false;
+            SetAndorovStep(AndorovStep::Waves);
+
+            for (WaveSpawn const& spawn : m_waveSpawns)
+            {
+                if (spawn.Wave != wave)
+                    continue;
+                if (Creature* member = GetWaveCreature(spawn.SpawnId))
+                    if (member->IsAlive() && member->IsAIEnabled())
+                        CreatureAI::DoZoneInCombat(member);
+            }
+        }
+
+        // The map event's conditions, checked every second: every target dead is the success, a target alive and out of combat
+        // (condition 1100) or the time limit is the failure
+        void UpdateWave(uint32 uiDiff)
+        {
+            m_waveTimeLeft = m_waveTimeLeft > uiDiff ? m_waveTimeLeft - uiDiff : 0;
+            if (m_waveCheckTimer > uiDiff)
+            {
+                m_waveCheckTimer -= uiDiff;
+                return;
+            }
+            m_waveCheckTimer = IN_MILLISECONDS;
+
+            bool allDead = true;
+            for (WaveSpawn const& spawn : m_waveSpawns)
+            {
+                if (spawn.Wave != m_waveIndex)
+                    continue;
+                Creature* member = GetWaveCreature(spawn.SpawnId);
+                if (!member || !member->IsAlive())
+                    continue;
+                allDead = false;
+                if (!member->IsInCombat())
+                {
+                    FailAndorovEvent();
+                    return;
+                }
+            }
+
+            if (allDead)
+                OnWaveSuccess();
+            else if (!m_waveTimeLeft)
+                FailAndorovEvent();
+        }
+
+        // generic_scripts 153921 .. 153851 (Rajaxx comments the dead wave, the next one comes) and 153411 (the last wave is dead)
+        void OnWaveSuccess()
+        {
+            ClassicAQ20Wave const& wave = ClassicAQ20Waves[m_waveIndex];
+            if (Creature* pRajaxx = instance->GetCreature(m_uiRajaxxGUID))
+            {
+                if (pRajaxx->IsAlive())
+                {
+                    if (wave.SuccessText)
+                        ClassicScriptText(wave.SuccessText, pRajaxx);
+                    // The first wave's sound is played to the whole map (flag 4); the yells carry their broadcast_text sound
+                    for (MapReference const& ref : instance->GetPlayers())
+                        if (Player* player = ref.GetSource())
+                            pRajaxx->PlayDirectSound(wave.SuccessSound, player);
+                }
+            }
+
+            if (uint32(m_waveIndex) + 1 < ClassicAQ20Waves.size())
+            {
+                StartWave(m_waveIndex + 1);
+                return;
+            }
+
+            // 153411: Andorov's part is done, Rajaxx comes himself (153410, continued in UpdateAndorovEvent)
+            SetData(CLASSIC_AQ20_TYPE_GENERAL_ANDOROV, DONE);
+            SetAndorovStep(AndorovStep::Rajaxx);
+        }
+
+        // generic_scripts 153912: a wave survived its time limit or dropped out of combat
+        void FailAndorovEvent()
+        {
+            SetData(CLASSIC_AQ20_TYPE_GENERAL_ANDOROV, FAIL);
+            m_andorovStep = AndorovStep::None;
+
+            // Respawn Captain Qeez .. Colonel Zerran with their groups
+            for (WaveSpawn const& spawn : m_waveSpawns)
+                ResetWaveSpawn(spawn.SpawnId);
+
+            // 154711: Andorov and the elites despawn and come back at the camp in 15 minutes
+            m_squadAtCamp = true;
+            for (uint32 i = 0; i < m_squadGuids.size(); ++i)
+            {
+                if (Creature* member = instance->GetCreature(m_squadGuids[i]))
+                {
+                    member->SetHomePosition(ClassicAQ20SquadCampPos[i]);
+                    SetSquadMemberRespawnTime(member, CLASSIC_AQ20_RESPAWN_15_MINUTES);
+                    member->DespawnOrUnsummon(1s, Seconds(CLASSIC_AQ20_RESPAWN_15_MINUTES));
+                }
+            }
+        }
+
+        // SCRIPT_COMMAND_RESPAWN_CREATURE: a dead wave creature comes back, a fighting one resets, one waiting for its respawn comes now
+        void ResetWaveSpawn(ObjectGuid::LowType spawnId)
+        {
+            if (Creature* creature = GetWaveCreature(spawnId))
+            {
+                if (!creature->IsAlive())
+                {
+                    if (creature->getDeathState() == CORPSE)
+                        creature->RemoveCorpse(false, false);
+                    creature->Respawn();
+                }
+                else if (creature->IsInCombat() && creature->IsAIEnabled())
+                    creature->AI()->EnterEvadeMode(EvadeReason::Other);
+                return;
+            }
+            instance->Respawn(SPAWN_TYPE_CREATURE, spawnId);
         }
 
         int32 FindSquadSlot(ObjectGuid const& guid) const
@@ -668,12 +1208,27 @@ public:
         Creature* SummonSquadMember(uint32 slot)
         {
             ClassicAQ20SquadSlot const& data = ClassicAQ20AndorovSquad[slot];
-            Creature* member = instance->SummonCreature(data.Entry, Position(data.X, data.Y, data.Z, data.O));
+            // The squad spawns at the instance entrance and walks to the camp; afterwards the camp is its home (VMaNGOS sets the
+            // home positions there on death and on failure, so every later respawn is at the camp)
+            Position const pos = m_squadAtCamp ? ClassicAQ20SquadCampPos[slot] : Position(data.X, data.Y, data.Z, data.O);
+            Creature* member = instance->SummonCreature(data.Entry, pos);
             if (!member)
                 return nullptr;
 
             m_squadGuids[slot] = member->GetGUID();
             m_squadRespawnTimer[slot] = 0;
+            member->SetHomePosition(pos);
+
+            if (slot == 0)
+            {
+                m_uiAndorovGUID = member->GetGUID();
+                // creature_ai_events 1547101: the event state resets with Andorov
+                m_andorovStep = AndorovStep::None;
+                SetData(CLASSIC_AQ20_TYPE_GENERAL_ANDOROV, NOT_STARTED);
+            }
+
+            if (m_squadAtCamp)
+                return member;
 
             if (slot > 0)
             {
@@ -682,13 +1237,7 @@ public:
                         member->GetMotionMaster()->MoveFollow(pAndorov, data.FollowDist, ChaseAngle(data.FollowAngle));
             }
             else
-            {
-                m_uiAndorovGUID = member->GetGUID();
-                for (uint32 i = 1; i < m_squadGuids.size(); ++i)
-                    if (Creature* elite = instance->GetCreature(m_squadGuids[i]))
-                        if (elite->IsAlive() && !elite->IsInCombat())
-                            elite->GetMotionMaster()->MoveFollow(member, ClassicAQ20AndorovSquad[i].FollowDist, ChaseAngle(ClassicAQ20AndorovSquad[i].FollowAngle));
-            }
+                StartCampWalk(member);
             return member;
         }
 

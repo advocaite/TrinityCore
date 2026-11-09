@@ -101,6 +101,26 @@ namespace ClassicSpellValue
         return v && v->BonusCoefficient >= 0.0f ? v->BonusCoefficient : clientCoefficient;
     }
 
+    // Vanilla (VMaNGOS SpellCaster::CalculateLevelPenalty): a spell learned below level 20 gets less from spell power,
+    // 1 - (20 - spell level) x 3.75% (a level 1 spell keeps 28.75%).
+    inline float LevelPenalty(int32_t spellLevel)
+    {
+        if (spellLevel <= 0 || spellLevel >= 20)
+            return 1.0f;
+        return 1.0f - (20.0f - float(spellLevel)) * 0.0375f;
+    }
+
+    // The spell power factor an effect gets with the level penalty in: a table value is VMaNGOS's effectBonusCoefficient, which
+    // already carries the penalty (Fireball rank 1: 0.123 = 0.429 x 0.2875), so it is taken as it is; the client's unpenalized
+    // value takes the penalty here. VMaNGOS SpellCaster.cpp only penalises a coefficient it computed from the cast time, never a
+    // table value; penalising the table value again gave Fireball rank 1 0.035.
+    inline float BonusCoefficientWithLevelPenalty(Value const* v, float clientCoefficient, int32_t spellLevel)
+    {
+        if (v && v->BonusCoefficient >= 0.0f)
+            return v->BonusCoefficient;
+        return clientCoefficient * LevelPenalty(spellLevel);
+    }
+
     // The base points of a finisher with the caster's combo points: vanilla points per combo point on top of the base.
     inline float WithComboPoints(Value const& v, float value, int32_t comboPoints)
     {

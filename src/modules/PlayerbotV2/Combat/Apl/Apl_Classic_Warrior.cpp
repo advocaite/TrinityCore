@@ -139,9 +139,22 @@ int32 VictimHpPct(ApPredicateContext const& ctx)
 
 // DPS stance: Fury lives in Berserker Stance once it is trained (level 30);
 // Arms and low-level warriors stay in Battle Stance (Overpower, Charge).
+// An arms warrior in a group's boss fight (Classic::BossFight) fights in Berserker Stance as well, as vanilla raid arms did: Whirlwind on
+// its cooldown and the stance's 3% crit, where Battle Stance gives only Overpower after a dodge. Scorecard 0.1.29: arms sat at 40-90 rage
+// in Battle Stance, the Whirlwind dance never started (it waits for 25 rage or less, so no rage is lost in the switch), Overpower landed
+// 2-6 times in 120 s and the spare rage went to Heroic Strike; arms did 681-788 dps against fury's 1016-1144. Solo, and on trash, arms
+// keeps Battle Stance (Charge, Overpower, Sweeping Strikes, Thunder Clap).
+bool ArmsBerserkerFight(ApPredicateContext const& ctx)
+{
+    return ctx.bot.spec() == SPEC_ARMS && ctx.bot.in_group() && ctx.bot.knows_spell(BERSERKER_STANCE) && ctx.bot.knows_spell(WHIRLWIND)
+        && ctx.bot.knows_spell(MORTAL_STRIKE) && Classic::BossFight(ctx.bot);
+}
+
 uint32 DpsStance(ApPredicateContext const& ctx)
 {
     if (ctx.bot.spec() == SPEC_FURY && ctx.bot.knows_spell(BERSERKER_STANCE))
+        return BERSERKER_STANCE;
+    if (ArmsBerserkerFight(ctx))
         return BERSERKER_STANCE;
     return BATTLE_STANCE;
 }
@@ -309,6 +322,9 @@ bool ShouldWhirlwind(ApPredicateContext const& ctx)
 {
     // Bloodthirst (30 rage) comes first: below 55 rage, Whirlwind waits while Bloodthirst is about to come off cooldown.
     if (ctx.bot.knows_spell(BLOODTHIRST) && Rage(ctx) < 55 && ctx.bot.cd_remaining(BLOODTHIRST).count() <= 1500)
+        return false;
+    // Arms the same with Mortal Strike (Bloodthirst is a fury talent, so a fury warrior never reaches this line with Mortal Strike's gate).
+    if (ctx.bot.spec() == SPEC_ARMS && ctx.bot.knows_spell(MORTAL_STRIKE) && Rage(ctx) < 55 && ctx.bot.cd_remaining(MORTAL_STRIKE).count() <= 1500)
         return false;
     return HasLiveTarget(ctx) && InStance(ctx, BERSERKER_STANCE) && Rage(ctx) >= 25
         && ctx.bot.enemies_within(8.0f) >= 1 && (Ready(ctx, WHIRLWIND) && ctx.bot.victim_in_spell_range(WHIRLWIND))

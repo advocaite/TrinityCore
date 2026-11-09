@@ -24,6 +24,7 @@
 #include "WakeSelect.h"
 #include "StrandedWatch.h"
 #include "DayRhythm.h"
+#include "BotSize.h"
 #include "SoakAnchors.h"
 #include "BotPool.h"
 #include "../Travel/TownNpcIndex.h"
@@ -33,6 +34,7 @@
 #include "UnitDefines.h"
 #include "TownGatherSource.h"
 #include "WorldFactionMix.h"
+#include "Fleet/WorldPvpConfig.h"
 #include "SkyborneIsle.h"
 #include "BotPopulationManager.h"
 #include "BotIdentityRegistry.h"
@@ -115,6 +117,7 @@ constexpr uint32 kConfigReloadMs   = 15000u;
 constexpr uint32 kReportMs         = 60000u;
 constexpr uint32 kMemReportMs      = 60000u;    // [mem] line
 constexpr uint32 kSwapBurstMs = 60000u;          // after a jump the swap runs faster for this long
+constexpr uint32 kDrainMaxMs = 600000u;         // a population step down logs the world bots out for at most 10 min (busy ones may stay)
 constexpr uint32 kSwapBurstFactor = 3u;          // x spawn and despawn rate during it
 constexpr uint32 kPendingTimeoutMs = 120000u;   // login + setup pipeline + placement
 constexpr uint32 kQueryTimeoutMs   = 20000u;
@@ -272,8 +275,8 @@ void WorldBotSpawner::LoadConfig()
     c.seed_roster      = sConfigMgr->GetBoolDefault("Playerbot.World.SeedRoster", false, true);
     c.seed_in_flight   = std::max<uint32>(1, uint32(sConfigMgr->GetIntDefault("Playerbot.World.SeedInFlight", 8, true)));
     c.wake_radius      = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbot.World.WakeRadius", 0.0f, true));
-    c.natural_moves    = sConfigMgr->GetBoolDefault("Playerbot.World.NaturalMoves", true);
-    c.day_rhythm       = sConfigMgr->GetBoolDefault("Playerbot.World.DayRhythm", true);
+    c.natural_moves    = sConfigMgr->GetBoolDefault("Playerbot.World.NaturalMoves", true, true);
+    c.day_rhythm       = sConfigMgr->GetBoolDefault("Playerbot.World.DayRhythm", true, true);
     c.idle_swap        = sConfigMgr->GetBoolDefault("Playerbot.World.IdleSwap", true, true);
     c.idle_swap_strikes = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.IdleSwapStrikes", 2, true), 1, 20));
     c.idle_swap_cd_ms  = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.IdleSwapCooldownSec", 180, true), 30, 3600)) * 1000u;
@@ -290,6 +293,15 @@ void WorldBotSpawner::LoadConfig()
     c.mix.home_pct      = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.HomeFriendlyPct", 100, true)));
     c.mix.border_pct    = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.BorderFriendlyPct", 100, true)));
     c.mix.contested_pct = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.ContestedFriendlyPct", 100, true)));
+    // A PvP or free-for-all realm (GameType) with Playerbot.World.Pvp.Enable: enemy bots about in the border and contested zones
+    // (Fleet/WorldPvp.h), so the world PvP of the bots has someone to meet. Capitals and home zones stay as the files say.
+    {
+        namespace F = ::Playerbot::V2::Fleet;
+        F::WorldPvpCfg const pvp = F::ReadWorldPvpCfg();
+        F::RealmPvp const realm = F::RealmPvpOf(::World::instance()->getIntConfig(CONFIG_GAME_TYPE));
+        c.mix.border_pct = F::PvpBorderPct(pvp, realm, c.mix.border_pct);
+        c.mix.contested_pct = F::PvpContestedPct(pvp, realm, c.mix.contested_pct);
+    }
     c.pool_max         = uint32(sConfigMgr->GetIntDefault("Playerbot.World.PoolMax", std::max<uint32>(c.max_bots * 4, 200), true));
     c.area_cap_outdoors = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.AreaCapOutdoors", 14, true), 0, 500));
     c.area_cap_town    = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.AreaCapTown", 40, true), 0, 500));
@@ -309,7 +321,223 @@ void WorldBotSpawner::LoadConfig()
     c.moving_spawn_factor = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.Moving.SpawnFactor", 2, true), 1, 8));
     c.moving_despawn_behind = std::clamp(sConfigMgr->GetFloatDefault("Playerbot.World.Moving.DespawnBehindYards", 450.0f, true), 0.0f, 5000.0f);
     c.variable_ttl_h   = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.VariableTtlHours", 24, true), 1, 24 * 90));
+
+    // Plain bot numbers (Fleet/BotSize.h): any Bots.* line replaces the old six keys.
+    {
+        namespace F = ::Playerbot::V2::Fleet;
+        F::PlainInput in;
+        bool file_off = false;   // Bots.Size = Off: no world bots from the files (the launcher's Bots window, Off)
+        if (std::string const t = sConfigMgr->GetStringDefault("Bots.Size", "", true); !t.empty())
+        {
+            file_off = F::IsBotSizeOff(t);
+            in.size = F::ParseBotSize(t);
+        }
+        auto num = [](char const* key) -> std::optional<uint32>
+        {
+            int32 const v = sConfigMgr->GetIntDefault(key, -1, true);
+            return v >= 0 ? std::optional<uint32>(uint32(v)) : std::nullopt;
+        };
+        in.reserve = num("Bots.Reserve");
+        in.active_cap = num("Bots.ActiveCap");
+        in.in_city = num("Bots.InCity");
+        if (std::string const t = sConfigMgr->GetStringDefault("Bots.PerZone", "", true); !t.empty())
+            in.per_zone = t;
+        std::optional<F::PlainBots> b = F::ResolvePlainBots(in);
+        // The ForeverBots panel's choice (a GM, in game) wins over the files: Low / Medium / High is that preset with world bots
+        // on, Off is no world bots. While an Off still has bots logging out the spawner keeps running with nothing to fill.
+        LoadPopulationOnce();
+        // The file's Off is the in-game Off without the logging out: the launcher restarts the realm after the choice, so no world bot
+        // is online. Only the world spawner stops; Playerbot.World.Enable stays as it is, so battleground and dungeon finder bots and
+        // the player's own bots still come. An in-game pick (below) still wins over it.
+        if (file_off && !pop_level_)
+        {
+            c.enable = false;
+            c.seed_roster = false;
+            c.global_fill = false;
+            if (!b) b = F::PresetBots(F::BotSize::Normal);
+        }
+        if (pop_level_)
+        {
+            c.enable = *pop_level_ != F::PopLevel::Off || drain_until_ms_ != 0 || drain_requested_;
+            b = F::PopLevelBots(*pop_level_, b ? b->reserve : c.pool_max);
+            if (*pop_level_ == F::PopLevel::Off)
+            {
+                c.seed_roster = false;
+                c.global_fill = false;
+            }
+        }
+        if (b)
+        {
+            c.plain = true;
+            c.max_bots = b->active_cap;
+            c.pool_max = b->reserve;
+            c.city_bots = b->in_city;
+            c.zone_lo = b->zone_lo;
+            c.zone_hi = b->zone_hi;
+            c.zone_bots = b->zone_hi;
+            c.bots_per_player = b->zone_hi;                        // fallback and the per-player reserve of the global filler
+            c.rss_budget_mb = uint32(PhysicalRamMb() * 45u / 100u);   // memory stop: automatic
+            // The numbers are flat (Karrz 11-01: "a flat number"): no quieter night unless the player asks for it. With the old rule a
+            // 50-70 zone held 30-42 bots after midnight and a 120 city held 72, so a late player saw a thin world.
+            c.day_rhythm = sConfigMgr->GetBoolDefault("Bots.DayRhythm", false, true);
+            // Leaving: a zone nobody is in loses its bots after LeaveZoneSec; after a dungeon, battleground or logout the spot is
+            // kept as a ghost so the total is LeaveWorldSec (Karrz 11-01: "the bots should log out fast").
+            uint32 const leave_zone = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveZoneSec", 20, true), 0, 3600));
+            uint32 const leave_world = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveWorldSec", 60, true), 0, 3600));
+            c.leave_zone_ms = leave_zone * 1000u;
+            c.zone_grace_ms = (leave_world > leave_zone ? leave_world - leave_zone : 0u) * 1000u;
+            // Named only when a file gives it a value of its own: the shipped playerbot.conf held the built-in defaults, and the start
+            // line then listed six "not used" keys on every install that nobody had ever touched.
+            struct OldKey { char const* key; int32 builtin; };
+            static constexpr OldKey kOld[] = {
+                { "Playerbot.World.MaxBots", 100 }, { "Playerbot.World.BotsPerPlayer", 25 }, { "Playerbot.World.CityBots", 0 },
+                { "Playerbot.World.ZoneBots", 0 }, { "Playerbot.World.PoolMax", -2 }, { "Playerbot.World.RssBudgetMb", -1 },
+                { "Playerbot.World.ZoneGraceSec", 300 } };
+            std::string old;
+            for (OldKey const& o : kOld)
+                for (std::string const& k : sConfigMgr->GetKeysByString(o.key))
+                    if (k == o.key && sConfigMgr->GetIntDefault(o.key, o.builtin, true) != o.builtin)
+                        old += (old.empty() ? "" : ", ") + k;
+            c.plain_summary = Trinity::StringFormat("Bots: {} - reserve {}, at most {} active, {}-{} per zone, {} in a city; bots leave {} s after a zone empties, "
+                                                    "{} s after a dungeon/BG/logout{}{}{}",
+                pop_level_ ? std::string("set in game: ") + F::PopLevelWord(*pop_level_) : std::string(in.size ? F::BotSizeName(*in.size) : "own numbers"), c.pool_max, c.max_bots, c.zone_lo, c.zone_hi, c.city_bots, leave_zone, leave_world,
+                c.day_rhythm ? "; quieter at night (Bots.DayRhythm = 1)" : "",
+                old.empty() ? "" : ". Not used any more (Bots.* lines win): ", old);
+            if (file_off && !pop_level_)
+                c.plain_summary = "Bots: Off (Bots.Size = Off) - no world bots; own bots, dungeon finder and battleground bots still come "
+                                  "(the launcher's Bots window turns them on)";
+            if (pop_level_ && *pop_level_ == F::PopLevel::Off)
+                c.plain_summary = "Bots: set in game: off - no world bots until the next restart (a GM can turn them on with "
+                                  ".bot population low|medium|high; .bot population file hands back to the config files)";
+            else if (pop_level_)
+                c.plain_summary += " (set in game with .bot population until the next restart; .bot population file hands back to the config files)";
+        }
+    }
+    if (c.plain && c.plain_summary != plain_logged_)
+    {
+        plain_logged_ = c.plain_summary;
+        TC_LOG_INFO("server.loading", "{}", c.plain_summary);
+        TC_LOG_INFO("playerbot.v2", "[world] {}", c.plain_summary);
+    }
     cfg_ = c;
+}
+
+// ---- The world bot choice of the ForeverBots panel (Off / Low / Medium / High) ------------------------------------------------
+// Kept in the characters database, one row per realm setting, so a restart keeps what the GM picked in game. The table is made here
+// (not a migration file) so the panel works on every install that has this server, whatever migrations it already ran.
+namespace
+{
+    constexpr char const* kPopSettingName = "world_bots";
+}
+
+void WorldBotSpawner::LoadPopulationOnce()
+{
+    if (pop_loaded_)
+        return;
+    pop_loaded_ = true;
+    CharacterDatabase.DirectExecute("CREATE TABLE IF NOT EXISTS playerbot_v2_realm_setting ("
+                                    "name VARCHAR(64) NOT NULL, value VARCHAR(64) NOT NULL DEFAULT '', PRIMARY KEY (name)"
+                                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // The world bots are set in the launcher before the start (owner decision 2026-11-04: "just on the launcher"; the add-on's World bots tab is
+    // gone). A pick an older build kept from the add-on would win over the launcher with no way left to undo it, so it is dropped here
+    // and the config files (Bots.Size, written by the launcher) decide at every start. .bot population still changes it until the
+    // next restart.
+    if (QueryResult r = CharacterDatabase.Query(Trinity::StringFormat(
+            "SELECT value FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str()))
+    {
+        TC_LOG_INFO("server.loading", "World bots: the old in-game pick '{}' is dropped; the launcher's Bots setting (Bots.Size) decides",
+                    (*r)[0].GetString());
+        CharacterDatabase.DirectExecute(Trinity::StringFormat(
+            "DELETE FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str());
+    }
+}
+
+void WorldBotSpawner::SetPopulation(std::optional<PopLevel> level)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    LoadPopulationOnce();
+    // What is allowed now, against what the new choice allows: fewer (or none) means the bots online go first.
+    bool const was_on = cfg_.enable;
+    uint32 const old_cap = cfg_.max_bots, old_zone = cfg_.plain ? cfg_.zone_hi : std::max(cfg_.zone_bots, cfg_.bots_per_player),
+                 old_city = cfg_.city_bots ? cfg_.city_bots : cfg_.bots_per_player;
+    pop_level_ = level;
+    pop_changed_ = true;
+    if (level)
+    {
+        F::PlainBots const now = F::PopLevelBots(*level, cfg_.pool_max);
+        if (was_on && F::PopLevelNeedsDrain(old_cap, old_zone, old_city, now))
+            drain_requested_ = true;
+        else if (*level != F::PopLevel::Off)
+        {
+            drain_requested_ = false;   // a step up while a step down is still logging bots out: let them come again
+            drain_until_ms_ = 0;
+        }
+    }
+    // Not saved: it lasts until the next restart, then the launcher's setting decides again (LoadPopulationOnce).
+    TC_LOG_INFO("playerbot.v2", "[world] population choice: {}", level ? F::PopLevelWord(*level) : "the config files");
+}
+
+std::string WorldBotSpawner::PopulationLine() const
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    std::string line;
+    if (!pop_level_)
+        line = Trinity::StringFormat("World bots: from the config files ({}).", cfg_.enable
+            ? Trinity::StringFormat("on, at most {} at once", cfg_.max_bots) : std::string("off"));
+    else if (*pop_level_ == F::PopLevel::Off)
+        line = "World bots: Off.";
+    else
+    {
+        F::PlainBots const b = F::PopLevelBots(*pop_level_, cfg_.pool_max);
+        line = Trinity::StringFormat("World bots: {} - at most {} at once, {}-{} in a zone with you, {} in a capital.",
+            *pop_level_ == F::PopLevel::Low ? "Low" : *pop_level_ == F::PopLevel::High ? "High" : "Medium",
+            b.active_cap, b.zone_lo, b.zone_hi, b.in_city);
+    }
+    if (drain_until_ms_ || drain_requested_)
+        line += Trinity::StringFormat(" {} world bot(s) still logging out.", ambient_online_);
+    return line;
+}
+
+// A step down or Off: every world bot that is not busy (no group, instance, battleground or fight) logs out, out of sight where it
+// can, a few each tick. Ends when none is left or after kDrainMaxMs; then the new numbers fill (or, for Off, the spawner stops).
+void WorldBotSpawner::DriveDrain(uint32 now_ms, std::vector<Anchor> const& anchors)
+{
+    uint32 left = 0;
+    uint32 sent = 0;
+    uint32 const limit = cfg_.despawn_per_tick * kSwapBurstFactor;
+    std::vector<ObjectGuid> go;
+    Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
+    {
+        ObjectGuid const g = ObjectGuid::Create<HighGuid::Player>(id);
+        Player* p = ObjectAccessor::FindConnectedPlayer(g);
+        if (!p || !p->IsInWorld()) return;
+        if (!owner_.IsAmbientBot(id, p)) return;
+        if (p->InBattleground() || p->InBattlegroundQueue() || p->GetGroup()
+            || (p->GetMap() && (p->GetMap()->IsDungeon() || p->GetMap()->IsBattlegroundOrArena())))
+            return;
+        ++left;
+        if (leaving_.contains(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return;
+        if (p->IsInCombat() || p->IsBeingTeleported() || owner_.IsKickProtected(id, now_ms)) return;
+        if (go.size() < limit) go.push_back(g);
+    });
+    for (ObjectGuid const& g : go)
+        if (Player* p = ObjectAccessor::FindConnectedPlayer(g))
+            if (RetireBot(p, now_ms, anchors))
+            {
+                ++sent;
+                ++n_despawned_;
+                placed_.erase(g.GetCounter());
+            }
+    // Off has no time limit: once it ends the spawner stops, and a bot still online then would stay for good.
+    bool const off = pop_level_ && *pop_level_ == ::Playerbot::V2::Fleet::PopLevel::Off;
+    bool const timed_out = !off && int32(drain_until_ms_ - now_ms) <= 0;
+    if ((left == 0 && pending_.empty() && leaving_.empty()) || timed_out)
+    {
+        TC_LOG_INFO("playerbot.v2", "[world] population change done after {} s{}", getMSTimeDiff(drain_started_ms_, now_ms) / 1000u,
+                    timed_out ? Trinity::StringFormat(" (time limit; {} busy world bot(s) stay until they are free)", left) : std::string());
+        drain_until_ms_ = 0;
+        pop_changed_ = true;   // Off: read the config again, the spawner now stops
+    }
 }
 
 WorldLoadFacts WorldBotSpawner::Load() const
@@ -341,7 +569,7 @@ std::string WorldBotSpawner::Report() const
         n_logged_in_, n_created_, n_placed_, n_despawned_, n_abandoned_, last_tick_cost_ms_, avg, max_tick_cost_ms_,
         rss / 1024, baseline_rss_kb_ / 1024, per_bot_mb);
     {
-        // The standing roster by level bracket (1-9 / 10s / 20s / 30s / 40s / 50-60), Alliance/Horde, as of the last census plus creations since.
+        // The standing roster by level bracket (1-9 / 10s / 20s / 30s / 40s / 50s / 60), Alliance/Horde, as of the last census plus creations since.
         std::string pool;
         for (std::size_t b = 0; b < kPoolBrackets; ++b)
             pool += Trinity::StringFormat(" {}/{}", pool_counts_.alliance[b], pool_counts_.horde[b]);
@@ -375,9 +603,9 @@ std::string WorldBotSpawner::Report() const
     {
         auto& kb = V2::Strangers::Board::Get();
         auto const strangers = kb.Current();
-        line += Trinity::StringFormat(" | kindness players={} buffs={} helps={} rezzes={} cooldown_skips={} cast_fails={}",
-            strangers ? strangers->size() : 0u, kb.buffs.load(std::memory_order_relaxed), kb.helps.load(std::memory_order_relaxed),
-            kb.rezzes.load(std::memory_order_relaxed), kb.cooldown_skips.load(std::memory_order_relaxed), kb.cast_fails.load(std::memory_order_relaxed));
+        line += Trinity::StringFormat(" | kindness players={} buffs={} heals={} helps={} rezzes={} cooldown_skips={} cast_fails={}",
+            strangers ? strangers->size() : 0u, kb.buffs.load(std::memory_order_relaxed), kb.heals.load(std::memory_order_relaxed),
+            kb.helps.load(std::memory_order_relaxed), kb.rezzes.load(std::memory_order_relaxed), kb.cooldown_skips.load(std::memory_order_relaxed), kb.cast_fails.load(std::memory_order_relaxed));
         auto& pb = V2::Parties::Board::Get();
         auto const links = pb.Current();
         line += Trinity::StringFormat(" | parties members={} formed={} ended={} assists={} catchups={}", links ? links->size() : 0u,
@@ -464,7 +692,11 @@ void WorldBotSpawner::PublishStrangers()
         st.alive = p->IsAlive();
         st.ghost = p->HasPlayerFlag(PLAYER_FLAGS_GHOST);
         st.hp_pct = uint8(p->GetMaxHealth() ? std::min<uint64>(100, uint64(p->GetHealth()) * 100 / p->GetMaxHealth()) : 0);
+        st.hp = uint32(std::min<uint64>(p->GetHealth(), 0xFFFFFFFFu));
+        st.max_hp = uint32(std::min<uint64>(p->GetMaxHealth(), 0xFFFFFFFFu));
         st.has_mana = p->GetMaxPower(POWER_MANA) > 0;
+        st.pvp_flagged = p->IsPvP() || p->IsFFAPvP();
+        st.pvp_fight = p->duel != nullptr;
         for (auto const& [spell, app] : p->GetAppliedAuras())
         {
             if (!app || !app->IsPositive()) continue;
@@ -472,6 +704,9 @@ void WorldBotSpawner::PublishStrangers()
             else if (::Playerbot::SpellFamily::Same(spell, 1459) || ::Playerbot::SpellFamily::Same(spell, 23028)) st.buffs |= V2::Strangers::kIntellect;
             else if (::Playerbot::SpellFamily::Same(spell, 1126) || ::Playerbot::SpellFamily::Same(spell, 21849)) st.buffs |= V2::Strangers::kMark;
         }
+        for (Unit* a : p->getAttackers())
+            if (a && a->IsAlive() && a->IsCharmedOwnedByPlayerOrPlayer())
+                st.pvp_fight = true;
         for (Unit* a : p->getAttackers())
             if (a && a->IsAlive() && a->GetTypeId() == TYPEID_UNIT && !a->IsPet() && !a->IsGuardian())
             {
@@ -615,8 +850,74 @@ void WorldBotSpawner::TrackMotion(uint32 now_ms, std::vector<Anchor>& anchors)
         it = seen.count(it->first) ? std::next(it) : motion_.erase(it);
 }
 
+// Plain bot numbers: what one place wants before the cap is shared (city number, the zone's rolled number, the start-zone cap,
+// then the hour of the day).
+uint32 WorldBotSpawner::PlaceWantFor(Anchor const& a)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    bool const town = ::Playerbot::V2::World::IsVanillaCapitalZone(a.zone);
+    uint32 want = cfg_.city_bots;
+    if (!town)
+    {
+        uint64 const key = F::PlaceKey(a.map, a.zone);
+        auto it = zone_roll_.find(key);
+        if (it == zone_roll_.end())
+            it = zone_roll_.emplace(key, F::ZoneRoll(cfg_.zone_lo, cfg_.zone_hi, urand(0, 0x7FFFFFFF))).first;
+        want = it->second;
+    }
+    bool const start_zone = !town && cfg_.start_zone_bots && ::Playerbot::V2::World::IsStartZone(a.zone);
+    if (start_zone)
+        return std::min(want, cfg_.start_zone_bots);
+    if (!cfg_.day_rhythm)
+        return want;
+    return ::Playerbot::V2::Fleet::RhythmTarget(want, TimeBreakdown(GameTime::GetGameTime()).tm_hour, cfg_.max_bots);
+}
+
+void WorldBotSpawner::PlanPlaces(uint32 now_ms, std::vector<Anchor> const& anchors, std::vector<Anchor> const& keep_anchors)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    place_target_.clear();
+    place_players_.clear();
+    if (!cfg_.plain)
+        return;
+    // A place with a player (or a ghost of one who just went into a dungeon) is occupied now.
+    for (Anchor const& a : keep_anchors)
+        place_seen_ms_[F::PlaceKey(a.map, a.zone)] = now_ms ? now_ms : 1u;
+    // A zone empty for longer than LeaveZoneSec forgets its roll: the next visit picks a new number.
+    for (auto it = place_seen_ms_.begin(); it != place_seen_ms_.end();)
+    {
+        if (getMSTimeDiff(it->second, now_ms) > std::max<uint32>(cfg_.leave_zone_ms, 1000u))
+        {
+            zone_roll_.erase(it->first);
+            it = place_seen_ms_.erase(it);
+        }
+        else
+            ++it;
+    }
+    std::vector<F::PlaceWant> places;
+    for (Anchor const& a : anchors)
+    {
+        uint64 const key = F::PlaceKey(a.map, a.zone);
+        if (place_players_[key]++ == 0)
+            places.push_back({ key, PlaceWantFor(a), 1 });
+    }
+    std::vector<uint32> const got = F::ShareCap(places, cfg_.max_bots);
+    for (std::size_t i = 0; i < places.size(); ++i)
+        place_target_[places[i].key] = got[i];
+}
+
 uint32 WorldBotSpawner::TargetFor(Anchor const& a) const
 {
+    if (cfg_.plain)
+    {
+        // The place's share of the cap, split between the players in it (they share its bots).
+        uint64 const key = ::Playerbot::V2::Fleet::PlaceKey(a.map, a.zone);
+        auto const t = place_target_.find(key);
+        auto const n = place_players_.find(key);
+        if (t == place_target_.end()) return 0;
+        return ::Playerbot::V2::Fleet::PerPlayer(t->second, n == place_players_.end() ? 1u : n->second);
+    }
+
     // A capital is packed (CityBots), a leveling zone gets an ordinary density spread over ActivityRadius (ZoneBots).
     bool const town = ::Playerbot::V2::World::IsVanillaCapitalZone(a.zone);
     uint32 const t = town ? cfg_.city_bots : cfg_.zone_bots;
@@ -683,6 +984,17 @@ static bool CompletePathTo(Player* from, float x, float y, float z)
     if (t & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))
         return true;
     return (t & PATHFIND_NORMAL) && !(t & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_FARFROMPOLY));
+}
+
+// The same from (sx, sy, sz) instead of where `ref` stands; `ref` gives the map and the phase.
+static bool CompletePathBetween(Player* ref, float sx, float sy, float sz, float x, float y, float z)
+{
+    PathGenerator pg(ref);
+    ::Playerbot::BotMovement::SehSafeCalculatePathFrom(pg, sx, sy, sz, x, y, z);
+    PathType const t = pg.GetPathType();
+    if (t & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))
+        return true;
+    return (t & PATHFIND_NORMAL) && !(t & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_FARFROMPOLY)) && !PathHasCliff(pg.GetPath());
 }
 
 // Is there a way from where `from` stands to (x, y, z)? One path call gives up after 74 polygons and calls the rest INCOMPLETE, which in a
@@ -912,6 +1224,13 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
     for (int attempt = 0; attempt < 12 && !hidden; ++attempt)
     {
         float x, y, dist;
+        // The level the ground is looked for at: the player's own, or a hub's. A city on two levels (the Undercity under the Ruins of
+        // Lordaeron, joined only by its lifts) has its bank, auction house and inn 105 y under a player in the ruins; probed from his
+        // height the spot over each hub was the courtyard's flagstones, so every resident of the city stood in the courtyard (live 0.1.25:
+        // 398 of 428 placements in the Undercity zone at z 40 or more).
+        float probe_z = anchor->GetPositionZ();
+        bool at_hub = false;
+        Spot hub{};
         // Capital: 60% a quest-giver hub near the player (the busy spots), 25% a spot on a tight ring, 15% any hub of the
         // city, so the crowd is around him and not in the far districts. Elsewhere: any hub of the zone.
         uint32 const roll = urand(0, 99);
@@ -952,6 +1271,7 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
                         pick = alt;
                 }
             Spot const& h = *pick;
+            if (in_town) { probe_z = h.z; hub = h; at_hub = true; }
             float const a = frand(0.0f, 2.0f * float(M_PI));
             float const rr = frand(0.0f, h.r);
             x = h.x + std::cos(a) * rr;
@@ -971,7 +1291,7 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
             x = anchor->GetPositionX() + std::cos(ang) * dist;
             y = anchor->GetPositionY() + std::sin(ang) * dist;
         }
-        float const z = map->GetHeight(anchor->GetPhaseShift(), x, y, anchor->GetPositionZ() + 20.0f, true, 60.0f);
+        float const z = map->GetHeight(anchor->GetPhaseShift(), x, y, probe_z + 20.0f, true, 60.0f);
         if (z <= INVALID_HEIGHT)
         {
             ++n_place_reject_[0];
@@ -998,12 +1318,19 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
             ++n_place_reject_[3];
             continue;
         }
-        if (in_town && !CompletePathTo(anchor, nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ()))
+        // In a town, a spot the player can walk to; a hub's spot may instead lie on the hub's own level, where it must reach the hub (the
+        // city's place it stands at, not a pocket under it).
+        if (in_town && !CompletePathTo(anchor, nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ())
+            && !(at_hub && CompletePathBetween(anchor, nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ(), hub.x, hub.y, hub.z)))
         {
             ++n_place_reject_[4];
             continue;
         }
-        if (!::Playerbot::V2::Fleet::RoomFor(crowd, nav.GetPositionX(), nav.GetPositionY(), cfg_.area_radius, area_cap))
+        // The cap of the zone the spot is in, as the crowd pass (DriveCrowd) counts it: the Undercity's courtyard is partly Tirisfal
+        // ground, where the outdoor cap holds. Placed under the town cap of the player's zone, the courtyard took more than the crowd pass
+        // allowed there, which sent the extras back to the player, into the same courtyard (0.1.25: 102 crowd moves in an hour).
+        uint32 const spot_cap = AreaCapFor(map->GetZoneId(anchor->GetPhaseShift(), nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ()));
+        if (!::Playerbot::V2::Fleet::RoomFor(crowd, nav.GetPositionX(), nav.GetPositionY(), cfg_.area_radius, spot_cap))
         {
             ++n_place_reject_[5];   // the area is full: another spot
             continue;
@@ -1265,8 +1592,15 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
                 }
             trail = trail && !counted;
         }
+        // Plain bot numbers: a zone nobody has been in for LeaveZoneSec loses its bots, unless one stands inside a player's spawn ring
+        // (a bot just over a zone line next to him stays; Karrz 11-01: "why would you hold 50 bots still active there?").
+        // Inside a player's bubble (ActivityRadius) the bot counts for him, so it stays even over a zone line: logging it out there only
+        // had the spawner put a new one in its place (a bot grinding 360 y away in the next zone went, and came back as another one).
+        bool emptied = false;
+        if (cfg_.plain && cfg_.leave_zone_ms && !p->IsInFlight() && nearest > cfg_.activity_radius)
+            emptied = !place_seen_ms_.contains(::Playerbot::V2::Fleet::PlaceKey(p->GetMapId(), bot_zone));
         // A misfit goes as an orphan does: a level 25 human priest in Deathknell takes the new player's mobs (PC 26 Oct).
-        bool const orphan = nearest > cfg_.despawn_radius || misfit || trail;
+        bool const orphan = nearest > cfg_.despawn_radius || misfit || trail || emptied;
         // A bot behind the player (past ActivityRadius, inside DespawnRadius) can be recycled early when the world cap is full and a
         // player's bubble still lacks bots; otherwise only orphans go.
         if (!orphan && nearest <= cfg_.activity_radius)
@@ -1277,7 +1611,7 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
         if (Map* m = p->GetMap(); m && (m->IsDungeon() || m->IsBattlegroundOrArena())) return;
         if (p->InBattlegroundQueue() || p->InBattleground()) return;
         if (owner_.IsKickProtected(id, now_ms)) return;
-        if (auto pit = placed_.find(uint64(id)); pit != placed_.end()
+        if (auto pit = placed_.find(uint64(id)); !emptied && pit != placed_.end()   // an emptied zone does not wait for the placing grace
             && getMSTimeDiff(pit->second.placed_ms, now_ms) < cfg_.placed_grace_ms)
             return;
         // Bots of the world-wide filler are only recycled once their setup is done (not mid-pipeline).
@@ -2047,7 +2381,8 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     break;
                 }
         if (why)
-            TC_LOG_INFO("playerbot.v2", "[gathering] {} {} ring ended: {}", GD::kCities[r.city].name, r.sit ? "campfire" : "standing", why);
+            TC_LOG_INFO("playerbot.v2", "[gathering] {} {} ended: {}", GD::kCities[r.city].name,
+                        IsStreet(r.ring) ? "street chat by " + r.place : std::string(r.sit ? "campfire ring" : "standing ring"), why);
     };
 
     if (!cfg.enable || !Services::Config().gate_duels_enable() || anchors.empty())
@@ -2078,8 +2413,15 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     {
         GatherRing& r = *it;
         char const* end_why = nullptr;
-        if (!player_near[r.city]) end_why = "no player near the gate";
-        else if (now_ms >= r.until_ms) end_why = "time to move on";
+        if (IsStreet(r.ring))
+        {
+            bool player_close = false;
+            for (Anchor const& a : anchors)
+                player_close = player_close || (a.map == GD::kCities[r.city].map && a.alliance == GD::kCities[r.city].alliance && Dist2D(a.x, a.y, r.cx, r.cy) <= 90.0f);
+            if (!player_close) end_why = "no player near any more";
+        }
+        else if (!player_near[r.city]) end_why = "no player near the gate";
+        if (!end_why && now_ms >= r.until_ms) end_why = "time to move on";
         if (!end_why)
         {
             // Members that are gone, fighting, grouped, duelling or dead leave the ring.
@@ -2178,7 +2520,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
             };
             auto const start_script = [&]()
             {
-                std::vector<std::size_t> pool = ScriptsFor(city.alliance, r.talkers.size());
+                std::vector<std::size_t> pool = ScriptsFor(city.alliance, r.talkers.size(), IsStreet(r.ring));
                 std::vector<std::size_t> fresh;
                 for (std::size_t i : pool)
                     if (std::find(r.recent.begin(), r.recent.end(), uint32(i)) == r.recent.end()) fresh.push_back(i);
@@ -2205,7 +2547,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     {
                         r.model = true; r.waiting = false; r.chat.clear();
                         r.turns_left = 3u + urand(0, 3);
-                        r.topic = urand(0, uint32(kTopicCount - 1));
+                        r.topic = urand(0, uint32((IsStreet(r.ring) ? kStreetTopicCount : kTopicCount) - 1));
                         r.key = (uint64(0x6A7Bu) << 48) | (++gather_seq_ & 0xFFFFFFFFFFFFull);
                     }
                     else
@@ -2221,8 +2563,16 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     r.waiting = false;
                     if (r.turns_left) --r.turns_left;
                     r.next_line_ms = now_ms + LinePause(line.size(), urand(0, 0xFFFF));
+                    // Face to face: the speaker's gesture fits the line (a question, a laugh, a yes, a no), and now and then one of the
+                    // others laughs along at a funny one.
+                    uint16 const gesture = GestureFor(line);
+                    bool laughed = false;
                     for (uint64 const id : r.talkers)
-                        if (Player* p = find(id); p && name == p->GetName()) emote(p, kTalk);
+                        if (Player* p = find(id))
+                        {
+                            if (name == p->GetName()) emote(p, gesture);
+                            else if (gesture == kGestureLaugh && !laughed && urand(0, 1)) { emote(p, kGestureLaugh); laughed = true; }
+                        }
                 }
                 if (r.waiting)
                 {
@@ -2247,12 +2597,22 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                         if (char const* race = GatherRaceName(sp->GetRace()); *race) sys += std::string(race) + " ";
                         sys += GatherClassName(sp->GetClass());
                         sys += " playing World of Warcraft Classic (the original 2004 game).";
-                        sys += std::string(" You are ") + (r.sit ? "sitting around a campfire" : "standing with a few others") + " just outside the gates of "
-                            + city.name + ", in " + GatherZoneName(sp->GetZoneId()) + ", chatting in /say with " + (others.empty() ? std::string("a friend") : others) + ".";
-                        sys += std::string(" The talk is about ") + kTopics[r.topic % kTopicCount] + ".";
+                        if (IsStreet(r.ring))
+                        {
+                            sys += " You are standing near " + r.place + " in " + city.name + ", face to face with " + (others.empty() ? std::string("a friend") : others)
+                                + ", chatting in /say while people walk past.";
+                            sys += std::string(" The talk is about ") + kStreetTopics[r.topic % kStreetTopicCount] + ".";
+                        }
+                        else
+                        {
+                            sys += std::string(" You are ") + (r.sit ? "sitting around a campfire" : "standing with a few others") + " just outside the gates of "
+                                + city.name + ", in " + GatherZoneName(sp->GetZoneId()) + ", chatting in /say with " + (others.empty() ? std::string("a friend") : others) + ".";
+                            sys += std::string(" The talk is about ") + kTopics[r.topic % kTopicCount] + ".";
+                        }
                         sys += " Write only your own next line: one short line under 15 words, casual, like a player typing in game chat, no emojis,"
                                " no actions in asterisks, no quotation marks, no name prefix. You may answer the others or tease them by name."
                                " Never say you are a bot or a program. Don't invent quests, items or places.";
+                        sys += " " + ::Playerbot::V2::World::VanillaLevelPlaces(uint8(sp->GetLevel()));
                         if (!Services::Config().chat_model().extra_prompt.empty())
                             sys += " " + Services::Config().chat_model().extra_prompt;
                         if (BotChatModel::AskSay(sp, sys, r.chat, r.key, cfg.model_per_minute))
@@ -2299,6 +2659,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
         }
         ++it;
     }
+    FormStreetChats(now_ms, anchors);
     if (!any)
         return;
 
@@ -2311,7 +2672,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     {
         if (!player_near[ci] || (gather_form_ms_[ci] && getMSTimeDiff(gather_form_ms_[ci], now_ms) < 20000u)) continue;
         uint32 have = 0;
-        for (GatherRing const& r : gather_rings_) if (r.city == ci) ++have;
+        for (GatherRing const& r : gather_rings_) if (r.city == ci && !IsStreet(r.ring)) ++have;
         if (have < uint32(want_fire ? 1 : 0) + uint32(want_stand ? 1 : 0)) { need[ci] = true; any_need = true; }
     }
     if (!any_need)
@@ -2326,14 +2687,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
     {
         Player* p = find(uint64(id));
-        if (!p || !p->IsAlive() || !p->GetMap() || p->IsBeingTeleported() || p->IsInFlight() || p->GetTransport() || p->IsMounted()) return;
-        if (!owner_.IsAmbientBot(id, p) || p->GetGroup() || p->InBattleground() || p->InBattlegroundQueue() || p->GetMap()->IsDungeon()) return;
-        if (!owner_.SetupDone(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return;
-        if (p->IsInCombat() || p->duel || p->GetLevel() < 5 || p->IsInWater()) return;
-        if (board.Has(uint64(id))) return;
-        GD::Assignment taken;
-        if (GD::Board::Get().Find(uint64(id), taken)) return;
-        if (auto const r = gather_rest_.find(uint64(id)); r != gather_rest_.end() && now_ms < r->second) return;
+        if (!GatherFree(id, p, now_ms)) return;
         for (std::size_t ci = 0; ci < GD::kCityCount; ++ci)
         {
             if (!need[ci] || p->GetMapId() != GD::kCities[ci].map || (p->GetTeam() == ALLIANCE) != GD::kCities[ci].alliance) continue;
@@ -2412,6 +2766,136 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     }
 }
 
+bool WorldBotSpawner::GatherFree(BotId id, Player* p, uint32 now_ms) const
+{
+    namespace GD = ::Playerbot::V2::GateDuels;
+    if (!p || !p->IsAlive() || !p->GetMap() || p->IsBeingTeleported() || p->IsInFlight() || p->GetTransport() || p->IsMounted()) return false;
+    if (!owner_.IsAmbientBot(id, p) || p->GetGroup() || p->InBattleground() || p->InBattlegroundQueue() || p->GetMap()->IsDungeon()) return false;
+    if (!owner_.SetupDone(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return false;
+    if (p->IsInCombat() || p->duel || p->GetLevel() < 5 || p->IsInWater()) return false;
+    if (::Playerbot::V2::Gathering::Board::Get().Has(uint64(id))) return false;
+    GD::Assignment taken;
+    if (GD::Board::Get().Find(uint64(id), taken)) return false;
+    if (auto const r = gather_rest_.find(uint64(id)); r != gather_rest_.end() && now_ms < r->second) return false;
+    return true;
+}
+
+// Street chats (Gathering.h, Playerbot.World.Gathering.CityChats): in a capital, by a bank, auctioneer, innkeeper, shop or mailbox
+// within 60 yards of a real player of that side, two to four free world bots of the city stand together facing each other; the talk
+// itself is DriveGatherings'. At most one new chat per city every 30 s, CityChats at once, kStreetApart between two.
+void WorldBotSpawner::FormStreetChats(uint32 now_ms, std::vector<Anchor> const& anchors)
+{
+    using namespace ::Playerbot::V2::Gathering;
+    namespace GD = ::Playerbot::V2::GateDuels;
+    namespace TV = ::Playerbot::V2::Travel;
+    auto const& cfg = Services::Config().gathering();
+    if (!cfg.city_chats || !TV::TownNpcIndex::Instance().IsInitialized())
+        return;
+    constexpr float kNearPlayer = 60.0f, kCandidateYards = 150.0f;
+    constexpr uint32 kPlaceFlags = UNIT_NPC_FLAG_BANKER | UNIT_NPC_FLAG_AUCTIONEER | UNIT_NPC_FLAG_INNKEEPER | UNIT_NPC_FLAG_VENDOR |
+                                   UNIT_NPC_FLAG_TRAINER | UNIT_NPC_FLAG_FLIGHTMASTER;
+    Board& board = Board::Get();
+    auto const find = [](uint64 id) -> Player*
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
+        return p && p->IsInWorld() ? p : nullptr;
+    };
+    for (std::size_t ci = 0; ci < GD::kCityCount; ++ci)
+    {
+        GD::City const& city = GD::kCities[ci];
+        if (street_form_ms_[ci] && getMSTimeDiff(street_form_ms_[ci], now_ms) < 30000u)
+            continue;
+        uint32 have = 0;
+        for (GatherRing const& r : gather_rings_) if (r.city == ci && IsStreet(r.ring)) ++have;
+        if (have >= cfg.city_chats)
+            continue;
+        Anchor const* who = nullptr;
+        for (Anchor const& a : anchors)
+            if (a.map == city.map && a.zone == city.zone && a.alliance == city.alliance) { who = &a; break; }
+        if (!who)
+            continue;
+        street_form_ms_[ci] = now_ms;
+
+        // The places near him: service NPCs of his side and mailboxes, none too close to a chat already there.
+        struct Place { float x, y, z; std::string name; };
+        std::vector<Place> places;
+        auto const free_place = [&](float x, float y)
+        {
+            for (GatherRing const& r : gather_rings_)
+                if (r.city == ci && Dist2D(r.cx, r.cy, x, y) < kStreetApart + kStreetFromNpc) return false;
+            return true;
+        };
+        auto const& index = TV::TownNpcIndex::Instance();
+        index.ForEachNear(city.map, who->x, who->y, kNearPlayer, [&](TV::TownNpc const& n)
+        {
+            if (!(n.npc_flags & kPlaceFlags) || !n.usable_by(city.alliance) || std::fabs(n.z - who->z) > 15.0f || !free_place(n.x, n.y)) return;
+            char const* name = (n.npc_flags & UNIT_NPC_FLAG_BANKER) ? "the bank" : (n.npc_flags & UNIT_NPC_FLAG_AUCTIONEER) ? "the auction house"
+                             : (n.npc_flags & UNIT_NPC_FLAG_INNKEEPER) ? "the inn" : (n.npc_flags & UNIT_NPC_FLAG_FLIGHTMASTER) ? "the flight master"
+                             : (n.npc_flags & UNIT_NPC_FLAG_TRAINER) ? "a trainer" : "a shop";
+            places.push_back({ n.x, n.y, n.z, name });
+        });
+        index.ForEachMailboxNear(city.map, who->x, who->y, kNearPlayer, [&](TV::TownNpc const& n)
+        {
+            if (std::fabs(n.z - who->z) <= 15.0f && free_place(n.x, n.y))
+                places.push_back({ n.x, n.y, n.z, "the mailbox" });
+        });
+        if (places.empty())
+            continue;
+        Place const& pl = places[urand(0, uint32(places.size() - 1))];
+        Pt const c = StreetCenter(pl.x, pl.y, who->x, who->y);
+
+        // Free bots of the city.
+        struct Cand { uint64 id; Player* p; float d; };
+        std::vector<Cand> cs;
+        Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
+        {
+            Player* p = find(uint64(id));
+            if (!GatherFree(id, p, now_ms) || p->GetMapId() != city.map || p->GetZoneId() != city.zone || (p->GetTeam() == ALLIANCE) != city.alliance) return;
+            float const d = Dist2D(p->GetPositionX(), p->GetPositionY(), c.x, c.y);
+            if (d <= kCandidateYards) cs.push_back({ uint64(id), p, d });
+        });
+        if (cs.size() < kStreetMin)
+            continue;
+        std::sort(cs.begin(), cs.end(), [](Cand const& a, Cand const& b) { return a.d < b.d; });
+        Player* first = cs.front().p;
+        float const cz = first->GetMap()->GetHeight(first->GetPhaseShift(), c.x, c.y, pl.z + 5.0f, true, 25.0f);
+        uint32 used = 0;
+        if (cz <= INVALID_HEIGHT || std::fabs(cz - pl.z) > 4.0f || first->GetMap()->IsInWater(first->GetPhaseShift(), c.x, c.y, cz)
+            || !ReachableChain(first, c.x, c.y, cz, 3u, used))
+            continue;   // a counter, a ledge or water there: another place next time
+
+        GatherRing r;
+        r.city = uint32(ci);
+        r.ring = kStreetRing + (++street_seq_ % 100000u);
+        r.sit = false;
+        r.place = pl.name;
+        r.cx = c.x; r.cy = c.y; r.cz = cz;
+        r.since_ms = now_ms;
+        r.until_ms = now_ms + urand(kStreetStayMinMs, kStreetStayMaxMs);
+        r.next_line_ms = now_ms + 12000u + urand(0, 8000u);   // time to walk over first
+        std::size_t const n = std::min<std::size_t>(cs.size(), urand(uint32(kStreetMin), uint32(kStreetMax)));
+        for (std::size_t i = 0, seat = 0; i < cs.size() && r.members.size() < n && seat < n; ++seat)
+        {
+            float face = 0.f;
+            Pt const st = Seat(c, seat, n, kStreetRadius, face);
+            float const sz = cs[i].p->GetMap()->GetHeight(cs[i].p->GetPhaseShift(), st.x, st.y, cz + 3.0f, true, 8.0f);
+            if (sz <= INVALID_HEIGHT || std::fabs(sz - cz) > 1.5f) continue;   // a step or a wall there: leave that place empty
+            board.Set(cs[i].id, Spot{ uint32(ci), r.ring, st.x, st.y, sz, face, false });
+            r.members.push_back(cs[i].id);
+            ++i;
+        }
+        if (r.members.size() < kStreetMin)
+        {
+            for (uint64 const id : r.members) board.Clear(id);
+            continue;
+        }
+        std::string names;
+        for (uint64 const id : r.members) if (Player* p = find(id)) names += std::string(names.empty() ? "" : ", ") + p->GetName();
+        TC_LOG_INFO("playerbot.v2", "[gathering] {} street chat by {} at ({:.0f},{:.0f}): {}", city.name, r.place, c.x, c.y, names);
+        gather_rings_.push_back(std::move(r));
+    }
+}
+
 // Residents that stand where they cannot live: in lava (at once), or in a town on ground with no way out of it
 // (no complete path to the nearest player three checks running). They are placed again the way a new resident is, next to the nearest player, which now refuses such
 // spots. This clears what older builds left in the Great Forge pit (and what sleeps there and wakes); the placement checks stop
@@ -2473,10 +2957,13 @@ void WorldBotSpawner::DriveStranded(uint32 now_ms, std::vector<Anchor> const& an
             path_out = ReachableChain(p, near_a->x, near_a->y, near_a->z, 4u, used);
             probes += std::max<uint32>(1u, used);
         }
-        else if (!magma && in_town)
+        // No walk to the player, or nobody close by: the town's own meeting places are the reference. A city on two levels joined only by
+        // lifts (the Undercity under the Ruins of Lordaeron) has no navmesh path between them, so every resident below a player in the
+        // ruins was "stranded" and put next to him (0.1.25: Emmanu at the Undercity's vendors, z -43).
+        if (!magma && in_town && (!path_out || !(near_a->zone == p->GetZoneId() && near_d <= kTownPathRange)))
         {
-            // Nobody close by: the town's own meeting places are the reference. A bot on a lower layer under the city (a bot at z 75 and 59
-            // below the Trade District's z 97, same x/y) reaches none of them. It must reach at least one of the three nearest.
+            // A bot on a lower layer under the city (a bot at z 75 and 59 below the Trade District's z 97, same x/y) reaches none of them.
+            // It must reach at least one of the three nearest.
             std::vector<::Playerbot::V2::Fleet::GatherSpot> spots =
                 ::Playerbot::V2::Fleet::TownGatherSpots(p->GetMapId(), px, py, 150.0f, p->GetTeam() == ALLIANCE);
             if (spots.empty())   // a far corner of the city (Dutchess, the wall at the north-west): no meeting place within 150 y, so look wider
@@ -3181,10 +3668,21 @@ void WorldBotSpawner::FinishSpawn(Anchor const& a, std::vector<bool> const& slot
 void WorldBotSpawner::OnWorldTick(uint32 now_ms)
 {
     // Config reload also covers "enabled at runtime"; while disabled this costs one config read per 15 s.
-    if (!last_cfg_ms_ || getMSTimeDiff(last_cfg_ms_, now_ms) >= kConfigReloadMs)
+    // A choice from the ForeverBots panel (SetPopulation) is read at once, not at the next 15 s reload.
+    if (!last_cfg_ms_ || pop_changed_ || getMSTimeDiff(last_cfg_ms_, now_ms) >= kConfigReloadMs)
     {
         last_cfg_ms_ = now_ms;
+        pop_changed_ = false;
         LoadConfig();
+    }
+    if (drain_requested_)
+    {
+        drain_requested_ = false;
+        drain_started_ms_ = now_ms ? now_ms : 1u;
+        drain_until_ms_ = drain_started_ms_ + kDrainMaxMs;
+        if (!drain_until_ms_) drain_until_ms_ = 1u;
+        TC_LOG_INFO("playerbot.v2", "[world] population set to {}: the world bots online log out, then the new numbers fill",
+                    pop_level_ ? ::Playerbot::V2::Fleet::PopLevelWord(*pop_level_) : "the config files");
     }
     // The [mem] line runs whatever the population mode: the 2026-10-11 leak hunt had World bots off and saw nothing.
     if (!last_mem_ms_ || getMSTimeDiff(last_mem_ms_, now_ms) >= kMemReportMs)
@@ -3283,9 +3781,10 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
             pool_counts_inflight_ = false;
             uint32 a = 0, h = 0;
             for (std::size_t b = 0; b < kPoolBrackets; ++b) { a += counts.alliance[b]; h += counts.horde[b]; }
-            TC_LOG_INFO("playerbot.v2", "[world] roster census: Alliance {} Horde {} (target Horde {}%, cap {} per bracket); per bracket 1-9/10s/20s/30s/40s/50-60 A/H: {}/{} {}/{} {}/{} {}/{} {}/{} {}/{}",
+            TC_LOG_INFO("playerbot.v2", "[world] roster census: Alliance {} Horde {} (target Horde {}%, cap {} per bracket); per bracket 1-9/10s/20s/30s/40s/50s/60 A/H: {}/{} {}/{} {}/{} {}/{} {}/{} {}/{} {}/{}",
                 a, h, cfg_.pool_horde_pct, PoolBracketCap(cfg_.pool_max), counts.alliance[0], counts.horde[0], counts.alliance[1], counts.horde[1],
-                counts.alliance[2], counts.horde[2], counts.alliance[3], counts.horde[3], counts.alliance[4], counts.horde[4], counts.alliance[5], counts.horde[5]);
+                counts.alliance[2], counts.horde[2], counts.alliance[3], counts.horde[3], counts.alliance[4], counts.horde[4], counts.alliance[5], counts.horde[5],
+                counts.alliance[6], counts.horde[6]);
         }));
     }
 
@@ -3341,6 +3840,7 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
     std::vector<Anchor> keep_anchors = anchors;   // despawn looks at ghosts too; spawning and placing do not
     for (Ghost const& g : ghosts_)
         keep_anchors.push_back(g.a);
+    PlanPlaces(now_ms, anchors, keep_anchors);
 
     {
         std::vector<WorldLeash::Anchor> pub;
@@ -3353,13 +3853,20 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
 
     DrivePending(now_ms, anchors);
     DriveDespawn(now_ms, keep_anchors);
-    DriveSpawn(now_ms, anchors);
-    DriveSeed(now_ms);
+    // While a step down (or Off) still has world bots logging out, nothing new comes: a new bot would only be logged out again.
+    if (drain_until_ms_)
+        DriveDrain(now_ms, keep_anchors);
+    else
+    {
+        DriveSpawn(now_ms, anchors);
+        DriveSeed(now_ms);
+    }
     DriveRetire(now_ms);
     DriveTravelSoak(now_ms);
     DriveGraduation(now_ms);
     DriveStranded(now_ms, anchors);
-    DriveIdleSwap(now_ms, anchors);
+    if (!drain_until_ms_)
+        DriveIdleSwap(now_ms, anchors);
     DriveStuckLedger(now_ms);
     DriveLeaving(now_ms, anchors);
     DriveCrowd(now_ms, anchors);

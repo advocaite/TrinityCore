@@ -23,11 +23,57 @@
 #include "WorldSession.h"
 #include "Log.h"
 
+#include "BotPopulationManager.h"   // arena team: log offline pool bots in (DeferLogin / ProtectFromKick)
+#include "../Bot/ClassTables.h"     // MaxPlayerLevel
+#include "DatabaseEnv.h"
+
 #include <algorithm>
+#include <unordered_map>
 
 namespace Playerbot::V2 {
 
 namespace {
+
+// An arena team for a real party (ArenaTeamForming) found too few free bots: the online world bots of that faction and level
+// stand as residents around real players (WorldBusy) or play elsewhere. Log in up to `need` offline pool bots of the faction
+// and level band, as the battleground filler's reuse pass does, so the next ask (Module::RecheckArenaWaits, every 30 s) finds
+// them free. No queue tag is set: the team is formed and queued by BotGroupBuilder, not by the solo queue pipeline.
+// A bot asked for in the last 3 minutes is not asked for again while its login is under way.
+uint32 LoginOfflineArenaBots(uint32 faction_mask, uint8 level_min, uint8 level_max, uint32 need)
+{
+    static std::unordered_map<uint64, uint32> recently;   // guid -> getMSTime() of the login request (world thread only)
+    uint32 const now = getMSTime();
+    std::erase_if(recently, [now](auto const& kv) { return getMSTimeDiff(kv.second, now) > 3u * 60u * 1000u; });
+
+    QueryResult res = CharacterDatabase.PQuery(
+        "SELECT c.guid, c.race FROM characters c "
+        "JOIN playerbot_v2_character pv ON pv.character_guid_low = c.guid "
+        "JOIN playerbot_v2_account pa ON pa.account_id = c.account "
+        "WHERE c.online = 0 AND c.totaltime > 0 AND pv.owner_account_id = 0 "
+        "AND (pv.jit_for_queue IS NULL OR pv.jit_for_queue = '') "
+        "AND c.level BETWEEN {} AND {} ORDER BY RAND() LIMIT 200",
+        uint32(level_min ? level_min : 1), uint32(level_max ? level_max : ::Playerbot::MaxPlayerLevel()));
+    if (!res)
+        return 0;
+
+    uint32 asked = 0;
+    do
+    {
+        Field const* f = res->Fetch();
+        uint64 const guid = f[0].GetUInt64();
+        uint8 const race = f[1].GetUInt8();
+        uint32 const bit = Player::TeamForRace(race) == ALLIANCE ? 0x1u : 0x2u;
+        if (faction_mask != 0 && (faction_mask & bit) == 0)
+            continue;
+        if (::Playerbot::Pool::IsScenarioBot(guid) || recently.contains(guid))
+            continue;
+        recently[guid] = now;
+        Services::Population().DeferLogin(guid);
+        Services::Population().ProtectFromKick(guid, 10u * 60u * 1000u);
+        ++asked;
+    } while (asked < need && res->NextRow());
+    return asked;
+}
 
 // Pull a bot's faction-team (Alliance/Horde) from its Player* via TC's
 // race table. Returns 0 = Alliance, 1 = Horde, or 0xFF when unknown
@@ -131,30 +177,13 @@ std::vector<uint64> BotGroupBuilder::PickCandidates(GroupRequest const& req)
     // registry iteration order yields first (which was all-DPS in practice).
     std::vector<uint64> pool;
     pool.reserve(req.required * 4);
+    // why bots of the right faction and level were not taken (logged for an arena team that cannot be made)
+    struct { uint32 fits = 0, not_free = 0, deserter = 0, in_bg = 0, in_dungeon = 0, owned = 0; } why;
     reg.for_each([&](BotId id, BotRegistryEntry const& /*entry*/) {
         if (id == req.leader_low) return;
         Player* p = ObjectAccessor::FindConnectedPlayer(
             ObjectGuid::Create<HighGuid::Player>(id));
         if (!p) return;
-        // The shared eligibility rule (BotPool.h): never a companion, a real player's alt, a bot in an instance, or a
-        // resident the world spawner holds for a player.
-        if (::Playerbot::Pool::CheckFreeBot(p, id) != ::Playerbot::Pool::Verdict::Free) return;
-
-        // Availability filters: never pull a bot that's mid-fight, sitting
-        // under a Deserter debuff, or already parked in a BG/arena queue
-        // into a fresh group. These were previously enforced only at the
-        // final api.bg_queue gate; doing it here too keeps the formed group
-        // from including members that the leader's queue would then reject
-        // (which, for arenas, fails the whole group's CanJoinBattlegroundQueue).
-        if (p->IsDeserter()) return;
-        if (p->InBattleground() || p->InBattlegroundQueue(/*ignoreArena*/ false)) return;
-
-        // Same exemptions as the queue filler: a player's own companion or alt, and a bot inside a dungeon or raid, are not
-        // drafted into a premade (audit B 1.2).
-        if (p->GetMap() && p->GetMap()->IsDungeon()) return;
-        if (Services::Owners().GetOwner(id).account_id != 0) return;
-        if (WorldSession const* bsess = p->GetSession())
-            if (!Services::Accounts().is_pool_account(bsess->GetAccountId())) return;
 
         // Faction filter.
         if (req.faction_mask != 0)
@@ -168,9 +197,34 @@ std::vector<uint64> BotGroupBuilder::PickCandidates(GroupRequest const& req)
         if (req.level_max != 0 && lvl > req.level_max) return;
         // Guild filter.
         if (req.guild_id != 0 && p->GetGuildId() != req.guild_id) return;
+        ++why.fits;
+
+        // The shared eligibility rule (BotPool.h): never a companion, a real player's alt, a bot in an instance, or a
+        // resident the world spawner holds for a player.
+        if (::Playerbot::Pool::CheckFreeBot(p, id) != ::Playerbot::Pool::Verdict::Free) { ++why.not_free; return; }
+
+        // Availability filters: never pull a bot that's mid-fight, sitting
+        // under a Deserter debuff, or already parked in a BG/arena queue
+        // into a fresh group. These were previously enforced only at the
+        // final api.bg_queue gate; doing it here too keeps the formed group
+        // from including members that the leader's queue would then reject
+        // (which, for arenas, fails the whole group's CanJoinBattlegroundQueue).
+        if (p->IsDeserter()) { ++why.deserter; return; }
+        if (p->InBattleground() || p->InBattlegroundQueue(/*ignoreArena*/ false)) { ++why.in_bg; return; }
+
+        // Same exemptions as the queue filler: a player's own companion or alt, and a bot inside a dungeon or raid, are not
+        // drafted into a premade (audit B 1.2).
+        if (p->GetMap() && p->GetMap()->IsDungeon()) { ++why.in_dungeon; return; }
+        if (Services::Owners().GetOwner(id).account_id != 0) { ++why.owned; return; }
+        if (WorldSession const* bsess = p->GetSession())
+            if (!Services::Accounts().is_pool_account(bsess->GetAccountId())) { ++why.owned; return; }
 
         pool.push_back(id);
     });
+    if (req.source == CoordSignal::ArenaTeamForming && pool.size() < req.required)
+        TC_LOG_INFO("playerbot.v2", "[arena] bots of the faction and level: {}; taken elsewhere: {} not free (world spawner, "
+            "instance), {} deserter, {} in a battleground or its queue, {} in a dungeon, {} owned; free: {}",
+            why.fits, why.not_free, why.deserter, why.in_bg, why.in_dungeon, why.owned, pool.size());
 
     // Role balancing (#4C item 5). When the request specifies role wants
     // (tank/healer/dps), fill the tank + healer slots FIRST from the bots
@@ -240,6 +294,16 @@ std::vector<uint64> BotGroupBuilder::PickCandidates(GroupRequest const& req)
 uint32 BotGroupBuilder::BuildGroup(GroupRequest const& req, uint64* leader_out)
 {
     std::vector<uint64> cands = PickCandidates(req);
+    // An arena team must be the full size: a short one would only wait in the queue (api.bg_queue refuses it anyway).
+    if (req.source == CoordSignal::ArenaTeamForming && cands.size() < req.required)
+    {
+        uint32 const missing = uint32(req.required - cands.size());
+        uint32 const logging_in = LoginOfflineArenaBots(req.faction_mask, req.level_min, req.level_max, missing);
+        TC_LOG_INFO("playerbot.v2", "[arena] no bot team yet: {} free bot(s) of {} needed (faction mask {}, level {}-{}); "
+            "{} offline bot(s) logging in for the next try",
+            cands.size(), uint32(req.required), req.faction_mask, uint32(req.level_min), uint32(req.level_max), logging_in);
+        return 0;
+    }
     if (cands.size() < 2)        // can't form a group of one
         return 0;
 

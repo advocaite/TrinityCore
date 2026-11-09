@@ -365,6 +365,8 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         void SaveRespawnTime(uint32 forceDelay = 0);
 
         uint32 GetRespawnDelay() const { return m_respawnDelay; }
+        // Classic 1.60 (WoW Forever): the open world respawn time after Classic.Respawn.Level*Pct (starting zones respawn fastest)
+        uint32 GetClassicRespawnDelay() const;
         void SetRespawnDelay(uint32 delay) { m_respawnDelay = delay; }
 
         float GetWanderDistance() const { return m_wanderDistance; }

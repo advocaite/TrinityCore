@@ -14,6 +14,10 @@ namespace Playerbot::Raid {
         // Kick-first casts: Jeklik's Great Heal 23954 on herself (92-107k) and Lor'Khan's Great Heal 24208 on the trio.
         r.interruptFirst.push_back(23954);
         r.interruptFirst.push_back(24208);
+        // Mar'li's Drain Life 24300 on her victim heals her (DoCastVictim, zg/classic_boss_marli.cpp:238), Jeklik's Mind Flay 23953 is a
+        // channel on a random raider in her second half (classic_boss_jeklik.cpp:393): both are kicked like the heals.
+        r.interruptFirst.push_back(24300);
+        r.interruptFirst.push_back(23953);
 
         r.bosses = { 14517, 14507, 14510,   // High Priestess Jeklik, High Priest Venoxis, High Priestess Mar'li
                      14509, 14515,          // High Priest Thekal (with Zath and Lor'Khan), High Priestess Arlokk
@@ -27,6 +31,8 @@ namespace Playerbot::Raid {
         r.priority.push_back({ 14965, 4 });
         r.avoidGameObject.push_back({ 177764, 6.0f, Who::Anyone });
         r.dispel.push_back({ 16098, DispelKind::Curse });
+        // Her second half: Shadow Word: Pain 23952 on a random raider (magic).
+        r.dispel.push_back({ 23952, DispelKind::Magic });
         // Pierce Armor 12097 on her tank (-armor for 20 s, vanilla data: no dispel type): a tank without it takes her over, as on Ebonroc.
         r.tankSwap.push_back({ 14517, 12097, 1 });
 
@@ -47,6 +53,10 @@ namespace Playerbot::Raid {
         r.dispel.push_back({ 23862, DispelKind::Poison });
         r.dispel.push_back({ 23860, DispelKind::Magic });
         r.retaunt.push_back(14507);
+        // Holy Nova 23858 (troll form, above 50%, every 14-16 s, DoCastSelf: classic_boss_venoxis.cpp:193) hits everyone around him: the
+        // ranged and healers keep 12 y from him while he is a troll, as they keep 12 y from each other.
+        r.avoidEnemy.push_back({ 14507, 12.0f, Who::Ranged, 100.0f, 50.0f });
+        r.avoidEnemy.push_back({ 14507, 12.0f, Who::Healer, 100.0f, 50.0f });
 
         // ---------------------------------------------------------------------------------------------------------------
         // HIGH PRIESTESS MAR'LI (14510, zg/classic_boss_marli.cpp): her Spawns of Mar'li 15041 grow (Enlarge) and die first; Poison Bolt
@@ -57,6 +67,7 @@ namespace Playerbot::Raid {
         r.avoidEnemy.push_back({ 14510, 12.0f, Who::Healer });
         r.dispel.push_back({ 24099, DispelKind::Poison });
         r.dispel.push_back({ 24111, DispelKind::Poison, true });
+        r.dispel.push_back({ 24300, DispelKind::Magic });   // Drain Life, when a kick was missed
         r.retaunt.push_back(14510);
 
         // ---------------------------------------------------------------------------------------------------------------
@@ -89,6 +100,9 @@ namespace Playerbot::Raid {
         r.spread.push_back({ 11382, 5.0f, Who::Ranged });
         r.spread.push_back({ 11382, 5.0f, Who::Healer });
         r.retaunt.push_back(11382);
+        // Whirlwind 13736 (every 18 s, on himself: classic_boss_mandokir.cpp:669): everyone but the tanks steps out, as for the Twin Emperors'
+        // and the AQ40 Whirlwinds (same spell, 10 y).
+        r.avoidEnemyAura.push_back({ 11382, 13736, 10.0f, Who::NonTank });
 
         // ---------------------------------------------------------------------------------------------------------------
         // GAHZ'RANKA (15114, zg/classic_boss_gahzranka.cpp): Frost Breath 16099 is a cone in front; Massive Geyser 22421 throws the melee
@@ -105,7 +119,9 @@ namespace Playerbot::Raid {
         r.priority.push_back({ 15112, 7 });
         r.priority.push_back({ 14986, 4 });
         r.controlledMember.push_back({ 24261 });
-        r.dispel.push_back({ 24306, DispelKind::Curse });
+        // Delusions is never removed: a Shade takes no damage from anyone without it (mob_shade_of_jindo DamageTaken) and keeps Shadow Shocking
+        // its carrier every 2 s, so a removed curse leaves a Shade nobody can kill. The carrier kills it (Fight::freeAura in RaidFightScript.h).
+        r.noDispel.push_back(24306);
         r.dispel.push_back({ 17172, DispelKind::Magic });
         r.retaunt.push_back(11380);
 
@@ -119,8 +135,8 @@ namespace Playerbot::Raid {
         r.controlledMember.push_back({ 24327 });
         r.noDispel.push_back(24321);
         r.retaunt.push_back(14834);
-        // Not ruled: standing in a Son of Hakkar's poison cloud before each Blood Siphon is scripted work (a "stand in" move the rules do not
-        // have); without it the siphon heals him and the fight is a longer burn.
+        // Poisonous Blood before each Blood Siphon is scripted (RaidMechanics_ZG.cpp, ZgHakkar.h): the DPS kill one Son 25 s before the
+        // siphon is due and the raid gathers on it as it dies (its death gives everyone within 8 y the poison).
 
         // ---------------------------------------------------------------------------------------------------------------
         // EDGE OF MADNESS (one of four, when the instance reaches them): Hazza'rah's Nightmare Illusions 15163 (457 hp, hit for 4-8k) die

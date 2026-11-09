@@ -57,31 +57,29 @@ public:
             9874,   // Self Destruct
         };
         // Boss progression — entries from TC's uldaman.h + WoWHead.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. Spawns from the
+        // Classic creature data (map 70), in the order of the clear: the Lost Dwarves (Baelog 6906, with Eric and Olaf) by the
+        // entrance, Archaedas (2748) last. 2748 used to stand first as "Baelog" and again last, and the first waypoint was
+        // Archaedas' room, so the route opened at the final boss and every later index answered the wrong one.
         a.bosses = {
-            2748,   // Baelog (with Eric/Olaf — Lost Dwarves)
+            6906,   // Baelog (with Eric and Olaf: the Lost Dwarves)
             6910,   // Revelosh
             7228,   // Ironaya
             7023,   // Obsidian Sentinel
             7206,   // Ancient Stone Keeper
             7291,   // Galgann Firehammer
             4854,   // Grimlok
-            2748,   // Archaedas (final — note 2748 collision with Baelog
-                    //   in source data; TC may differentiate elsewhere)
+            2748,   // Archaedas (final)
         };
-        // Progression waypoints — Uldaman (vanilla) is a long linear
-        // descent: entry shaft → Lost Dwarves camp → mining tunnels →
-        // Revelosh hall → Ironaya gate → Stone Keeper hall → Galgann's
-        // forge → Grimlok's lair → Archaedas's vault (final).
-        // Boss spawn positions from the Classic creature data (VMaNGOS spawn table, map 70), in encounter order; bosses a script
-        // summons (no static spawn) are left out. Replaces hand-typed coordinates that did not match the map.
         a.progression_waypoints = {
-            { 104.3f, 272.3f, -51.7f },   // Archaedas
+            { -353.0f, 117.2f, -44.4f },   // Baelog
             { -225.6f, 161.2f, -44.5f },   // Revelosh
             { -235.7f, 309.6f, -47.6f },   // Ironaya
             { -163.8f, 388.0f, -36.4f },   // Obsidian Sentinel
             { -38.4f, 221.3f, -48.4f },   // Ancient Stone Keeper
             { -10.4f, 414.7f, -46.9f },   // Galgann Firehammer
             { 56.7f, 455.3f, -41.0f },   // Grimlok
+            { 104.3f, 272.3f, -51.7f },   // Archaedas
         };
         return a;
     }

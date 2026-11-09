@@ -14,14 +14,18 @@
 
 namespace Playerbot::V2::Fleet {
 
-constexpr std::size_t kPoolBrackets = 6;   // 1-9, 10-19, 20-29, 30-39, 40-49, 50-60
+// 2026-11-02: the bands are the battleground brackets (10-19 .. 50-59, then 60 alone), so every bracket has its own share of the roster.
+// With 50-60 as one band only about one bot in eleven there was level 60, so the level 60 queues had few spare bots of their own.
+constexpr std::size_t kPoolBrackets = 7;   // 1-9, 10-19, 20-29, 30-39, 40-49, 50-59, 60
 
 inline std::size_t PoolBracketOf(std::uint32_t level)
 {
-    return std::clamp<std::uint32_t>(level / 10u, 0u, kPoolBrackets - 1u);
+    if (level >= 60u)
+        return kPoolBrackets - 1u;
+    return std::clamp<std::uint32_t>(level / 10u, 0u, kPoolBrackets - 2u);
 }
 
-inline std::uint32_t PoolBracketLo(std::size_t b) { return b == 0 ? 1u : std::uint32_t(b) * 10u; }
+inline std::uint32_t PoolBracketLo(std::size_t b) { return b == 0 ? 1u : b + 1 == kPoolBrackets ? 60u : std::uint32_t(b) * 10u; }
 inline std::uint32_t PoolBracketHi(std::size_t b) { return b + 1 == kPoolBrackets ? 60u : std::uint32_t(b) * 10u + 9u; }
 
 // The cap of one level bracket: the standing roster split evenly over the brackets (rounded up).

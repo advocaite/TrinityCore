@@ -134,10 +134,10 @@ public:
             // Military Quarter
             16061,  // Instructor Razuvious
             16060,  // Gothik the Harvester
-            16064,  // Thane Korth'azz (Four Horsemen)
-            16065,  // Lady Blaumeux (Four Horsemen)
-            30549,  // Baron Rivendare (Four Horsemen)
-            16063,  // Sir Zeliek (Four Horsemen)
+            // The Four Horsemen are one encounter and one waypoint (BOSS_HORSEMEN), as in the raid rules that replace this list
+            // (Raid/RaidEncounterData_NAXX.cpp): Highlord Mograine stands for them. The four used to be listed here, Baron Rivendare
+            // 30549 among them, the Wrath horseman with no spawn on the Classic map.
+            16062,  // Highlord Mograine (Four Horsemen, with Korth'azz, Blaumeux and Zeliek)
             // Construct Quarter
             16028,  // Patchwerk
             15931,  // Grobbulus

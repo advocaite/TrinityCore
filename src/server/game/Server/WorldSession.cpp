@@ -42,6 +42,7 @@
 #include "MiscPackets.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
+#include "ObjectAccessor.h"
 #include "PacketUtilities.h"
 #include "Player.h"
 #include "QueryHolder.h"
@@ -382,6 +383,49 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
         }
         else
             _classicCharacterMailDataTimer -= diff;
+    }
+
+    // Classic 1.60: finish a character delete once the bot playing that character has left the world (HandleCharDeleteOpcode)
+    if (!_pendingCharDelete.IsEmpty() && updater.ProcessUnsafe())
+    {
+        if (!ObjectAccessor::FindConnectedPlayer(_pendingCharDelete))
+        {
+            ObjectGuid const guid = _pendingCharDelete;
+            _pendingCharDelete.Clear();
+            if (!_player && m_playerLoading.IsEmpty())
+                DeleteCharacter(guid);
+            else
+                SendCharDelete(CHAR_DELETE_FAILED);
+        }
+        else if (_pendingCharDeleteTimer <= diff)
+        {
+            sScriptMgr->OnPlayerFailedDelete(_pendingCharDelete, GetAccountId());
+            _pendingCharDelete.Clear();
+            SendCharDelete(CHAR_DELETE_FAILED);
+        }
+        else
+            _pendingCharDeleteTimer -= diff;
+    }
+
+    // Classic 1.60: go on with a login once the bot playing that character has left the world (HandlePlayerLoginOpcode)
+    if (_pendingLoginAfterBot && updater.ProcessUnsafe())
+    {
+        if (!PlayerLoading() || _player)
+            _pendingLoginAfterBot = false;
+        else if (!ObjectAccessor::FindConnectedPlayer(m_playerLoading))
+        {
+            _pendingLoginAfterBot = false;
+            SendConnectToInstance(WorldPackets::Auth::ConnectToSerial::WorldAttempt1);
+        }
+        else if (_pendingLoginAfterBotTimer <= diff)
+        {
+            TC_LOG_ERROR("network", "Account ({}) can't login with character ({}): its bot did not leave the world in time.",
+                GetAccountId(), m_playerLoading.ToString());
+            _pendingLoginAfterBot = false;
+            AbortLogin(WorldPackets::Character::LoginFailureReason::DuplicateCharacter);
+        }
+        else
+            _pendingLoginAfterBotTimer -= diff;
     }
 
     ///- Retrieve packets from the receive queue and call the appropriate handlers

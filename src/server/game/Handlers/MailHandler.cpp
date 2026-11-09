@@ -33,6 +33,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "RealmList.h"
 #include "World.h"
 
 bool WorldSession::CanOpenMailBox(ObjectGuid guid)
@@ -87,8 +88,48 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     }
 
     ObjectGuid receiverGuid;
-    if (normalizePlayerName(sendMail.Info.Target))
-        receiverGuid = sCharacterCache->GetCharacterGuidByName(sendMail.Info.Target);
+    {
+        // The client sends recipients as "Name" or "Name Surname"
+        std::string recipientName = sendMail.Info.Target;
+        std::string recipientSurname;
+
+        // The 70790 client asks for a full name and sends "Name-Realm" ("Name Surname-Realm"); this realm's own suffix is dropped
+        if (size_t dashPos = recipientName.rfind('-'); dashPos != std::string::npos)
+        {
+            if (std::shared_ptr<Realm const> currentRealm = sRealmList->GetCurrentRealm())
+            {
+                std::string suffix = recipientName.substr(dashPos + 1);
+                std::string realmName = currentRealm->Name;
+                std::erase(suffix, ' ');
+                std::erase(realmName, ' ');
+                if (!suffix.empty() && StringEqualI(suffix, realmName))
+                    recipientName.erase(dashPos);
+            }
+        }
+
+        if (size_t spacePos = recipientName.find(' '); spacePos != std::string::npos)
+        {
+            recipientSurname = recipientName.substr(spacePos + 1);
+            recipientName.erase(spacePos);
+            // tolerate repeated/trailing whitespace
+            recipientSurname.erase(0, recipientSurname.find_first_not_of(' '));
+            recipientSurname.erase(recipientSurname.find_last_not_of(' ') + 1);
+        }
+
+        if (!recipientName.empty() && normalizePlayerName(recipientName))
+        {
+            if (!recipientSurname.empty())
+            {
+                // character names are unique in this core, the surname has to match as well (a character without one,
+                // a bot or any character with Classic.CharacterSurnames = 0, is found by the name alone)
+                CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByName(recipientName);
+                if (entry && (entry->Surname.empty() || StringEqualI(entry->Surname, recipientSurname)))
+                    receiverGuid = entry->Guid;
+            }
+            else
+                receiverGuid = sCharacterCache->GetCharacterGuidByName(recipientName);
+        }
+    }
 
     if (!receiverGuid)
     {

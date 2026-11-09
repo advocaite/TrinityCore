@@ -11,8 +11,11 @@
 #include "ObjectMgr.h"
 #include "BattlenetAccountMgr.h"
 #include "../Services.h"
+#include "../Fleet/BotGuildCharter.h"
+#include "Opcodes.h"
 #include "../Util/ConfigReader.h"
 
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
 
@@ -114,11 +117,30 @@ bool BotSession::BeginLogin(ObjectGuid characterGuid)
     return true;
 }
 
-void BotSession::SendPacket(WorldPacket const* /*packet*/, bool /*forced*/)
+void BotSession::SendPacket(WorldPacket const* packet, bool /*forced*/)
 {
     // No client → drop. Base implementation would push to the socket queue
     // which is null for bots. ScriptMgr::OnPacketSend hooks fire elsewhere
     // for normal sessions; bots intentionally stay invisible to that pipeline.
+    //
+    // One exception: a guild charter a player offered to this bot. The
+    // packet starts with the charter item guid; keep it so Update can sign.
+    if (packet && packet->GetOpcode() == SMSG_PETITION_SHOW_SIGNATURES)
+    {
+        try
+        {
+            WorldPacket copy(*packet);
+            copy.rpos(0);
+            ObjectGuid charter;
+            copy >> charter;
+            if (!charter.IsEmpty() && _offeredCharters.size() < 8 &&
+                std::find(_offeredCharters.begin(), _offeredCharters.end(), charter) == _offeredCharters.end())
+                _offeredCharters.push_back(charter);
+        }
+        catch (ByteBufferException const&)
+        {
+        }
+    }
 }
 
 bool BotSession::Update(uint32 /*diff*/, PacketFilter& /*updater*/)
@@ -129,6 +151,16 @@ bool BotSession::Update(uint32 /*diff*/, PacketFilter& /*updater*/)
     // run the parts that DO matter (query holder callbacks for the async
     // login + any deferred work) and return true.
     ProcessQueryCallbacks();
+
+    // Sign guild charters players offered to this bot (see SendPacket).
+    if (!_offeredCharters.empty())
+    {
+        std::vector<ObjectGuid> charters;
+        charters.swap(_offeredCharters);
+        if (_player && _player->IsInWorld() && !m_playerLogout && !forceExit)
+            for (ObjectGuid const& charter : charters)
+                BotSignOfferedCharter(_player, charter);
+    }
 
     // Logout request: KickPlayer (our override) sets forceExit. We do the
     // standard logout dance here and return false so BotSessionMgr drops

@@ -34,6 +34,7 @@
 #include "Bot/ClassicUpkeep.h"
 #include "Bot/States/MaintainHelpers.h"
 #include "Services.h"
+#include "Util/ConfigReader.h"   // full type for Services::Config() (Playerbot.Behavior.RideWithOwner)
 #include "Travel/PortalIndex.h"
 #include "Travel/RegionMapper.h"
 #include "Travel/UnifiedTravelGraph.h"
@@ -210,9 +211,35 @@ bool TransportRideGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
            Services::Portals().IsSameMapTransport(lg->payload);
 }
 
-bool TransportRideFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
+// A bot on the ship or zeppelin its group's player rides: it gets off when he does (PlayerbotV2.cpp DriveRideWithOwner), not at the
+// next stop. Without a plan or an objective this rule stepped a rider off at the next stop, which for a bot that got on at the
+// departure dock is the dock it got on at.
+static bool RidesWithItsPlayer(BotSnapshotView const& s, GroupSnapshotView const& g)
+{
+    if (!s.transport_is_ship() || !s.in_group() || !Services::Config().behavior_ride_with_owner())
+        return false;
+    auto const* members = g.members();
+    if (!members)
+        return false;
+    for (auto const& m : *members)
+    {
+        if (m.is_bot || !m.online || m.ship_guid.IsEmpty() || m.map_id != s.map_id())
+            continue;
+        for (auto const& go : s.raw().world_objects.nearby_objects)
+            if (go.guid == m.ship_guid)
+                return true;
+    }
+    return false;
+}
+
+bool TransportRideFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
                        BotIntentEmitter& emit, uint32)
 {
+    if (RidesWithItsPlayer(s, g))
+    {
+        ai.set_last_rule_fired("idle:ride_with_owner");
+        return true;
+    }
     using namespace ::Playerbot::V2::Travel;
     float bx, by, bz; s.position(bx, by, bz);
     const bool ship = s.transport_is_ship();

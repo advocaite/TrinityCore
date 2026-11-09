@@ -111,6 +111,14 @@ void WorldSession::JoinBattlegroundQueue(BattlegroundQueueTypeId bgQueueTypeId)
         return;
     }
 
+    // a template with no map in BattlemasterListXMap (client data) has an empty map list, and front() on it reads address 0
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: type {} has no map in BattlemasterListXMap, join by {} ignored", uint32(bgTypeId), _player->GetName());
+        ChatHandler(this).SendSysMessage("This battleground is not available on this server.");
+        return;
+    }
+
     // expected bracket entry
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketByLevel(bgTemplate->MapIDs.front(), _player->GetLevel());
     if (!bracketEntry)
@@ -424,11 +432,15 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPackets::Battleground::Battl
         return;
     }
 
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("network", "BattlegroundHandle: BattlegroundTemplate for type id {} has no map.", bgTypeId);
+        return;
+    }
+
     uint32 mapId = bgTemplate->MapIDs.front();
 
-    // BGTemplateId returns BATTLEGROUND_AA when it is arena queue.
-    // Do instance id search as there is no AA bg instances.
-    Battleground* bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId == BATTLEGROUND_AA ? BATTLEGROUND_TYPE_NONE : bgTypeId);
+    Battleground* bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgQueueTypeId);
     if (!bg && battlefieldPort.AcceptedInvite)
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} Slot: {}, Unk: {}, Time: {}, AcceptedInvite: {}. Cant find BG with id {}!",
@@ -606,7 +618,7 @@ void WorldSession::HandleRequestBattlefieldStatusOpcode(WorldPackets::Battlegrou
             continue;
         if (ginfo.IsInvitedToBGInstanceGUID)
         {
-            bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+            bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgQueueTypeId);
             if (!bg)
                 continue;
 
@@ -617,7 +629,7 @@ void WorldSession::HandleRequestBattlefieldStatusOpcode(WorldPackets::Battlegrou
         else
         {
             BattlegroundTemplate const* bgTemplate  = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(bgTypeId);
-            if (!bgTemplate)
+            if (!bgTemplate || bgTemplate->MapIDs.empty())
                 continue;
 
             // expected bracket entry
@@ -646,11 +658,21 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     if (!bgTemplate)
     {
         TC_LOG_ERROR("network", "Battleground: template bg (all arenas) not found");
+        ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;
     }
 
     if (DisableMgr::IsDisabledFor(DISABLE_TYPE_BATTLEGROUND, BATTLEGROUND_AA, nullptr))
     {
+        ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
+        return;
+    }
+
+    // The Classic client data has no BattlemasterListXMap row for "all arenas" (6), so its map list is empty and
+    // MapIDs.front() read address 0: dev realm crash 2026-11-02 18:57 (eea74327b3), on the first login of a new level 1 Human Hunter
+    if (bgTemplate->MapIDs.empty())
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: all arenas (6) has no map in BattlemasterListXMap, arena join by {} ignored", _player->GetName());
         ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;
     }
@@ -662,6 +684,19 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
         return;
 
     Group* grp = _player->GetGroup();
+
+    // The queue takes the party as one team and does not count it, so a player alone queued for 2v2 got a 1 vs 2 match.
+    // A 2v2 needs a party of exactly 2 and a 3v3 a party of exactly 3 (real players or bots).
+    uint32 const partySize = grp ? grp->GetMembersCount() : 1u;
+    if (!sBattlegroundMgr->isArenaTesting() && partySize != arenatype)
+    {
+        WorldPackets::Battleground::BattlefieldStatusFailed battlefieldStatus;
+        BattlegroundMgr::BuildBattlegroundStatusFailed(&battlefieldStatus, bgQueueTypeId, _player, 0, ERR_ARENA_TEAM_PARTY_SIZE);
+        SendPacket(battlefieldStatus.Write());
+        ChatHandler(this).PSendSysMessage("A %uv%u arena needs a party of exactly %u (you have %u).", uint32(arenatype), uint32(arenatype), uint32(arenatype), partySize);
+        return;
+    }
+
     if (!grp)
     {
         grp = new Group();
@@ -732,6 +767,10 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     }
 
     sBattlegroundMgr->ScheduleQueueUpdate(matchmakerRating, bgQueueTypeId, bracketEntry->GetBracketId());
+
+    // same hook as the battleground join, so a module can find opponents for the party (PlayerbotV2 forms a bot team)
+    if (!err)
+        sScriptMgr->OnPlayerBattlegroundQueueJoin(_player, bgTypeId, bracketEntry->GetBracketId());
 }
 
 void WorldSession::HandleReportPvPAFK(WorldPackets::Battleground::ReportPvPPlayerAFK& reportPvPPlayerAFK)

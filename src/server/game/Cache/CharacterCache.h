@@ -61,6 +61,7 @@ class TC_GAME_API CharacterCache
         void UpdateCharacterGuildId(ObjectGuid const& guid, ObjectGuid::LowType guildId);
         void UpdateCharacterArenaTeamId(ObjectGuid const& guid, uint8 slot, uint32 arenaTeamId);
         void UpdateCharacterInfoDeleted(ObjectGuid const& guid, bool deleted, std::string const& name);
+        static bool AreSurnamesEnabled();   // Classic.CharacterSurnames
         void UpdateCharacterSurname(ObjectGuid const& guid, std::string const& surname);
         std::string GetCharacterSurnameByGuid(ObjectGuid guid) const;
 

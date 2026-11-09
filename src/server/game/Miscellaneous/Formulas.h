@@ -140,9 +140,12 @@ namespace Trinity
         {
             uint32 baseGain;
 
-            // Classic 1.60 (vanilla, VMaNGOS Formulas.h): the player's base (5 * level + 45) for every mob level; lower mobs give
-            // (ZD + mob - player) / ZD of it (retail used the lower mob's own base, about 18% less)
+            // Classic 1.60 (vanilla, VMaNGOS Formulas.h): mobs of the player's level or higher give the player's base (5 * level + 45)
+            // * (1 + 0.05 * diff, at most 4); lower mobs give (ZD + mob - player) / ZD of the player's base.
+            // Classic.ForeverKillXp: lower mobs give it of the LOWER MOB's own base instead. The Azeroth project (Sakhwoow/WoWForever,
+            // GPL-2) reports that 97 of 146 official Forever sniffed kills match this and 57 the vanilla one; the kills are not published.
             float const playerBase = pl_level * 5.0f + 45.0f;
+            float const lowerMobBase = sWorld->getBoolConfig(CONFIG_CLASSIC_FOREVER_KILL_XP) ? mob_level * 5.0f + 45.0f : playerBase;
             if (mob_level >= pl_level)
             {
                 uint8 nLevelDiff = mob_level - pl_level;
@@ -157,7 +160,7 @@ namespace Trinity
                 if (mob_level > gray_level)
                 {
                     uint8 ZD = GetZeroDifference(pl_level);
-                    baseGain = uint32(round(playerBase * (ZD + mob_level - pl_level) / float(ZD)));
+                    baseGain = uint32(round(lowerMobBase * (ZD + mob_level - pl_level) / float(ZD)));
                 }
                 else
                     baseGain = 0;

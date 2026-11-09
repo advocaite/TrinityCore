@@ -1,0 +1,143 @@
+/*
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "tc_catch2.h"
+
+#ifdef TESTS_HAVE_PLAYERBOT_V2
+
+#include "../../src/modules/PlayerbotV2/Util/BotLocaleText.h"
+#include <set>
+#include <string>
+
+using namespace Playerbot::Locale;
+
+namespace
+{
+int Captures(std::string const& en)
+{
+    int n = 0;
+    for (size_t i = 0; i + 1 < en.size(); ++i)
+        if (en[i] == '{' && (en[i + 1] == '}' || ((en[i + 1] == '?' || en[i + 1] == '#' || en[i + 1] == '$') && i + 2 < en.size() && en[i + 2] == '}')))
+            ++n;
+    return n;
+}
+
+int Placeholders(std::string const& tr)
+{
+    int n = 0;
+    for (size_t i = 0; i + 1 < tr.size(); ++i)
+        if (tr[i] == '{' && (tr[i + 1] == '}' || (tr[i + 1] >= '1' && tr[i + 1] <= '9')))
+            ++n;
+    return n;
+}
+}
+
+TEST_CASE("BotLocale: every Russian entry is well formed and used once", "[BotLocale]")
+{
+    Catalog const& ru = Russian();
+    for (std::string const& bad : ru.Rejected())
+        FAIL_CHECK("refused: " << bad);
+    CHECK(ru.Rejected().empty());
+    CHECK(ru.Size() == RussianEntries().size());
+
+    // A translation that drops a capture loses a name or a number the player needs.
+    for (Catalog::Entry const& e : RussianEntries())
+    {
+        INFO(e.en);
+        CHECK(Placeholders(e.tr) == Captures(e.en));
+    }
+}
+
+TEST_CASE("BotLocale: English readers get the line unchanged", "[BotLocale]")
+{
+    CHECK(Translate(Lang::En, "Rento: following you") == "Rento: following you");
+    CHECK(Translate(Lang::En, "anything at all") == "anything at all");
+}
+
+TEST_CASE("BotLocale: per-bot confirmations keep the bot's name", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Rento: following you") == "Rento: следую за вами");
+    CHECK(Translate(Lang::Ru, "Rento: following at 5 yards") == "Rento: следую на расстоянии 5 ярд.");
+    CHECK(Translate(Lang::Ru, "Zelah: attacking Kobold Miner") == "Zelah: атакую: Kobold Miner");
+    CHECK(Translate(Lang::Ru, "Zelah: tank on star") == "Zelah: танкую: звезда");
+    CHECK(Translate(Lang::Ru, "Zelah: mount ok") == "Zelah: mount — ок");
+}
+
+TEST_CASE("BotLocale: captured words are translated, names and numbers are not", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Pull back: pulling Hogger to the rally point.") == "Пул назад: тяну Hogger к точке сбора.");
+    CHECK(Translate(Lang::Ru, "Pull back: pulling Hogger to you.") == "Пул назад: тяну Hogger к вам.");
+    CHECK(Translate(Lang::Ru, "Rento: level 20 Mage (Fire), dps - following you") ==
+          "Rento: уровень 20, Маг (Огонь), боец — следую за вами");
+    CHECK(Translate(Lang::Ru, "Assign: skull cleared.") == "Назначение: череп — снято.");
+}
+
+TEST_CASE("BotLocale: optional tails and number runs", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Rento: health 100/200 (50%), mana 40/90, item level 23, armor 300, str 10 agi 11 sta 12 int 13, crit 5.5%") ==
+          "Rento: здоровье 100/200 (50%), мана 40/90, уровень предметов 23, броня 300, сил 10 лов 11 вын 12 инт 13, крит 5.5%");
+    CHECK(Translate(Lang::Ru, "Rento: health 100/200 (50%), item level 23, armor 300, str 10 agi 11 sta 12 int 13, crit 5.5%") ==
+          "Rento: здоровье 100/200 (50%), уровень предметов 23, броня 300, сил 10 лов 11 вын 12 инт 13, крит 5.5%");
+    CHECK(Translate(Lang::Ru, "Rento: 12 pieces worn, avg item level 45, best: [Sword], [Shield]; 3 free bag slots; 1g 2s 3c") ==
+          "Rento: надето вещей: 12, средний уровень предметов 45, лучшее: [Sword], [Shield]; свободно ячеек в сумках: 3; 1з 2с 3м");
+}
+
+TEST_CASE("BotLocale: money gets the Russian letters, other text is not taken for money", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "[Linen Cloth] x5 is 1g 20s, open a trade and put that in") ==
+          "[Linen Cloth] x5 стоит 1з 20с, откройте обмен и положите эту сумму");
+    CHECK(Translate(Lang::Ru, "i'll give you 35s 2c for that") == "дам за это 35с 2м");
+    // "X is Y" with no money in it is no price line.
+    CHECK(Translate(Lang::Ru, "Stormwind is far") == "Stormwind is far");
+}
+
+TEST_CASE("BotLocale: comma lists of known words inside a line", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Prefer: Blessing of Might, pet off.") == "Выбор: Благословение могущества, питомец выключен.");
+    // One unknown part: the list stays as it was, the frame is still translated.
+    CHECK(Translate(Lang::Ru, "Prefer: Blessing of Might, Unknown Thing.") == "Выбор: Blessing of Might, Unknown Thing.");
+}
+
+TEST_CASE("BotLocale: the add-on's structured whispers are never translated", "[BotLocale]")
+{
+    CHECK(NeverTranslate("ASSIGN|8|Rento|tank"));
+    CHECK(Translate(Lang::Ru, "ASSIGN|END|3") == "ASSIGN|END|3");
+}
+
+TEST_CASE("BotLocale: unknown lines come back in English", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Perf: ticks=5 emit=3") == "Perf: ticks=5 emit=3");
+    CHECK(Translate(Lang::Ru, "") == "");
+}
+
+TEST_CASE("BotLocale: template syntax", "[BotLocale]")
+{
+    Catalog c({
+        { "{} gives {} to {}", "{3} получает {2} от {1}" },
+        { "a {}{} b", "x" },          // two captures in a row: refused
+        { "{}", "x" },                // no fixed text: refused
+        { "level {#}{?}!", "ур. {}{}!" },
+        { "bad {}", "{2}" },          // uses a capture the template has not got: refused
+    });
+    CHECK(c.Rejected().size() == 3);
+    CHECK(c.Translate("A gives B to C") == "C получает B от A");
+    CHECK(c.Translate("level 45, best!") == "ур. 45, best!");
+    CHECK(c.Translate("level 45!") == "ур. 45!");
+    CHECK(c.Translate("level x!") == "level x!");   // {#} takes a number only
+}
+
+#endif

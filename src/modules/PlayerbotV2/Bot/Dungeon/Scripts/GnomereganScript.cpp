@@ -48,8 +48,11 @@ public:
         // Radiation (9798) from the irradiated mobs and the Radiation Cloud (10341) of Gnomeregan's leaking tunnels: carriers keep clear of the group.
         a.dangerous_auras = { 9798, 10341 };
         // Boss progression — Gnomeregan has multiple bosses.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. Grubbis has no static
+        // spawn (event_summoned_bosses) and no waypoint, so he is not on it; with him first, every waypoint answered the boss before it
+        // (0.1.27 set A: the tank walked to Viscous Fallout's spot for Grubbis, waived him after 8 s, then was sent to the
+        // Electrocutioner's spot for Viscous Fallout).
         a.bosses = {
-            7361,   // Grubbis
             7079,   // Viscous Fallout
             6235,   // Electrocutioner 6000
             6229,   // Crowd Pummeler 9-60

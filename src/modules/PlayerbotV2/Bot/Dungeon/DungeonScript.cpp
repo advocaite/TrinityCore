@@ -185,6 +185,21 @@ DungeonAdvice DungeonScriptMgr::GetAdvice(BotSnapshotView const& s) const
     return merged;
 }
 
+std::vector<DungeonAdvice::ProgressionPoint> DungeonScriptMgr::RouteFor(uint32_t map_id, uint32_t difficulty) const
+{
+    std::shared_ptr<RouteTable const> routes;
+    {
+        std::shared_lock<std::shared_mutex> lock(routes_mutex_);
+        routes = generated_routes_;
+    }
+    if (!routes)
+        return {};
+    auto it = routes->find(MakeKey(map_id, difficulty));
+    if (it == routes->end() && difficulty != 0)
+        it = routes->find(MakeKey(map_id, 0));
+    return it != routes->end() ? it->second : std::vector<DungeonAdvice::ProgressionPoint>{};
+}
+
 size_t DungeonScriptMgr::LoadGeneratedRoutes()
 {
     // Hot-reload safe: build the new table completely OFF-lock (the DB query

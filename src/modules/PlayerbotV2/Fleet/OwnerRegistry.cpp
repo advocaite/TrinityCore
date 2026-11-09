@@ -1,6 +1,8 @@
 #include "OwnerRegistry.h"
+#include "Bot/CcDeny.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_set>
@@ -293,10 +295,11 @@ bool OwnerRegistry::SetCcEnabled(uint32 account_id, bool enabled)
 
 uint16 OwnerRegistry::CcDenied(uint32 account_id, uint8 cls) const
 {
+    static_assert(kDefaultCcDenied == CcDeny::Fear, "the default crowd-control deny is Fear");
     std::shared_lock lk(mtx_);
     auto it = cc_deny_.find(account_id);
     if (it == cc_deny_.end())
-        return 0;
+        return kDefaultCcDenied;
     CcDenyState const& st = it->second;
     if (cls >= st.deny.size())
         return st.every;
@@ -331,8 +334,61 @@ void OwnerRegistry::SetCcDeny(uint32 account_id, uint8 cls, uint16 kinds, bool d
 
 void OwnerRegistry::ClearCcDeny(uint32 account_id)
 {
+    // "on cc" turns every kind on, Fear included: an explicit state, not the default (which keeps Fear off).
     std::unique_lock lk(mtx_);
-    cc_deny_.erase(account_id);
+    CcDenyState st;
+    st.every = 0;
+    cc_deny_[account_id] = st;
+}
+
+OwnerRegistry::FightIgnoreChange OwnerRegistry::ToggleFightIgnore(uint32 account_id, ObjectGuid mob, uint32 now_ms)
+{
+    std::unique_lock lk(mtx_);
+    std::vector<FightIgnoreEntry>& list = fight_ignore_[account_id];
+    // Forget the old ones first (a mob that respawned keeps its spawn guid; half an hour later it is a new fight).
+    list.erase(std::remove_if(list.begin(), list.end(), [now_ms](FightIgnoreEntry const& e) { return now_ms - e.added_ms >= kFightIgnoreMs; }),
+               list.end());
+    for (auto it = list.begin(); it != list.end(); ++it)
+    {
+        if (it->mob != mob)
+            continue;
+        if (now_ms - it->toggled_ms < kFightIgnoreRepeatMs)
+            return FightIgnoreChange::Repeat;
+        list.erase(it);
+        removed_ms_[account_id] = { mob, now_ms };
+        return FightIgnoreChange::Removed;
+    }
+    // Just taken off: the second copy of that press must not put it back.
+    if (auto r = removed_ms_.find(account_id); r != removed_ms_.end() && r->second.first == mob && now_ms - r->second.second < kFightIgnoreRepeatMs)
+        return FightIgnoreChange::Repeat;
+    if (list.size() >= kMaxFightIgnore)
+        list.erase(list.begin());   // the oldest goes
+    list.push_back({ mob, now_ms, now_ms });
+    return FightIgnoreChange::Added;
+}
+
+size_t OwnerRegistry::ClearFightIgnore(uint32 account_id)
+{
+    std::unique_lock lk(mtx_);
+    auto it = fight_ignore_.find(account_id);
+    if (it == fight_ignore_.end())
+        return 0;
+    size_t const n = it->second.size();
+    fight_ignore_.erase(it);
+    return n;
+}
+
+std::vector<ObjectGuid> OwnerRegistry::FightIgnored(uint32 account_id, uint32 now_ms) const
+{
+    std::vector<ObjectGuid> out;
+    std::shared_lock lk(mtx_);
+    auto it = fight_ignore_.find(account_id);
+    if (it == fight_ignore_.end())
+        return out;
+    for (FightIgnoreEntry const& e : it->second)
+        if (now_ms - e.added_ms < kFightIgnoreMs)
+            out.push_back(e.mob);
+    return out;
 }
 
 Role OwnerRegistry::DeclaredRole(BotId bot) const

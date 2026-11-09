@@ -21,7 +21,10 @@
 #include "ScriptMgr.h"
 #include "InstanceScript.h"
 #include "ScriptedCreature.h"
+#include "ClassicAuraCaster.h"
+#include "SpellAuraEffects.h"
 #include "SpellDefines.h"
+#include "SpellScript.h"
 #include "classic_molten_core.h"
 #include "classic_script_text.h"
 
@@ -35,7 +38,8 @@ enum ClassicMcBaronGeddon : uint32
     SPELL_GEDDON_IGNITEMANA     = 19659,
     SPELL_GEDDON_LIVINGBOMB     = 20475,
     SPELL_GEDDON_ARMAGEDDON     = 20478,
-    SPELL_GEDDON_INFERNO_DAMAGE = 19698
+    SPELL_GEDDON_INFERNO_DAMAGE = 19698,
+    SPELL_GEDDON_LIVINGBOMB_EXPLOSION = 20476
 };
 }
 
@@ -152,7 +156,7 @@ struct classic_boss_baron_geddon : public ScriptedAI
                 InfCount = 0;
                 Tick = 1000;
                 m_bInferno = true;
-                me->AddUnitState(UNIT_STATE_ROOT);
+                me->SetControlled(true, UNIT_STATE_ROOT); // the state, the root flag and a stop: AddUnitState alone leaves a walk in progress running
                 me->SetCanMelee(false); // VMaNGOS skips DoMeleeAttackIfReady while Inferno ticks
             }
         }
@@ -162,6 +166,11 @@ struct classic_boss_baron_geddon : public ScriptedAI
         // Inferno damage increases with each tick
         if (m_bInferno)
         {
+            // He channels in place (VMaNGOS): whatever re-armed a walk (a root aura that fell off, a new victim's chase) is stopped again.
+            if (me->isMoving())
+                me->StopMoving();
+            if (!me->HasUnitState(UNIT_STATE_ROOT))
+                me->SetControlled(true, UNIT_STATE_ROOT);
             if (Tick >= 1000)
             {
                 int32 damage = 0;
@@ -185,7 +194,7 @@ struct classic_boss_baron_geddon : public ScriptedAI
                     case 7:
                         damage = 5000;
                         m_bInferno = false;
-                        me->ClearUnitState(UNIT_STATE_ROOT);
+                        me->SetControlled(false, UNIT_STATE_ROOT);
                         me->SetCanMelee(true);
                         break;
                     default:
@@ -205,7 +214,39 @@ struct classic_boss_baron_geddon : public ScriptedAI
     }
 };
 
+// 20475 - Living Bomb (MC, Baron Geddon)
+// The explosion goes off on the bomb's holder, but VMaNGOS names the aura's caster (Geddon) as the original caster: the flat 3200 fire damage is
+// Geddon's, with no spell power, crit or talent of the holder. TrinityCore's periodic trigger casts it from the holder alone, which let a mage
+// carrier's spell power lift it to 5539. The target selection (holder as the centre, the raid as Geddon's enemies) is unchanged.
+class classic_spell_geddon_living_bomb : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_GEDDON_LIVINGBOMB_EXPLOSION });
+    }
+
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+
+        Unit* holder = GetTarget();
+        Unit* caster = GetCaster();
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_POWER_COST | TRIGGERED_IGNORE_REAGENT_COST));
+        args.SetTriggeringAura(aurEff);
+        if (ClassicAuraCaster::UseAuraCaster(caster != nullptr, caster && caster->IsInWorld(), caster == holder))
+            args.SetOriginalCaster(caster->GetGUID());
+        holder->CastSpell(holder, SPELL_GEDDON_LIVINGBOMB_EXPLOSION, args);
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_geddon_living_bomb::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_classic_boss_baron_geddon()
 {
     RegisterCreatureAI(classic_boss_baron_geddon);
+    RegisterSpellScript(classic_spell_geddon_living_bomb);
 }
