@@ -1942,6 +1942,43 @@ std::string SocialText(Player* bot, Player* sender)
 
 // What the bot carries that a player may ask for, in words for the program: "food: Darnassian Bleu x3; drink: none; potions: none;
 // bandages: none; can conjure: water, food". A model that does not know the bags promised water it did not have (Gun, 2026-11-08).
+// What the bot is doing right now, in words, for "what are you doing?" / "where are you going?": the live state first (dead,
+// fighting what, on a flight, an owner's order), else the bot logic's last rule (ActivityFromRule). Before, the model only had
+// the zone and the first quest of the log and made the rest up.
+std::string DoingText(Player* bot)
+{
+    if (!bot->IsAlive())
+        return "dead, waiting to get back to my body";
+    if (bot->IsInCombat())
+    {
+        Unit const* v = bot->GetVictim();
+        return v ? "fighting " + std::string(v->GetName()) : std::string("in a fight");
+    }
+    if (bot->IsInFlight())
+        return "on a flight";
+    BotAI const* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+    uint32 const now = GameTime::GetGameTimeMS();
+    std::string out;
+    if (ai && ai->is_manual_mode(now))
+        switch (ai->owner_command())
+        {
+            case BotAI::OwnerCommand::Follow:    out = "following you"; break;
+            case BotAI::OwnerCommand::Hold:
+            case BotAI::OwnerCommand::Stay:      out = "waiting here, as told"; break;
+            case BotAI::OwnerCommand::Engage:    out = "attacking, as told"; break;
+            case BotAI::OwnerCommand::Disengage: out = "holding back, as told"; break;
+            case BotAI::OwnerCommand::Action:    out = "doing what I was told"; break;
+            case BotAI::OwnerCommand::None:      break;
+        }
+    if (out.empty() && ai && ai->last_rule_fired())
+        out = ActivityFromRule(ai->last_rule_fired());
+    if (out.empty())
+        return {};
+    if (bot->IsMounted())
+        out += ", on my mount";
+    return out;
+}
+
 std::string CarryText(Player* bot)
 {
     std::vector<std::pair<std::string, uint32>> food, drink, potions, bandages;
@@ -2610,6 +2647,8 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     if (auto lp = g_last_post.find(bot_id); lp != g_last_post.end() && now_ms - lp->second.ms < 900000u)
         e.fields.emplace_back("your_post", fmt::format("{} minutes ago you wrote in {}: {}", (now_ms - lp->second.ms) / 60000u,
                                                        lp->second.channel, lp->second.text));
+    if (std::string const doing = DoingText(bot); !doing.empty())
+        e.fields.emplace_back("doing", doing);
     // Guild and group: "want to join my guild?", "sign my charter?", "wanna quest?" get a true answer (also without actions).
     if (!from_bot)
         e.fields.emplace_back("social", SocialText(bot, sender));

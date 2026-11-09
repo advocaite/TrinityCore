@@ -651,4 +651,27 @@ TEST_CASE("BotBridge: a group order's action is one every bot can take", "[BotBr
         CHECK_FALSE(IsGroupAct(a));
 }
 
+TEST_CASE("BotBridge: what a bot is doing, in a player's words", "[BotBridge]")
+{
+    CHECK(ActivityFromRule("idle:pursue_quest_goal") == "doing a quest");
+    CHECK(ActivityFromRule("idle:quest_path") == "doing a quest");
+    CHECK(ActivityFromRule("idle:walk_to_quest_ender") == "handing in a quest");
+    CHECK(ActivityFromRule("idle:travel_to_vendor") == "on the way to a vendor to sell junk");
+    CHECK(ActivityFromRule("idle:bags_full_recover") == "on the way to a vendor to sell junk");
+    CHECK(ActivityFromRule("idle:walk_to_known_mailbox") == "checking my mail");
+    CHECK(ActivityFromRule("idle:inn_rest") == "taking a break at the inn");
+    CHECK(ActivityFromRule("idle:walk_to_flightmaster") == "catching a flight");
+    CHECK(ActivityFromRule("idle:grind_roam") == "killing mobs for xp");
+    CHECK(ActivityFromRule("idle:gathering") == "hanging out with some people, chatting");
+    CHECK(ActivityFromRule("idle:dungeon_tank_advance_boss") == "in a dungeon run with my group");
+    CHECK(ActivityFromRule("idle:craft_order_fulfill") == "making something someone ordered");
+    CHECK(ActivityFromRule("idle:ah_post_surplus") == "doing some business at the auction house");
+    CHECK(ActivityFromRule("idle:town_errand") == "running errands in town");
+    // a retreat is not a rest; a rule a player would not talk about says nothing
+    CHECK(ActivityFromRule("combat:pull_back_retreat") == "fighting");
+    CHECK(ActivityFromRule("idle:pull_back_hold").empty());
+    CHECK(ActivityFromRule("idle:watchdog_escape").empty());
+    CHECK(ActivityFromRule("").empty());
+}
+
 #endif // TESTS_HAVE_PLAYERBOT_V2

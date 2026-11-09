@@ -833,6 +833,70 @@ PlaceKind ParsePlace(std::string const& place, std::string& rest)
     return kind;
 }
 
+std::string ActivityFromRule(std::string_view rule)
+{
+    std::string r(rule);
+    for (char& c : r)
+        c = char(std::tolower(static_cast<unsigned char>(c)));
+    auto has = [&r](std::initializer_list<char const*> words)
+    {
+        for (char const* w : words)
+            if (r.find(w) != std::string::npos)
+                return true;
+        return false;
+    };
+    if (r.empty())
+        return {};
+    // first the ones whose words would also match a broader group below
+    if (r == "idle:gathering")
+        return "hanging out with some people, chatting";
+    if (has({ "craft_order" }))
+        return "making something someone ordered";
+    if (has({ "dungeon", "boss" }))
+        return "in a dungeon run with my group";
+    if (has({ "bags_full", "vendor", "sell" }))
+        return "on the way to a vendor to sell junk";
+    if (has({ "repair" }))
+        return "getting my gear repaired";
+    if (has({ "ah_", "auction" }))
+        return "doing some business at the auction house";
+    if (has({ "mail" }))
+        return "checking my mail";
+    if (has({ "bank" }))
+        return "at the bank";
+    if (has({ "inn_", "_inn", "innkeeper" }))
+        return "taking a break at the inn";
+    if (has({ "trainer" }))
+        return "visiting my trainer";
+    if (has({ "flight", "taxi" }))
+        return "catching a flight";
+    if (has({ "transport", "dock", "boat", "zeppelin", "portal", "elevator" }))
+        return "travelling";
+    if (has({ "turnin", "quest_ender" }))
+        return "handing in a quest";
+    if (has({ "quest", "wq_" }))
+        return "doing a quest";
+    if (has({ "grind", "roam" }))
+        return "killing mobs for xp";
+    if (has({ "herb", "mining", "mine_", "skin", "gather_node", "fish" }))
+        return "gathering stuff";
+    if (has({ "pvp", "duel" }))
+        return "up for some pvp";
+    if (has({ "lfg", "yell_lfg", "group_find" }))
+        return "looking for a group";
+    if (has({ "party_follow", "follow" }))
+        return "following my group";
+    if (has({ "_rest", "rest_", "drink", "res_sick" }))   // not "eat": "pull_back_retreat"
+        return "resting a bit";
+    if (has({ "town_errand", "town_linger", "wander", "rpg", "service", "watch_walk" }))
+        return "running errands in town";
+    if (has({ "travel", "walk_to", "hub" }))
+        return "on my way somewhere";
+    if (r.rfind("combat:", 0) == 0)
+        return "fighting";
+    return {};
+}
+
 bool IsGroupAct(Act a)
 {
     switch (a)
