@@ -4491,6 +4491,16 @@ void Unit::RemoveAurasWithInterruptFlags(InterruptFlags flag, SpellInfo const* s
             && (!source || aura->GetId() != source->Id)
             && !IsInterruptFlagIgnoredForSpell(flag, this, aura->GetSpellInfo(), false, source))
         {
+            // An aura that ends on touching the ground and was put on a moment ago belongs to a spell that lifts its target first
+            // (Skyborne Walk on Air 1259416: the aura, then a knockback up). The player is still standing when the next position
+            // comes in, before the client has started the jump, and the aura was gone at once: only the sound played (Discord
+            // 2026-11-09). It ends on the ground from the second second on.
+            if constexpr (std::is_same_v<InterruptFlags, SpellAuraInterruptFlags2>)
+                if (flag == SpellAuraInterruptFlags2::Ground
+                    && (aura->GetMaxDuration() > 0 ? aura->GetMaxDuration() - aura->GetDuration() < 1000
+                                                   : GameTime::GetGameTime() - aura->GetApplyTime() < 1))
+                    continue;
+
             uint32 removedAuras = m_removedAurasCount;
             RemoveAura(aura, AURA_REMOVE_BY_INTERRUPT);
             if (m_removedAurasCount > removedAuras + 1)
