@@ -240,6 +240,16 @@ void DriveTeleportAck(Player* p)
     // are unused beyond the debug log. Forge the minimum payload.
     if (p->GetTeleportState() == TeleportState::WaitingForTeleportAck)
     {
+        // Same as the far teleport above: the walk the bot was on keeps its spline, and the spline moved the bot straight back onto
+        // its old way after the ack set it down at the new spot. A catch-up in the Stormwind canals showed it (Discord 2026-11-09): two
+        // bots "brought" to their player 186 y away were 133 y from the spot a moment later, still walking the old way, and to the
+        // player the group warped about. The move ends first; the bot's rules give it the next one from where it now stands.
+        if (!p->IsInFlight() && !p->GetTransport())
+        {
+            p->StopMoving();
+            p->GetMotionMaster()->Clear();
+            p->GetMotionMaster()->MoveIdle();
+        }
         WorldPacket data(CMSG_MOVE_TELEPORT_ACK, 8 + 4 + 4);
         data << p->GetGUID();
         data << int32(0);
