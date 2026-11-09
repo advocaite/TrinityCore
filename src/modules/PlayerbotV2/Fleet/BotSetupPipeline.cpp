@@ -740,7 +740,9 @@ bool BotSetupPipeline::DoAcquireMount(Player* bot)
     // Call Pet (883) and pet-dependent abilities all silently fail. Spawn a
     // race-themed starter pet so the bot has one — same creature template
     // each race's racial questline would have given them.
-    if (bot->GetClass() == CLASS_HUNTER && bot->GetPetGUID().IsEmpty())
+    // Classic hunters tame their first beast at level 10 (Discord 2026-11-09: hunter bots under 10 had a pet); a younger bot gets
+    // none here, and the pet rules give it one when it reaches 10.
+    if (bot->GetClass() == CLASS_HUNTER && bot->GetLevel() >= 10 && bot->GetPetGUID().IsEmpty())
     {
         uint32 pet_entry = World::HunterPetEntryForRace(bot->GetRace());
         // A hunter nobody owns (world / pool bot) gets its own beast, stable per bot, instead of its race's one.
