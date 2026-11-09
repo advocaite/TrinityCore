@@ -4651,6 +4651,20 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // immune-to-PC, visibility, and unit-flag checks.
             if (t->GetCreatureType() == CREATURE_TYPE_NON_COMBAT_PET) continue;
             if (!p->IsValidAttackTarget(t)) continue;
+            // A civilian or a working NPC of the other side (vendor, trainer, quest giver, the Commerce Authority's traders in
+            // Durotar) is no mob to farm: bots killed them over and over and players lost their vendors (Discord 2026-11-09).
+            // Only when it is not already fighting the bot or one of its group: then it is a fight like any other. Open world only:
+            // dungeon, raid and battleground bosses can carry a gossip or quest flag.
+            if (Creature const* c = t->ToCreature(); c && p->GetMap() && !p->GetMap()->Instanceable())
+            {
+                if (c->IsCivilian() || c->GetNpcFlags() != UNIT_NPC_FLAG_NONE)
+                {
+                    Unit const* v = c->GetVictim();
+                    Player const* vp = v ? v->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+                    if (!vp || (vp != p && !(p->GetGroup() && p->GetGroup() == vp->GetGroup())))
+                        continue;
+                }
+            }
             const float dx = t->GetPositionX() - p->GetPositionX();
             const float dy = t->GetPositionY() - p->GetPositionY();
             const float dz = t->GetPositionZ() - p->GetPositionZ();
