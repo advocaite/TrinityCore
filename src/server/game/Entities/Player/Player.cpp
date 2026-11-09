@@ -15959,11 +15959,13 @@ bool Player::CanRewardQuest(Quest const* quest, LootItemType rewardType, uint32 
 
 void Player::AddQuest(Quest const* quest, Object* questGiver)
 {
+    // Quests.LogSize: how many quests a player may hold (the server keeps up to MAX_QUEST_LOG_SIZE)
+    uint16 const logSize = uint16(std::min<uint32>(sWorld->getIntConfig(CONFIG_QUEST_LOG_SIZE), MAX_QUEST_LOG_SIZE));
     uint16 log_slot = 0;
-    while (GetQuestSlotQuestId(log_slot) && log_slot < MAX_QUEST_LOG_SIZE)
+    while (log_slot < logSize && GetQuestSlotQuestId(log_slot))
         ++log_slot;
 
-    if (log_slot >= MAX_QUEST_LOG_SIZE) // Player does not have any free slot in the quest log
+    if (log_slot >= logSize) // Player does not have any free slot in the quest log
         return;
 
     uint32 quest_id = quest->GetQuestId();
@@ -16640,8 +16642,9 @@ bool Player::SatisfyQuestMaxLevel(Quest const* qInfo, bool msg) const
 
 bool Player::SatisfyQuestLog(bool msg) const
 {
-    // exist free slot
-    for (uint32 log_slot = 0; log_slot < MAX_QUEST_LOG_SIZE; ++log_slot)
+    // exist free slot (Quests.LogSize of them can be used)
+    uint32 const logSize = std::min<uint32>(sWorld->getIntConfig(CONFIG_QUEST_LOG_SIZE), MAX_QUEST_LOG_SIZE);
+    for (uint32 log_slot = 0; log_slot < logSize; ++log_slot)
         if (!GetQuestSlotQuestId(log_slot))
             return true;
 

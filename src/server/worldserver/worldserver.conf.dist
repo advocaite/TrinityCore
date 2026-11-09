@@ -1332,6 +1332,14 @@ Quests.LowLevelHideDiff = 5
 Quests.HighLevelHideDiff = 2
 
 #
+#    Quests.LogSize
+#        Description: How many quests a character can have in the quest log at once.
+#        Default:     35 - (The quest log of the Classic client)
+#                     40 - (The most the server can hold)
+
+Quests.LogSize = 35
+
+#
 #    Quests.IgnoreRaid
 #        Description: Allow non-raid quests to be completed while in a raid group.
 #        Default:     0 - (Disabled)

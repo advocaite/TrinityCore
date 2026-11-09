@@ -821,6 +821,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "WorldBossLevelDiff"sv, .DefaultValue = 3, .Index = CONFIG_WORLD_BOSS_LEVEL_DIFF },
         { .Name = "Quests.LowLevelHideDiff"sv, .DefaultValue = 4, .Index = CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
         { .Name = "Quests.HighLevelHideDiff"sv, .DefaultValue = 7, .Index = CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
+        { .Name = "Quests.LogSize"sv, .DefaultValue = 35, .Index = CONFIG_QUEST_LOG_SIZE, .Min = 1, .Max = 40 }, // MAX_QUEST_LOG_SIZE
         { .Name = "Battleground.Random.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_RANDOM_BG_RESET_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Calendar.DeleteOldEventsHour"sv, .DefaultValue = 6, .Index = CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Guild.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_GUILD_RESET_HOUR, .Min = 0, .Max = 23 },
