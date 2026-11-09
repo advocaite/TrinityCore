@@ -193,11 +193,16 @@ enum KerlonianData
 // TODO: make concept similar as "ringo" -escort. Find a way to run the scripted attacks, _if_ player are choosing road. (VMaNGOS comment)
 struct classic_npc_kerlonian : public FollowerAI
 {
-    classic_npc_kerlonian(Creature* creature) : FollowerAI(creature), _fallAsleepTimer(urand(10000, 45000)) { }
+    // Blizzard hotfix 6 November 2026: "Kerlonian Evershade falls asleep less often". No numbers were given; ours (VMaNGOS:
+    // first nap after 10-45 s, then every 25-90 s) are doubled.
+    static uint32 FirstNapTimer() { return urand(20000, 90000); }
+    static uint32 NextNapTimer() { return urand(50000, 180000); }
+
+    classic_npc_kerlonian(Creature* creature) : FollowerAI(creature), _fallAsleepTimer(FirstNapTimer()) { }
 
     void Reset() override
     {
-        _fallAsleepTimer = urand(10000, 45000);
+        _fallAsleepTimer = FirstNapTimer();
     }
 
     void JustAppeared() override
@@ -289,7 +294,7 @@ struct classic_npc_kerlonian : public FollowerAI
                 if (_fallAsleepTimer < diff)
                 {
                     SetSleeping();
-                    _fallAsleepTimer = urand(25000, 90000);
+                    _fallAsleepTimer = NextNapTimer();
                 }
                 else
                     _fallAsleepTimer -= diff;
