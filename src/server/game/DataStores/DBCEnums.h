@@ -2648,6 +2648,11 @@ enum class TransmogOutfitSlotOption : uint8
     ArtifactSpecTwo     = 9,
     ArtifactSpecThree   = 10,
     ArtifactSpecFour    = 11,
+    // Classic 1.60 client data: every armor slot (head, shoulders, chest, waist, legs, feet, wrists, hands) has one option per armor type
+    ArmorCloth          = 12,
+    ArmorLeather        = 13,
+    ArmorMail           = 14,
+    ArmorPlate          = 15,
 
     Max
 };

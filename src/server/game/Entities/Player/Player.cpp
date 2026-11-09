@@ -32920,6 +32920,11 @@ void Player::EquipTransmogOutfit(uint32 id, TransmogSituationTrigger trigger, Op
                     SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::IllusionDisplayType), AsUnderlyingType(TransmogOutfitDisplayType::Disabled));
                     break;
                 case TransmogOutfitSlotOption::None:
+                case TransmogOutfitSlotOption::ArmorCloth:
+                case TransmogOutfitSlotOption::ArmorLeather:
+                case TransmogOutfitSlotOption::ArmorMail:
+                case TransmogOutfitSlotOption::ArmorPlate:
+                    // no illusions on armor
                     break;
                 default:
                     SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::IllusionDisplayType), AsUnderlyingType(TransmogOutfitDisplayType::Equipped));
@@ -32979,6 +32984,9 @@ void Player::_SaveCharacterSelectOutfit(CharacterDatabaseTransaction trans) cons
                 transmogSlotOption = static_cast<TransmogOutfitSlotOption>(m_activePlayerData->TransmogMetadata->StampedOptionOffHand);
                 break;
             default:
+                // Classic 1.60: armor slots have one outfit slot per armor type, picked by the armor worn there
+                if (Item const* equipped = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+                    transmogSlotOption = equipped->GetTemplate()->GetWeaponTransmogOutfitSlotOption();
                 break;
         }
 

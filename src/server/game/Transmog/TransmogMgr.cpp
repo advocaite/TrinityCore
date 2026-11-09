@@ -87,6 +87,22 @@ constexpr bool IsArtifactTransmogOutfitSlotOption(TransmogOutfitSlotOption optio
         || option == TransmogOutfitSlotOption::ArtifactSpecFour;
 }
 
+// Classic 1.60: armor slots keep one appearance per armor type (options 12-15 of TransmogOutfitSlotOption.db2)
+constexpr bool IsArmorTransmogOutfitSlotOption(TransmogOutfitSlotOption option)
+{
+    return option == TransmogOutfitSlotOption::ArmorCloth
+        || option == TransmogOutfitSlotOption::ArmorLeather
+        || option == TransmogOutfitSlotOption::ArmorMail
+        || option == TransmogOutfitSlotOption::ArmorPlate;
+}
+
+// cosmetic pieces and the hidden appearances (miscellaneous armor) are not tied to one armor type
+bool IsAnyArmorTypeAppearance(ItemTemplate const* item)
+{
+    return item->GetClass() == ITEM_CLASS_ARMOR
+        && (item->GetSubClass() == ITEM_SUBCLASS_ARMOR_COSMETIC || item->GetSubClass() == ITEM_SUBCLASS_ARMOR_MISCELLANEOUS);
+}
+
 bool IsValidTransmogOutfitSlotForItem(ItemTemplate const* item, TransmogOutfitSlot slot, TransmogOutfitSlotOption option)
 {
     if (IsArtifactTransmogOutfitSlotOption(option))
@@ -432,7 +448,8 @@ bool TransmogMgr::ValidateSlots(std::span<WorldPackets::Transmogrification::Tran
             TransmogOutfitSlotOption appearanceSlotOption = itemTemplate->GetWeaponTransmogOutfitSlotOption();
             if (appearanceSlotOption != slot.SlotOption
                 && (slot.SlotOption != TransmogOutfitSlotOption::FuryTwoHandedWeapon
-                    || appearanceSlotOption != TransmogOutfitSlotOption::TwoHandedWeapon))
+                    || appearanceSlotOption != TransmogOutfitSlotOption::TwoHandedWeapon)
+                && (!IsArmorTransmogOutfitSlotOption(slot.SlotOption) || !IsAnyArmorTypeAppearance(itemTemplate)))
                 return false;
 
             if (slot.SheatheCategory != TransmogOutfitSlotOptionSheatheCategory::Default &&

@@ -333,6 +333,30 @@ TransmogOutfitSlotOption ItemTemplate::GetWeaponTransmogOutfitSlotOption() const
                     return TransmogOutfitSlotOption::Shield;
                 case INVTYPE_HOLDABLE:
                     return TransmogOutfitSlotOption::OffHand;
+                // Classic 1.60: the armor slots keep one appearance per armor type (TransmogOutfitSlotOption.db2 options 12-15)
+                case INVTYPE_HEAD:
+                case INVTYPE_SHOULDERS:
+                case INVTYPE_CHEST:
+                case INVTYPE_ROBE:
+                case INVTYPE_WAIST:
+                case INVTYPE_LEGS:
+                case INVTYPE_FEET:
+                case INVTYPE_WRISTS:
+                case INVTYPE_HANDS:
+                    switch (GetSubClass())
+                    {
+                        case ITEM_SUBCLASS_ARMOR_CLOTH:
+                            return TransmogOutfitSlotOption::ArmorCloth;
+                        case ITEM_SUBCLASS_ARMOR_LEATHER:
+                            return TransmogOutfitSlotOption::ArmorLeather;
+                        case ITEM_SUBCLASS_ARMOR_MAIL:
+                            return TransmogOutfitSlotOption::ArmorMail;
+                        case ITEM_SUBCLASS_ARMOR_PLATE:
+                            return TransmogOutfitSlotOption::ArmorPlate;
+                        default:
+                            break;
+                    }
+                    break;
                 default:
                     break;
             }
