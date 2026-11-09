@@ -1252,6 +1252,15 @@ Instance.MoltenCoreHoundsLinked = 0
 Instance.MoltenCoreSkipRunes = 0
 
 #
+#    Instance.MoltenCoreRagnarosReady
+#        Description: Ragnaros is up in his lair and can be attacked at once, without Majordomo's talk and
+#                     summon. Left out of the config, it follows Instance.MoltenCoreSkipRunes.
+#        Default:     0 - (Disabled, the 1.12 way: Majordomo summons Ragnaros)
+#                     1 - (Enabled, optional shortcut for private servers)
+
+Instance.MoltenCoreRagnarosReady = 0
+
+#
 #    Instance.CombatResurrectionLimit
 #        Description: Limit resurrections during a boss encounter to the encounter's combat
 #                     resurrection charges. Classic has no such limit.
