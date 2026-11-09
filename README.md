@@ -11,7 +11,19 @@ A server for the **WoW Forever client (Classic 1.60.1, build 70862)**, based on 
 `WoW-Forever-Bots-<version>.zip` file). You turn bots on or off when you start it. The launcher updates itself from
 [its own releases](https://github.com/Karrz1/foreverlauncher-releases/releases).
 
-**Need help?** Ask on our [Discord](https://discord.gg/eJt62dDh54) or open an [issue](https://github.com/Karrz1/TrinityCore/issues).
+## Build it with us
+
+ForeverCore is made by the people who play on it. Every bug report, fix and packet capture makes it better for everyone,
+so jump in:
+
+- **Found a bug?** Open an [issue](https://github.com/Karrz1/TrinityCore/issues/new/choose). Say what happens, what
+  should happen, and the ids of the quest, NPC, item or spell if you have them.
+- **Have a fix?** Send a pull request against `forever` (or `forever-bots` for the bots). One fix per pull request,
+  and say where the data comes from (sniff, Wowhead, Questie, a video). [CONTRIBUTING.md](CONTRIBUTING.md) has the
+  few rules for SQL and C++.
+- **Want to talk it over first, or need help?** Come say hi on our [Discord](https://discord.gg/eJt62dDh54).
+- **Have packet captures or WDB caches from the official Forever realms?** Share them on Discord. They are the best
+  source we have.
 
 ## Branches
 
@@ -74,11 +86,6 @@ cmake --build build --config RelWithDebInfo --target worldserver
 Turn them on in `playerbot.conf` (`Playerbot.Enable`, `Playerbot.World.Enable`). World PvP bots and the bot chat
 program are off by default. Database setup for the bots: `src/modules/PlayerbotV2/INSTALL.md` on that branch.
 Other modules go in `src/modules/` too, see [src/modules/README.md](src/modules/README.md).
-
-## Fixes welcome
-
-Send a pull request against `forever`, one fix per pull request, and say where the data comes from (sniff, Wowhead,
-Questie, video). Bug reports go in the [issues](https://github.com/Karrz1/TrinityCore/issues).
 
 ## Thanks
 
