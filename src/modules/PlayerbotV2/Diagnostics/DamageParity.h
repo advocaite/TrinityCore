@@ -27,7 +27,11 @@ namespace Playerbot::Diagnostics::Parity {
 // (the [trap_cast] line carries the cast result and the spell's effect targets) and do its job to the dummy.
 // Group: the dps scorecard - a whole raid of one bot per dps spec (plus a tank and buffers) hits one boss dummy at once; one tally per bot, one
 // scorecard row each (BeginGroup, DpsScorecard.tsv). The bots keep their own logic.
-enum class Kind : std::uint8_t { None = 0, Damage = 1, Finisher = 2, TalentAudit = 3, Economy = 4, Incoming = 5, Trap = 6, Threat = 7, Group = 8 };
+// SpellCheck: the player spell check (spell_check_<class>). The bot casts each key spell of its class at the dummy (or a heal on itself) the
+// way a player's cast goes (Player::CastSpell, not triggered), several times, and each spell must land and hit for at least its floor and for
+// at least half of what the client's own spell data says (base points plus the attack power and spell power coefficients). One PASS / FAIL /
+// SKIP line per spell. Needs no game client.
+enum class Kind : std::uint8_t { None = 0, Damage = 1, Finisher = 2, TalentAudit = 3, Economy = 4, Incoming = 5, Trap = 6, Threat = 7, Group = 8, SpellCheck = 10 };   // 9 is the support scorecard (Group in support mode, ScenarioDefs)
 
 // A leg is measuring (one atomic load; the hooks return at once when it is false).
 bool Active();

@@ -45,6 +45,7 @@ public:
     // their use cases (see PlayerbotV2.cpp comments for rationale).
     void OnPlayerLogin(Player* p);
     void OnPlayerLogout(Player* p);
+    void OnPlayerDeleted(uint64 guid_low);
     void OnLevelUp(Player* p, uint8 new_level);
     void OnDeath(Unit* victim, Unit* killer);
     void OnResurrect(Player* p);
@@ -71,6 +72,8 @@ public:
     // ground is a fall back to that point.
     void OnGroupPingUnit(Player* sender, Group* group, Unit* target, uint8 type);
     void OnGroupPingPoint(Player* sender, Group* group, Position const& point, uint8 type);
+    // A player put a world marker on the ground: a waiting "Place at cursor" order takes the spot.
+    void OnWorldMarkerPlaced(Player* sender, Position const& point);
     // One line with the add-on's download link for a player whose client has not said hello (Playerbot.AddonHint.*).
     void SendDueAddonHints();
     // The ForeverBots add-on greeted the server (self-whisper or the silent `.bot addon` command): no download hint for this player.

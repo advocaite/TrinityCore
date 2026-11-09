@@ -306,7 +306,7 @@ struct LegResult
 // ---- Sweeps ----
 
 enum class Res : std::uint8_t { None, Combo, Rage };
-enum class Measure : std::uint8_t { Damage, DotTotal, AuraDuration, ArmorDrop };
+enum class Measure : std::uint8_t { Damage, DotTotal, AuraDuration, ArmorDrop, Heal };
 
 struct SweepItem
 {
@@ -319,7 +319,140 @@ struct SweepItem
     char const* watch_aura = nullptr;     // split the hits by this aura on the dummy (Improved Shadow Bolt's Shadow Vulnerability)
     double expect_ratio = 0.0;            // with the aura against without it
     bool low_health = false;              // the dummy is at 15 % (Execute)
+    // The player spell check (Kind::SpellCheck) only:
+    double floor = 0.0;                   // the mean plain hit (or heal) must be at least this at level 60 in tier 3 gear, after the dummy's armor
+    std::uint32_t exact_id = 0;           // cast exactly this id (the one a player's spellbook has), not the highest rank found by name
+    bool teach = false;                   // with exact_id: a bot that does not know it learns it for the check and loses it afterwards
+    std::uint32_t pre_aura = 0;           // put this aura on the caster before each cast (Victorious before Victory Rush)
 };
+
+// One player spell check item: damage on the dummy (or a heal on the caster), `reps` casts, with its floor.
+SweepItem CheckItem(std::uint8_t cls, char const* spell, double floor, Measure m = Measure::Damage, int reps = 5)
+{
+    // A damage over time is cast three times: one cast can miss the level 63 dummy (Corruption, second 0.1.30 run: one cast, one miss).
+    SweepItem it{ cls, spell, Res::None, { 0 }, m, m == Measure::DotTotal ? 3 : reps };
+    it.floor = floor;
+    return it;
+}
+
+// The key spells per class for the player spell check. The floors are deliberately low (roughly a third of a vanilla rank-max hit at level
+// 60, after the level 63 dummy's 3731 armor for physical hits): they catch a spell that hits for 1 or 2, or for a tenth of what it should,
+// without failing on normal rolls, partial resists or missing talents. The second check, against the client's own spell data, is in
+// SpellCheckDataValue. A talent spell the bot's build does not have is SKIPPED, not failed.
+std::vector<SweepItem> SpellCheckItems(std::uint8_t cls)
+{
+    std::vector<SweepItem> v;
+    switch (cls)
+    {
+        case 1:
+        {
+            // Victory Rush is the Classic 1.60 spell a player has (402927), usable after a kill gives Victorious (402975); a bot may not have it.
+            SweepItem vr = CheckItem(1, "Victory Rush", 60);   // 1 + 15 % of attack power, through 3731 armor
+            vr.exact_id = 402927;
+            vr.teach = true;
+            vr.pre_aura = 402975;
+            v.push_back(vr);
+            v.push_back(CheckItem(1, "Heroic Strike", 200));
+            v.push_back(CheckItem(1, "Mortal Strike", 250));
+            v.push_back(CheckItem(1, "Bloodthirst", 200));
+            v.push_back(CheckItem(1, "Whirlwind", 200));
+            v.push_back(CheckItem(1, "Cleave", 150));
+            v.push_back(CheckItem(1, "Slam", 200));
+            v.push_back(CheckItem(1, "Shield Slam", 150));
+            v.push_back(CheckItem(1, "Thunder Clap", 30));
+            v.push_back(CheckItem(1, "Rend", 60, Measure::DotTotal));
+            SweepItem ex = CheckItem(1, "Execute", 300);
+            ex.res = Res::Rage;
+            ex.points = { 30 };
+            ex.low_health = true;
+            v.push_back(ex);
+            break;
+        }
+        case 2:
+            v.push_back(CheckItem(2, "Crusader Strike", 100));
+            v.push_back(CheckItem(2, "Holy Shock", 200));
+            v.push_back(CheckItem(2, "Consecration", 40, Measure::DotTotal));   // a ground effect: read 2 s after the cast, a few ticks
+            {
+                SweepItem how = CheckItem(2, "Hammer of Wrath", 200);
+                how.low_health = true;
+                v.push_back(how);
+            }
+            v.push_back(CheckItem(2, "Holy Light", 500, Measure::Heal, 3));
+            v.push_back(CheckItem(2, "Flash of Light", 200, Measure::Heal, 3));
+            break;
+        case 3:
+            v.push_back(CheckItem(3, "Arcane Shot", 80));
+            v.push_back(CheckItem(3, "Multi-Shot", 100));
+            v.push_back(CheckItem(3, "Aimed Shot", 250));
+            v.push_back(CheckItem(3, "Raptor Strike", 80));
+            v.push_back(CheckItem(3, "Serpent Sting", 150, Measure::DotTotal));
+            break;
+        case 4:
+        {
+            v.push_back(CheckItem(4, "Sinister Strike", 100));
+            v.push_back(CheckItem(4, "Hemorrhage", 100));
+            SweepItem ev = CheckItem(4, "Eviscerate", 300);
+            ev.res = Res::Combo;
+            ev.points = { 5 };
+            v.push_back(ev);
+            break;
+        }
+        case 5:
+            v.push_back(CheckItem(5, "Smite", 250));
+            v.push_back(CheckItem(5, "Mind Blast", 300));
+            v.push_back(CheckItem(5, "Holy Fire", 300));
+            v.push_back(CheckItem(5, "Mind Flay", 150, Measure::DotTotal));   // a channel: its damage comes as ticks
+            v.push_back(CheckItem(5, "Shadow Word: Pain", 400, Measure::DotTotal));
+            v.push_back(CheckItem(5, "Flash Heal", 400, Measure::Heal, 3));
+            v.push_back(CheckItem(5, "Greater Heal", 1000, Measure::Heal, 3));
+            break;
+        case 7:
+            v.push_back(CheckItem(7, "Lightning Bolt", 250));
+            v.push_back(CheckItem(7, "Chain Lightning", 250));
+            v.push_back(CheckItem(7, "Earth Shock", 250));
+            v.push_back(CheckItem(7, "Flame Shock", 100));
+            v.push_back(CheckItem(7, "Stormstrike", 150));
+            v.push_back(CheckItem(7, "Healing Wave", 700, Measure::Heal, 3));
+            v.push_back(CheckItem(7, "Lesser Healing Wave", 400, Measure::Heal, 3));
+            break;
+        case 8:
+            v.push_back(CheckItem(8, "Fireball", 350));
+            v.push_back(CheckItem(8, "Frostbolt", 300));
+            v.push_back(CheckItem(8, "Fire Blast", 250));
+            v.push_back(CheckItem(8, "Scorch", 120));
+            v.push_back(CheckItem(8, "Arcane Explosion", 100));
+            v.push_back(CheckItem(8, "Arcane Missiles", 80));
+            v.push_back(CheckItem(8, "Pyroblast", 500));
+            break;
+        case 9:
+            v.push_back(CheckItem(9, "Shadow Bolt", 350));
+            v.push_back(CheckItem(9, "Searing Pain", 120));
+            v.push_back(CheckItem(9, "Immolate", 100));
+            v.push_back(CheckItem(9, "Soul Fire", 500));
+            v.push_back(CheckItem(9, "Corruption", 400, Measure::DotTotal));
+            v.push_back(CheckItem(9, "Curse of Agony", 500, Measure::DotTotal));
+            break;
+        case 11:
+        {
+            v.push_back(CheckItem(11, "Wrath", 150));
+            v.push_back(CheckItem(11, "Starfire", 350));
+            v.push_back(CheckItem(11, "Moonfire", 80));
+            v.push_back(CheckItem(11, "Insect Swarm", 150, Measure::DotTotal));
+            v.push_back(CheckItem(11, "Claw", 80));
+            v.push_back(CheckItem(11, "Maul", 80));
+            SweepItem fb = CheckItem(11, "Ferocious Bite", 250);
+            fb.res = Res::Combo;
+            fb.points = { 5 };
+            v.push_back(fb);
+            v.push_back(CheckItem(11, "Healing Touch", 800, Measure::Heal, 3));
+            v.push_back(CheckItem(11, "Regrowth", 300, Measure::Heal, 3));
+            break;
+        }
+        default:
+            break;
+    }
+    return v;
+}
 
 std::vector<SweepItem> SweepItemsFor(Kind kind, std::uint8_t cls)
 {
@@ -348,6 +481,8 @@ std::vector<SweepItem> SweepItemsFor(Kind kind, std::uint8_t cls)
             v.push_back(exec);
         }
     }
+    else if (kind == Kind::SpellCheck)
+        return SpellCheckItems(cls);
     else if (kind == Kind::TalentAudit && cls == 9)
     {
         SweepItem isb = { 9, "Shadow Bolt", Res::None, { 0 }, Measure::Damage, 70 };
@@ -490,6 +625,29 @@ struct State
     std::uint32_t cast_failures = 0, cast_ok = 0;
     std::string last_fail;
     double armor_before = 0.0;
+    // the player spell check
+    std::vector<std::uint32_t> taught;    // spells learned for the check, unlearned at the end
+    std::uint32_t health_before = 0;      // a heal's caster health just before the cast
+    std::vector<double> check_samples;    // every sample of the item (g.samples is emptied per point)
+    std::string check_seen;               // what the last cast of the item did, by spell id (for a cast that landed nothing)
+    double dummy_lost = 0.0;              // the dummy's health lost over the item's casts (it is reset before each cast)
+    std::uint32_t dummy_hp_start = 0;     // the dummy's health right after the reset of this cast
+    std::uint32_t item_started_ms = 0;    // when the item began: one spell may not hold up the class
+    std::uint32_t cast_begin_ms = 0;      // the cast-time spell just started, and how long its cast is
+    std::int32_t cast_expected_ms = 0;
+    int casts_completed = 0, casts_cut = 0;   // cast-time casts that ran their full time / ended early (interrupted, cancelled)
+    std::uint32_t caster_hp_lost = 0;     // health the caster lost while casting (it is topped up before each cast)
+    std::int64_t power_before = 0;        // the caster's mana (or rage, energy) just before the cast, and what the casts spent in all:
+    std::int64_t power_spent = 0;         // a cast the core finished takes its cost, one that failed at its end takes nothing
+    bool far = false;                     // the item is cast again from 15 yd: nothing at all landed from 3 yd
+    std::string near_result;              // what the 3 yd casts did, for the row of the 15 yd retry
+    std::string dummy_state;              // the dummy at the last sample: evading, immune to the spell, in combat, its combat reach
+    int evade_ticks = 0;                  // runner ticks of the item the dummy spent evading
+    std::uint32_t cast_done_s = UINT32_MAX;   // step_s at which the cast and its missile were over: a sample settles from there, not from the cast start
+    double data_value = 0.0;              // what the client's spell data gives for the item (SpellCheckDataValue)
+    bool state_from_aura = false;         // the pre-cast aura set the spell's caster aura state by itself
+    int check_pass = 0, check_fail = 0, check_skip = 0;
+    std::string check_failed;             // the failed spells, for the summary line
     bool audit_done = false;
     Econ econ;
     Incoming incoming;
@@ -1785,10 +1943,41 @@ void LogTalents(Player* p)
 }
 
 // Starts one point of the current sweep item.
+void SpellCheckRow(SweepItem const& it, std::uint32_t id, char const* verdict, std::string const& detail);
+
 bool SweepSetup(Player* p)
 {
     SweepItem const& it = g.items[g.item];
     g.cast_spell_id = FindKnownSpell(p, it.spell);
+    if (g.kind == Kind::SpellCheck && it.exact_id)
+    {
+        // The id a player casts. A bot that knows the spell by another id (a retail rank) is still checked on the player's one.
+        if (!p->HasSpell(it.exact_id) && it.teach && sSpellMgr->GetSpellInfo(it.exact_id, DIFFICULTY_NONE))
+        {
+            p->LearnSpell(it.exact_id, false, 0, true);
+            if (p->HasSpell(it.exact_id))
+            {
+                g.taught.push_back(it.exact_id);
+                TC_LOG_INFO("playerbot.v2", "[spell_check] class={} spell=\"{}\" id={} learned for the check (removed at the end)", g.cls_name, it.spell, it.exact_id);
+            }
+        }
+        g.cast_spell_id = p->HasSpell(it.exact_id) ? it.exact_id : 0;
+    }
+    if (!g.cast_spell_id && g.kind == Kind::SpellCheck && it.exact_id)
+    {
+        // The player's own id must be there: a skip here would hide exactly the spell the check is for.
+        ++g.check_fail;
+        SpellCheckRow(it, it.exact_id, "FAIL", fmt::format("reason=\"the player's spell {} could not be learned or is not in the spell data\"", it.exact_id));
+        g.failure += fmt::format("{} {} ({}): not learnable; ", g.cls_name, it.spell, it.exact_id);
+        return false;
+    }
+    if (!g.cast_spell_id && g.kind == Kind::SpellCheck)
+    {
+        // A talent spell of another build, or a spell this client does not have: not a failure, but listed.
+        ++g.check_skip;
+        SpellCheckRow(it, it.exact_id, "SKIP", "not in the spellbook (talent of another build, or not in this client)");
+        return false;
+    }
     if (!g.cast_spell_id)
     {
         g.failure += fmt::format("{} does not know {}; ", g.cls_name, it.spell);
@@ -1797,6 +1986,20 @@ bool SweepSetup(Player* p)
     }
     g.rep = 0;
     g.samples.clear();
+    g.check_samples.clear();
+    g.check_seen.clear();
+    g.dummy_lost = 0.0;
+    g.item_started_ms = GameTime::GetGameTimeMS();
+    g.cast_begin_ms = 0;
+    g.cast_expected_ms = 0;
+    g.casts_completed = g.casts_cut = 0;
+    g.caster_hp_lost = 0;
+    g.power_spent = 0;
+    g.far = false;
+    g.near_result.clear();
+    g.dummy_state.clear();
+    g.evade_ticks = 0;
+    g.state_from_aura = false;
     g.cast_ok = g.cast_failures = 0;
     g.last_fail.clear();
     return true;
@@ -1862,11 +2065,41 @@ bool SweepCastOnce(Player* p, Creature* d)
         p->RemoveAurasByType(SPELL_AURA_MOUNTED);
     if (info)
         EnsureForm(p, info);
+    // A form that blocks the spell (Shadowform for a Holy heal, cat or bear form for Healing Touch after the feral items): a player shifts
+    // out before casting. SPELL_FAILED_NOT_SHAPESHIFT (92) otherwise, which the first 0.1.30 run (N63) showed for all four heals.
+    if (g.kind == Kind::SpellCheck && info && p->GetShapeshiftForm() != FORM_NONE && info->CheckShapeshift(p->GetShapeshiftForm()) != SPELL_CAST_OK)
+        p->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
     TopUp(p);
     if (it.res == Res::Combo)
         p->SetPower(POWER_COMBO_POINTS, pts);
     else if (it.res == Res::Rage)
         p->SetPower(POWER_RAGE, pts * 10);
+    else if (g.kind == Kind::SpellCheck && p->GetPowerType() == POWER_RAGE)
+        p->SetPower(POWER_RAGE, p->GetMaxPower(POWER_RAGE));   // a warrior or a bear has rage as a player in a fight would
+    if (g.kind == Kind::SpellCheck && info)
+    {
+        // The reagent a player carries (Soul Fire's Soul Shard: the fourth 0.1.30 run ran out after five casts and was refused 121).
+        for (std::size_t r = 0; r < info->Reagent.size(); ++r)
+            if (info->Reagent[r] > 0 && info->ReagentCount[r] > 0)
+                if (std::uint32_t const have = p->GetItemCount(std::uint32_t(info->Reagent[r])); have < std::uint32_t(info->ReagentCount[r]) * 2u)
+                    p->AddItem(std::uint32_t(info->Reagent[r]), std::uint32_t(info->ReagentCount[r]) * 2u - have);
+        if (it.pre_aura)
+        {
+            bool const first = g.cast_ok == 0 && g.cast_failures == 0;
+            p->AddAura(it.pre_aura, p);
+            // Whether the aura alone opens the spell, as it must for a player after a kill (Victorious -> Victory Rush): logged, then forced so
+            // the damage is checked either way.
+            if (first)   // before any forcing below: a state forced for an earlier cast would hide a broken aura
+                g.state_from_aura = !info->CasterAuraState || p->HasAuraState(AuraStateType(info->CasterAuraState), info, p);
+        }
+        if (info->CasterAuraState && !p->HasAuraState(AuraStateType(info->CasterAuraState), info, p))
+            p->ModifyAuraState(AuraStateType(info->CasterAuraState), true);
+        if (it.measure == Measure::Heal)
+        {
+            p->SetHealth(std::max<std::uint32_t>(1, p->GetMaxHealth() * 3 / 10));
+            g.health_before = std::uint32_t(p->GetHealth());
+        }
+    }
     d->SetHealth(it.low_health ? d->GetMaxHealth() / 7 : d->GetMaxHealth());
     // The core sets the wounded aura states on the next unit update; an Execute cast in this same tick is refused (code 132, target aura
     // state) with the dummy already below 20 %.
@@ -1883,19 +2116,48 @@ bool SweepCastOnce(Player* p, Creature* d)
     if (info)
     {
         float const lo = info->GetMinRange(false), hi = info->GetMaxRange(false, p);
-        float const want = std::clamp(3.0f, lo + 1.0f, std::max(lo + 1.0f, hi - 1.0f));
+        // A spell with a minimum range (the hunter's shots, 8 yd) measures it with both combat reaches added: the second 0.1.30 run
+        // stood the hunter 9 yd from the dummy (minimum + 1) and every shot was refused OUT_OF_RANGE. The spell check stands well clear.
+        float const min_pad = g.kind == Kind::SpellCheck && lo > 0.0f ? p->GetCombatReach() + d->GetCombatReach() + 3.0f : 1.0f;
+        float const want = std::clamp(g.far ? 15.0f : 3.0f, lo + min_pad, std::max(lo + min_pad, hi - 1.0f));
         if (std::fabs(p->GetExactDist(d) - want) > 1.5f)
             d->NearTeleportTo(p->GetNearPosition(want, 0.f));
     }
-    p->SetFacingToObject(d);
+    // SetFacingToObject is a MoveFace spline: a caster turning on a spline counts as moving, and a cast-time spell that a move
+    // interrupts can be cancelled on its first update (the second 0.1.30 run: Fireball, Frostbolt, Soul Fire cast five times each and
+    // nothing at all recorded; Shadow Bolt and Pyroblast passed one run and failed another). The spell check turns the bot only when
+    // it does not already face the dummy, and leaves the turn to cast_spell's own facing, as a player's cast faces once.
+    if (g.kind != Kind::SpellCheck)
+        p->SetFacingToObject(d);
+    else if (!p->HasInArc(float(M_PI) / 3.0f, d))
+        p->SetOrientation(p->GetAbsoluteAngle(d));
+    // A missile hits a moment after the cast, and an evading target takes it as SPELL_MISS_EVADE, which reports no outcome at all
+    // (Spell::PreprocessSpellHit). The passive dummy evades on its next update when it is engaged with no combat left (PassiveAI::UpdateAI),
+    // towards its home, the spot it was summoned on. A mob a player fights stays in combat with them, so the spell check keeps the dummy in
+    // combat with the bot and makes the spot it stands on its home. (The missiles that recorded nothing in the 0.1.30 runs were read
+    // before they landed: see SweepWait.)
+    if (g.kind == Kind::SpellCheck)
+    {
+        d->SetHomePosition(d->GetPosition());
+        if (!d->IsInCombatWith(p))
+            d->EngageWithTarget(p);
+    }
     {
         std::lock_guard<std::mutex> lock(g_mu);
         if (!it.watch_aura)
             g_aggs.clear();
     }
     g.armor_before = double(d->GetArmor());
+    g.dummy_hp_start = std::uint32_t(d->GetHealth());
+    // Heroic Strike, Cleave, Maul replace the next white swing: a player is swinging, so the bot swings, and the swing comes at once.
+    if (g.kind == Kind::SpellCheck && info && info->IsNextMeleeSwingSpell())
+    {
+        p->Attack(d, true);
+        p->setAttackTimer(BASE_ATTACK, 0);
+    }
     ::Playerbot::API api(p);
-    ::Playerbot::Result const r = api.cast_spell(g.cast_spell_id, d->GetGUID());
+    ObjectGuid const cast_target = it.measure == Measure::Heal ? p->GetGUID() : d->GetGUID();
+    ::Playerbot::Result const r = api.cast_spell(g.cast_spell_id, cast_target);
     if (r != ::Playerbot::Result::Ok)
     {
         ++g.cast_failures;
@@ -1908,6 +2170,15 @@ bool SweepCastOnce(Player* p, Creature* d)
         return false;
     }
     ++g.cast_ok;
+    // The spell check watches a cast-time spell to its end (SweepWait): whether the cast ran its full time is what tells a spell that
+    // never lands (the second 0.1.30 run: Fireball, Frostbolt and Soul Fire, nothing recorded at all) from a cast that never finished.
+    if (g.kind == Kind::SpellCheck)
+    {
+        Spell const* cur = p->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        g.cast_expected_ms = cur && cur->GetSpellInfo()->Id == g.cast_spell_id ? cur->GetCastTime() : 0;
+        g.cast_begin_ms = GameTime::GetGameTimeMS();
+        g.power_before = std::int64_t(p->GetPower(p->GetPowerType()));
+    }
     return true;
 }
 
@@ -1921,6 +2192,46 @@ void SweepSample(Player* p, Creature* d)
         auto const f = g_aggs.find(g.cast_spell_id);
         if (f != g_aggs.end())
             a = f->second;
+        // The player spell check measures the direct hit: a spell that also ticks (Fireball, Pyroblast) can have its ticks on the cast id
+        // and its hit on another id, which the name search below then has to find.
+        bool const want_hit = g.kind == Kind::SpellCheck && it.measure == Measure::Damage;
+        if (want_hit && !a.N(Outcome::Hit))
+        {
+            std::string const cast_name = SpellNameOf(g.cast_spell_id);
+            std::set<std::uint32_t> triggered;
+            if (SpellInfo const* ci = sSpellMgr->GetSpellInfo(g.cast_spell_id, DIFFICULTY_NONE))
+                for (SpellEffectInfo const& e : ci->GetEffects())
+                    if (e.TriggerSpell)
+                        triggered.insert(e.TriggerSpell);
+            for (auto const& [key, agg] : g_aggs)
+                if (key && !(key & kPetFlag) && key != g.cast_spell_id && agg.N(Outcome::Hit) && (triggered.count(key) || SpellNameOf(key) == cast_name))
+                {
+                    a = agg;
+                    break;
+                }
+        }
+        if (g.kind == Kind::SpellCheck)
+        {
+            g.check_seen.clear();
+            for (auto const& [key, agg] : g_aggs)
+            {
+                std::string outs;
+                for (std::size_t o = 0; o < kOutcomeCount; ++o)
+                    if (agg.count[o])
+                        outs += fmt::format("{}{}={}", outs.empty() ? "" : "/", ToString(Outcome(o)), agg.count[o]);
+                g.check_seen += fmt::format("{}{}({}):{} dmg={} ticks={}", g.check_seen.empty() ? "" : " ", key & ~kPetFlag,
+                                            key & ~kPetFlag ? SpellNameOf(key & ~kPetFlag) : std::string("white swing"), outs.empty() ? "none" : outs,
+                                            agg.DirectDamage(), agg.ticks);
+            }
+            if (g.dummy_hp_start > d->GetHealth())
+                g.dummy_lost += double(g.dummy_hp_start - std::uint32_t(d->GetHealth()));
+            // A spell that hits an evading or immune target reports no outcome at all (Spell.cpp: no OnHitOutcome for immune, evade,
+            // reflect or a zero damage roll): say which it was.
+            SpellInfo const* si = sSpellMgr->GetSpellInfo(g.cast_spell_id, DIFFICULTY_NONE);
+            g.dummy_state = fmt::format("dummy: evading={} immune_to_spell={} immune_to_damage={} in_combat={} reach={:.1f} dist={:.1f}",
+                                        d->IsInEvadeMode() || d->HasUnitState(UNIT_STATE_EVADE), si ? d->IsImmunedToSpell(si, MAX_EFFECT_MASK, p) : false,
+                                        si ? d->IsImmunedToDamage(p, si) : false, d->IsInCombat(), d->GetCombatReach(), p->GetExactDist(d));
+        }
         // The damage can be dealt by another id than the one cast (a trigger spell, or a rank of the same name): take it by name.
         if (!a.N(Outcome::Hit) && !a.ticks)
         {
@@ -1946,10 +2257,15 @@ void SweepSample(Player* p, Creature* d)
         case Measure::Damage:
             if (!it.watch_aura && a.N(Outcome::Hit))
                 g.samples.push_back(a.AvgOf(Outcome::Hit));
+            if (g.kind == Kind::SpellCheck && a.N(Outcome::Hit))
+                g.check_samples.push_back(a.AvgOf(Outcome::Hit));
             break;
         case Measure::DotTotal:
             if (a.ticks)
                 g.samples.push_back(double(a.tick_damage));
+            // A ground effect deals its damage as hits of its own id (Consecration: 1280349 hit six times for 224, no ticks): count both.
+            if (g.kind == Kind::SpellCheck && a.ticks + a.Landed())
+                g.check_samples.push_back(double(a.tick_damage + a.DirectDamage()));
             break;
         case Measure::AuraDuration:
         {
@@ -1962,6 +2278,16 @@ void SweepSample(Player* p, Creature* d)
             else if (info)
                 TC_LOG_INFO("playerbot.v2", "[dmg_parity] sweep class={} spell=\"{}\" id={} point={} left no aura on {}: immune to the spell={}", g.cls_name, it.spell, g.cast_spell_id,
                             it.points[g.point], holder->GetName(), holder->IsImmunedToSpell(info, MAX_EFFECT_MASK, p));
+            break;
+        }
+        case Measure::Heal:
+        {
+            double const healed = double(p->GetHealth()) - double(g.health_before);
+            if (healed > 0.0)
+            {
+                g.samples.push_back(healed);
+                g.check_samples.push_back(healed);
+            }
             break;
         }
         case Measure::ArmorDrop:
@@ -1981,6 +2307,173 @@ void SweepSample(Player* p, Creature* d)
 }
 
 // Finishes a sweep item: the series, its verdict, the failure when it does not scale.
+// What the client's spell data says one cast of `info` should do on the dummy (or heal), before talents, crits and resists: per damage or
+// heal effect, its value plus the attack power and spell power coefficients; weapon effects add the weapon's average hit; a physical hit
+// goes through the dummy's armor. 0 when the spell has no direct damage or heal effect (a dot, a script, a trigger): then only the floor counts.
+double SpellCheckDataValue(Player* p, Creature* d, SpellInfo const* info, bool heal)
+{
+    if (!info)
+        return 0.0;
+    bool const ranged = info->DmgClass == SPELL_DAMAGE_CLASS_RANGED;
+    WeaponAttackType const att = ranged ? RANGED_ATTACK : BASE_ATTACK;
+    double const ap = double(p->GetTotalAttackPowerValue(att));
+    double const sp = heal ? double(p->SpellBaseHealingBonusDone(info->GetSchoolMask())) : double(p->SpellBaseDamageBonusDone(info->GetSchoolMask()));
+    double const weapon = (double(p->GetWeaponDamageRange(att, MINDAMAGE)) + double(p->GetWeaponDamageRange(att, MAXDAMAGE))) / 2.0;
+    double total = 0.0, pct = 0.0;
+    bool any = false;
+    for (SpellEffectInfo const& e : info->GetEffects())
+    {
+        switch (e.Effect)
+        {
+            case SPELL_EFFECT_SCHOOL_DAMAGE:
+            case SPELL_EFFECT_HEAL:
+                if ((e.Effect == SPELL_EFFECT_HEAL) != heal)
+                    break;
+                total += double(e.CalcValue(p, nullptr, heal ? static_cast<Unit*>(p) : static_cast<Unit*>(d))) + double(e.BonusCoefficientFromAP) * ap + double(e.BonusCoefficient) * sp;
+                any = true;
+                break;
+            case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+            case SPELL_EFFECT_WEAPON_DAMAGE:
+            case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                if (heal)
+                    break;
+                total += weapon + double(e.CalcValue(p, nullptr, d));
+                any = true;
+                break;
+            case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                if (heal)
+                    break;
+                pct = double(e.CalcValue(p, nullptr, d));
+                any = true;
+                break;
+            default:
+                break;
+        }
+    }
+    if (!any)
+        return 0.0;
+    if (pct > 0.0)
+        total = (total > 0.0 ? total : weapon) * pct / 100.0;
+    if (!heal && (info->GetSchoolMask() & SPELL_SCHOOL_MASK_NORMAL) && total > 0.0)
+        total = double(Unit::CalcArmorReducedDamage(p, d, std::uint32_t(total), info, att, std::uint8_t(p->GetLevel())));
+    return total;
+}
+
+// One row of the player spell check: the Playerbot.log line and the table row.
+void SpellCheckRow(SweepItem const& it, std::uint32_t id, char const* verdict, std::string const& detail)
+{
+    TC_LOG_INFO("playerbot.v2", "[spell_check] class={} spell=\"{}\" id={} verdict={} {}", g.cls_name, it.spell, id, verdict, detail);
+    AppendFile(fmt::format("| {} | {} | {} | {} | {} |", g.cls_name, it.spell, id, verdict, detail));
+    if (std::string_view(verdict) == "FAIL")
+        g.check_failed += fmt::format("{}{} ({})", g.check_failed.empty() ? "" : ", ", it.spell, id);
+}
+
+void SpellCheckItemDone(Player* p, Creature* d)
+{
+    SweepItem const& it = g.items[g.item];
+    SpellInfo const* info = sSpellMgr->GetSpellInfo(g.cast_spell_id, DIFFICULTY_NONE);
+    double const data = it.measure == Measure::DotTotal ? 0.0 : SpellCheckDataValue(p, d, info, it.measure == Measure::Heal);
+    std::vector<double> const& got = g.check_samples;
+    double const mean = got.empty() ? 0.0 : Mean(got);
+    double lo = 0.0, hi = 0.0;
+    for (double v : got)
+    {
+        lo = lo == 0.0 ? v : std::min(lo, v);
+        hi = std::max(hi, v);
+    }
+    std::string why;
+    if (!g.cast_ok)
+        why = fmt::format("never cast: {}", g.last_fail.empty() ? "refused" : g.last_fail);
+    else if (got.empty() || mean <= 0.0)
+        why = it.measure == Measure::Heal ? "cast but healed nothing" : "cast but no plain hit landed (all missed, crit-only or no damage)";
+    else if (mean < it.floor)
+        why = fmt::format("too low: mean {:.0f} under the floor {:.0f}", mean, it.floor);
+    else if (data >= 20.0 && mean < data * 0.5)
+        why = fmt::format("too low: mean {:.0f} under half of the spell data's {:.0f}", mean, data);
+    if (info && info->IsNextMeleeSwingSpell())
+        p->AttackStop();
+    if (!why.empty() && g.cast_ok)
+        why += fmt::format("; dummy lost {:.0f} health over the casts; last cast did: {}{}", g.dummy_lost, g.check_seen.empty() ? "nothing recorded" : g.check_seen,
+                           g.cast_failures ? "; last refusal: " + g.last_fail : std::string());
+    if (!why.empty() && g.casts_completed + g.casts_cut)
+        why += fmt::format("; cast-time casts: {} ran their full time, {} ended early; caster lost {} health while casting; cost spent over the casts {}",
+                           g.casts_completed, g.casts_cut, g.caster_hp_lost, g.power_spent);
+    if (!why.empty() && !g.dummy_state.empty())
+        why += fmt::format("; {}; dummy seen evading on {} ticks", g.dummy_state, g.evade_ticks);
+    if (g.far)
+        why = why.empty() ? fmt::format("lands from 15 yd but nothing at all from 3 yd ({})", g.near_result)
+                          : fmt::format("from 15 yd: {} (from 3 yd: {})", why, g.near_result);
+    std::string const detail = fmt::format("casts={} refused={} mean={:.0f} min={:.0f} max={:.0f} floor={:.0f} data_value={:.0f} ap={:.0f} sp={}{}{}",
+        g.cast_ok, g.cast_failures, mean, lo, hi, it.floor, data,
+        double(p->GetTotalAttackPowerValue(info && info->DmgClass == SPELL_DAMAGE_CLASS_RANGED ? RANGED_ATTACK : BASE_ATTACK)),
+        info ? p->SpellBaseDamageBonusDone(info->GetSchoolMask()) : 0,
+        it.pre_aura ? fmt::format(" aura_{}_opens_it={}", it.pre_aura, g.state_from_aura) : std::string(),
+        why.empty() ? std::string() : " reason=\"" + why + "\"");
+    if (!why.empty())
+    {
+        ++g.check_fail;
+        SpellCheckRow(it, g.cast_spell_id, "FAIL", detail);
+        g.failure += fmt::format("{} {} ({}): {}; ", g.cls_name, it.spell, g.cast_spell_id, why);
+    }
+    else
+    {
+        ++g.check_pass;
+        SpellCheckRow(it, g.cast_spell_id, "PASS", detail);
+        if (data >= 20.0 && mean > data * 3.0)
+            TC_LOG_INFO("playerbot.v2", "[spell_check] class={} spell=\"{}\" id={} WARN mean {:.0f} is over three times the spell data's {:.0f}", g.cls_name, it.spell, g.cast_spell_id, mean, data);
+    }
+    if (it.pre_aura && !g.state_from_aura)
+    {
+        // The damage can be right while a player still cannot press the button: say so as its own failure.
+        ++g.check_fail;
+        SpellCheckRow(it, g.cast_spell_id, "FAIL", fmt::format("aura {} does not make it usable (caster aura state {} not set by the aura)", it.pre_aura, info ? info->CasterAuraState : 0));
+        g.failure += fmt::format("{} {}: aura {} does not make it usable; ", g.cls_name, it.spell, it.pre_aura);
+    }
+    if (it.pre_aura)
+        p->RemoveAurasDueToSpell(it.pre_aura);
+    if (info && info->CasterAuraState)
+        p->ModifyAuraState(AuraStateType(info->CasterAuraState), false);
+}
+
+// A damage spell that was cast but left nothing at all from 3 yd (no hit, no miss, no health lost) is cast again from 15 yd once.
+bool SpellCheckWantsFarRetry(Player* p, Creature* /*d*/)
+{
+    SweepItem const& it = g.items[g.item];
+    if (g.far || it.measure != Measure::Damage || !g.cast_ok || !g.check_samples.empty() || g.dummy_lost > 0.0)
+        return false;
+    SpellInfo const* info = sSpellMgr->GetSpellInfo(g.cast_spell_id, DIFFICULTY_NONE);
+    if (!info || info->GetMaxRange(false, p) < 16.0f)   // a melee spell cannot be cast from 15 yd
+        return false;
+    g.near_result = fmt::format("{} casts, {} ran their full time, cost spent {}, last cast did: {}; {}", g.cast_ok, g.casts_completed, g.power_spent,
+                                g.check_seen.empty() ? "nothing recorded" : g.check_seen, g.dummy_state);
+    TC_LOG_INFO("playerbot.v2", "[spell_check] class={} spell=\"{}\" id={} nothing landed from 3 yd ({}); casting again from 15 yd", g.cls_name, it.spell,
+                g.cast_spell_id, g.near_result);
+    (void)p;
+    return true;
+}
+
+// One spell of the player spell check may take 90 s at most: then it is a FAIL of its own and the class goes on with the next spell.
+// True when it ran out (the caller returns; the step is the next item's setup).
+bool SpellCheckStuck(Player* p)
+{
+    if (!g.item_started_ms || GameTime::GetGameTimeMS() - g.item_started_ms < 90u * 1000u)
+        return false;
+    SweepItem const& it = g.items[g.item];
+    p->InterruptNonMeleeSpells(true);
+    p->AttackStop();
+    ++g.check_fail;
+    SpellCheckRow(it, g.cast_spell_id, "FAIL", fmt::format("casts={} refused={} reason=\"stuck for 90 s (casting state {}, last refusal: {})\"", g.cast_ok, g.cast_failures,
+                  p->HasUnitState(UNIT_STATE_CASTING), g.last_fail.empty() ? "none" : g.last_fail));
+    g.failure += fmt::format("{} {}: stuck; ", g.cls_name, it.spell);
+    g_measuring = false;
+    g.item_started_ms = 0;
+    ++g.item;
+    g.point = 0;
+    g.step = Step::SweepSetup;
+    g.step_s = 0;
+    return true;
+}
+
 void SweepItemDone()
 {
     SweepItem const& it = g.items[g.item];
@@ -3456,7 +3949,7 @@ constexpr KeySpells kKeySpells[] = {
     { 72,  "Bloodthirst,Whirlwind,Heroic Strike" },
     { 70,  "Judgement|Judgment,Holy Strike" },
     { 253, "Auto Shot,Arcane Shot,Serpent Sting" },
-    { 254, "Auto Shot,Aimed Shot,Arcane Shot" },
+    { 254, "Auto Shot,Aimed Shot|Multi-Shot,Arcane Shot" },   // one shared 6 s cooldown (spell category 2): the instant Multi-Shot takes it
     { 255, "Auto Shot,Arcane Shot" },
     { 260, "Sinister Strike,Eviscerate|Expose Armor" },   // with no warrior's Sunder Armor in the raid the finishers go to Expose Armor (support 236)
     { 259, "Sinister Strike,Eviscerate" },
@@ -5070,14 +5563,14 @@ bool Begin(Player* subject, Kind kind, std::uint32_t leg_seconds, std::string& e
     if (kind == Kind::Damage)
         g.leg_idx = ConfiguredLegs();
     g.items = SweepItemsFor(kind, g.cls);
-    if (kind == Kind::Finisher && g.items.empty())
+    if ((kind == Kind::Finisher || kind == Kind::SpellCheck) && g.items.empty())
     {
         error = fmt::format("{} has no combo, rage or energy scaled spell in the sweep", g.cls_name);
         g.active = false;
         return false;
     }
     // The dummy: close for a melee sweep, further for a caster.
-    float const distance = kind == Kind::Finisher || kind == Kind::Incoming || (kind == Kind::Threat && (g.cls == 4 || g.cls == 11)) ? 3.0f : kind == Kind::TalentAudit || kind == Kind::Economy ? 18.0f : 15.0f;
+    float const distance = kind == Kind::Finisher || kind == Kind::SpellCheck || kind == Kind::Incoming || (kind == Kind::Threat && (g.cls == 4 || g.cls == 11)) ? 3.0f : kind == Kind::TalentAudit || kind == Kind::Economy ? 18.0f : 15.0f;
     Creature* d = SpawnDummy(subject, distance, kDummyArmor, error);
     if (!d)
     {
@@ -5122,6 +5615,8 @@ bool Begin(Player* subject, Kind kind, std::uint32_t leg_seconds, std::string& e
         ::Playerbot::Services::Population().RegearNow(subject);
         TopUp(subject);
         g.step = kind == Kind::Economy ? Step::Econ : Step::SweepSetup;
+        if (kind == Kind::SpellCheck)
+            AppendFile(fmt::format("\n## {} (player spell check)\n\n| class | spell | id | verdict | detail |\n|---|---|---|---|---|", g.cls_name));
         if (kind == Kind::TalentAudit)
             LogTalents(subject);
         if (kind == Kind::Economy)
@@ -5257,7 +5752,7 @@ bool Step(std::string& failure)
     if (!d || !d->IsAlive())
     {
         std::string error;
-        d = SpawnDummy(p, g.kind == Kind::Finisher ? 3.0f : g.kind == Kind::TalentAudit || g.kind == Kind::Economy ? 18.0f : 15.0f,
+        d = SpawnDummy(p, g.kind == Kind::Finisher || g.kind == Kind::SpellCheck ? 3.0f : g.kind == Kind::TalentAudit || g.kind == Kind::Economy ? 18.0f : 15.0f,
                        g.kind == Kind::Damage ? CurLeg().armor : kDummyArmor, error);
         if (!d)
         {
@@ -5441,13 +5936,34 @@ bool Step(std::string& failure)
         }
         case Step::SweepCast:
         {
+            if (g.kind == Kind::SpellCheck && SpellCheckStuck(p))
+                return false;
+            // A shot can leave Auto Shot repeating, which keeps the casting state up for good (the first 0.1.30 run: the hunter check
+            // never got past its first spell and timed out). A player's next button press goes out anyway.
+            if (g.kind == Kind::SpellCheck && p->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+                p->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
             if (p->HasUnitState(UNIT_STATE_CASTING) || p->GetSpellHistory()->HasGlobalCooldown(sSpellMgr->GetSpellInfo(g.cast_spell_id, DIFFICULTY_NONE)))
                 return false;
             if (!SweepCastOnce(p, d))
             {
                 if (g.cast_failures >= 8 && !g.cast_ok)
                 {
-                    g.failure += fmt::format("{} {}: cast refused 8 times ({}); ", g.cls_name, g.items[g.item].spell, g.last_fail);
+                    bool const needs_item = g.last_fail.find(fmt::format("code {}", std::uint32_t(::Playerbot::API::CastRejectNoEquippedItem))) != std::string::npos;
+                    if (g.kind == Kind::SpellCheck && needs_item)
+                    {
+                        // Shield Slam with the two-hander of the test gear: the spell needs an item a player of another build carries.
+                        ++g.check_skip;
+                        SpellCheckRow(g.items[g.item], g.cast_spell_id, "SKIP", "needs an equipped item the test gear does not have (a shield, a wand)");
+                    }
+                    else if (g.kind == Kind::SpellCheck)
+                    {
+                        ++g.check_fail;
+                        SpellCheckRow(g.items[g.item], g.cast_spell_id, "FAIL", fmt::format("reason=\"refused 8 times: {}\" dist={:.1f} caster=({:.1f},{:.1f},{:.1f} map {}) dummy=({:.1f},{:.1f},{:.1f} map {}) teleporting={}",
+                                      g.last_fail, p->GetExactDist(d), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(), p->GetMapId(),
+                                      d->GetPositionX(), d->GetPositionY(), d->GetPositionZ(), d->GetMapId(), p->IsBeingTeleported()));
+                    }
+                    if (!(g.kind == Kind::SpellCheck && needs_item))
+                        g.failure += fmt::format("{} {}: cast refused 8 times ({}); ", g.cls_name, g.items[g.item].spell, g.last_fail);
                     TC_LOG_INFO("playerbot.v2", "[dmg_parity] sweep class={} spell=\"{}\" cast refused: {}", g.cls_name, g.items[g.item].spell, g.last_fail);
                     g_measuring = false;
                     ++g.item;
@@ -5458,19 +5974,53 @@ bool Step(std::string& failure)
             }
             g.step = Step::SweepWait;
             g.step_s = 0;
+            g.cast_done_s = UINT32_MAX;
             return false;
         }
         case Step::SweepWait:
         {
             SweepItem const& it = g.items[g.item];
+            if (g.kind == Kind::SpellCheck && SpellCheckStuck(p))
+                return false;
+            if (g.kind == Kind::SpellCheck && d->IsEvadingAttacks())
+                ++g.evade_ticks;
+            if (g.kind == Kind::SpellCheck && p->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+                p->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
             if (p->HasUnitState(UNIT_STATE_CASTING))
                 return false;
+            if (g.kind == Kind::SpellCheck && g.cast_expected_ms > 0)
+            {
+                // Seen once the casting state has gone: a cast that ended more than a second before its cast time was cut short.
+                std::uint32_t const elapsed = GameTime::GetGameTimeMS() - g.cast_begin_ms;
+                if (elapsed + 1100u < std::uint32_t(g.cast_expected_ms))
+                    ++g.casts_cut;
+                else
+                    ++g.casts_completed;
+                if (p->GetHealth() < p->GetMaxHealth())
+                    g.caster_hp_lost += std::uint32_t(p->GetMaxHealth() - p->GetHealth());
+                g.power_spent += g.power_before - std::int64_t(p->GetPower(p->GetPowerType()));
+                g.cast_expected_ms = 0;
+            }
+            // A missile (Fireball, Frostbolt, Pyroblast, Soul Fire, Shadow Bolt) is still the caster's current spell while it flies
+            // (SPELL_STATE_LAUNCHED); the slot is let go once the hit has been dealt. The settle time below counted from the cast START:
+            // a cast of 3 s or 6 s, whole runner ticks, was read in the tick its casting state went, before its missile arrived, and the
+            // next cast's reset (full health, tally cleared) threw the late hit away (0.1.30 runs 1 to 5: mana spent, full cast time,
+            // nothing recorded; the 2.5 s Shadow Bolt ended mid-tick and passed). The sample waits for the hit, then settles a tick.
+            if (Spell const* flying = p->GetCurrentSpell(CURRENT_GENERIC_SPELL); flying && flying->getState() == SPELL_STATE_LAUNCHED && g.step_s < 40)
+                return false;
+            if (g.cast_done_s == UINT32_MAX)
+                g.cast_done_s = g.step_s;
+            std::uint32_t const since_done = g.step_s - g.cast_done_s;
             // A damage over time runs its course (24 s at most); a direct hit or an aura is read a moment after the cast.
             bool const dot = it.measure == Measure::DotTotal;
             bool const gone = !d->HasAura(g.cast_spell_id);
             // An aura is read after a second, not two: Kidney Shot at one point lasts two seconds, and 139 read it just after it had run out (no aura, not immune)
             int const settle = it.measure == Measure::AuraDuration ? 1 : 2;
-            if (dot ? (!gone ? g.step_s < 26 : g.step_s < 2) : g.step_s < settle)
+            // A direct hit is read at least one tick after the hit landed (an aura's duration keeps the read of 1 s after the cast).
+            std::uint32_t const after_done = it.measure == Measure::AuraDuration ? 0u : 1u;
+            // A ground effect (Consecration) puts no aura on the dummy until its first tick: the spell check gives it 6 s.
+            int const dot_min = g.kind == Kind::SpellCheck ? 6 : 2;
+            if (dot ? (!gone ? g.step_s < 26 : g.step_s < std::uint32_t(dot_min)) : (g.step_s < std::uint32_t(settle) || since_done < after_done))
                 return false;
             SweepSample(p, d);
             ++g.rep;
@@ -5493,7 +6043,30 @@ bool Step(std::string& failure)
                 }
             }
             g_measuring = false;
-            SweepItemDone();
+            if (g.kind == Kind::SpellCheck && SpellCheckWantsFarRetry(p, d))
+            {
+                // Nothing at all landed from 3 yd: the same five casts again from 15 yd (the distance the damage legs cast from), so the
+                // row tells a close-range failure from a spell that never lands.
+                g.far = true;
+                g.check_samples.clear();
+                g.check_seen.clear();
+                g.dummy_lost = 0.0;
+                g.cast_ok = g.cast_failures = 0;
+                g.casts_completed = g.casts_cut = 0;
+                g.power_spent = 0;
+                g.item_started_ms = GameTime::GetGameTimeMS();
+                g.rep = 0;
+                g.point = 0;
+                g.series.clear();
+                g_measuring = true;
+                g.step = Step::SweepCast;
+                g.step_s = 0;
+                return false;
+            }
+            if (g.kind == Kind::SpellCheck)
+                SpellCheckItemDone(p, d);
+            else
+                SweepItemDone();
             {
                 std::lock_guard<std::mutex> lock(g_mu);
                 g_watch_aura.clear();
@@ -5546,8 +6119,14 @@ void End()
     }
     if (!g.active)
         return;
+    if (g.kind == Kind::SpellCheck)
+        TC_LOG_INFO("playerbot.v2", "[spell_check] summary class={} pass={} fail={} skip={} failed=[{}] verdict={}", g.cls_name, g.check_pass, g.check_fail, g.check_skip,
+                    g.check_failed, g.check_fail ? "FAIL" : "PASS");
     if (Player* p = Subject())
     {
+        for (std::uint32_t id : g.taught)
+            p->RemoveSpell(id, false, false, true);
+        g.taught.clear();
         ApplyBonuses(p, 0, 0);
         SetRaidBuffs(p, false);
         ::Playerbot::V2::Fleet::BotPopulationManager::SetGearModeOverride(p->GetGUID().GetCounter(), -1);
@@ -5576,7 +6155,7 @@ std::string Status()
         return fmt::format("threat_audit {}: level {} of {}, phase {}, {} s", g.cls_name, std::min(g.threat.level + 1, std::size(kThreatLevels)), std::size(kThreatLevels), g.threat.phase, g.threat.t);
     if (g.kind == Kind::Incoming)
         return fmt::format("incoming_damage {}: leg {} of 6, {} s", g.cls_name, g.incoming.leg + 1, g.incoming.t);
-    return fmt::format("{} {}: item {} of {}", g.kind == Kind::Finisher ? "finisher_sweep" : "talent_audit", g.cls_name, std::min(g.item + 1, g.items.size()), g.items.size());
+    return fmt::format("{} {}: item {} of {}", g.kind == Kind::Finisher ? "finisher_sweep" : g.kind == Kind::SpellCheck ? "spell_check" : "talent_audit", g.cls_name, std::min(g.item + 1, g.items.size()), g.items.size());
 }
 
 } // namespace Playerbot::Diagnostics::Parity

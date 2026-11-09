@@ -158,6 +158,11 @@ public:
         CastRejectStunned,
         CastRejectSilenced,
         CastRejectBeyondRange,
+        CastRejectTargetImmune,               // hostile target immune to the whole spell
+        CastRejectTargetAirborne,             // charge-type spell at a flying target
+        CastRejectInCombat,                   // peace-only spell (Stealth, conjure) while in combat
+        CastRejectNoEquippedItem,             // needs a weapon/shield/wand the bot has not equipped
+        CastRejectItemAtLimit,                // conjured item already at its carry limit
     };
     uint32 last_cast_fail() const { return last_cast_fail_; }
     // The instance map the last teleport_to / enter_area_trigger was refused for because it holds its most players (0: none). The
@@ -548,6 +553,9 @@ public:
     // it's PvE-only. Mirrors HandleTogglePvP. Sticky for 5 minutes after
     // disable per the standard PvP flag protocol.
     Result toggle_pvp();
+    // Set the explicit PvP flag (PLAYER_FLAGS_IN_PVP) on or off, as WorldSession::HandleSetPvP: on flags the bot now; off starts
+    // the usual 5 minute toggle-off outside hostile territory (inside it the realm keeps the bot flagged).
+    Result set_pvp(bool on);
     // Friend/ignore list management. `name` is normalized then resolved via
     // sCharacterCache (no async DB lookup — uses the cached snapshot, so newly-
     // created characters not yet flushed to cache will return InvalidTarget).
@@ -1051,6 +1059,10 @@ public:
     // spells that carried no class restriction of their own: a rogue with Judgement). Only spells that no trainer
     // of the bot's own class (or a class-neutral trainer) also teaches go. Returns the number removed.
     uint32 purge_foreign_class_spells();
+    // Removes the class spells above the bot's level: those its class trainers sell only at a higher level, and class ranks no trainer
+    // sells whose own level is higher. For a character set down a level (a scenario squad re-levelled per row); GiveLevel keeps every
+    // spell. Returns the number removed.
+    uint32 unlearn_spells_above_level();
     // Classic: the class abilities no trainer sells, taught by class quests (Warlock Voidwalker/Succubus/Felhunter/
     // Infernal/Doom, Druid Bear and Aquatic Form and Cure Poison, Warrior Defensive and Berserker Stance, Shaman
     // Stoneskin/Searing/Healing Stream totems, Paladin Redemption, the priest racials, the class mounts...). Read from
@@ -1137,6 +1149,12 @@ private:
     // no cliff/wall Z-jumps, no lava/deep water) so it can't reintroduce the
     // wall-walking that made us disable TC's blanket straight-line fallback.
     bool TryTerrainWalkFallback(float x, float y, float z, bool run);
+
+    // Swim leg for a move whose Detour path failed with both ends in water. The navmesh covers only a liquid's surface (and not even
+    // that where a WMO liquid has an unknown type: its polygons get no flags), so a target under water, on the bed of a pool, has no
+    // route from the surface. When the bot is in water, the destination is in water, the straight line stays in water above the
+    // floor with nothing in the way, and it is short, swim it. Returns true if the move was issued. Nothing on land changes.
+    bool TrySwimLeg(float x, float y, float z, bool run);
 
     // BG start-platform / graveyard STEP-DOWN. When a battleground bot is stuck
     // on an elevated, OVERHANGING start/respawn platform whose navmesh doesn't

@@ -21,6 +21,7 @@
 
 #include "../BotSnapshot.h"
 #include "../CcDeny.h"
+#include "../States/MaintainHelpers.h"   // States::SightSpotMove: the walk round a wall to see the mob
 
 namespace Playerbot::MarkCc {
 
@@ -67,9 +68,11 @@ inline constexpr std::array<Option, 3> kWarlock   = {{ { kEnslaveDemon, kDemon, 
                                                        { 5782, kBeast | kDragonkin | kHumanoid | kGiant, 18.f, false, false } }};
 inline constexpr std::array<Option, 1> kPriest    = {{ { 9484, kUndead, 28.f, false, false } }};
 // Freezing Trap (ground trap at the hunter's feet, any type, not in combat: vanilla traps cannot be laid in combat, the
-// mob must come within reach of the hunter) first; in combat Scare Beast still holds a beast.
+// mob must come within reach of the hunter) first; in combat Scare Beast still holds a beast. Scare Beast is a short-range spell
+// (vanilla 10 y; every rank has SpellMisc RangeIndex 7, Polymorph has 4): at 28 the hunter cast it from 24-27 y and the core
+// refused every one (smlibrary_loksey 0.1.28j: 18 casts in 41 s, API_BEYOND_RANGE, the hound killed the tank).
 inline constexpr std::array<Option, 2> kHunter    = {{ { kFreezingTrap, kAnyType, 12.f, true, false, true },
-                                                       { 1513, kBeast, 28.f, false, false } }};
+                                                       { 1513, kBeast, 9.f, false, false } }};
 inline constexpr std::array<Option, 1> kRogue     = {{ { 6770, kHumanoid, 9.f, true, true } }};
 inline constexpr std::array<Option, 2> kDruid     = {{ { 2637, kBeast | kDragonkin, 28.f, false, false },
                                                        { kEntanglingRoots, kAnyType, 28.f, false, false, false, false, false, true } }};
@@ -205,7 +208,9 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         for (NearbyUnit const& a : s.raw().combat.attackers)
             if (a.hp > 0 && a.guid != target && a.victim == s.guid())
                 return LogRefusal(low, now, s.name().c_str(), "a mob is on this caster", u->entry, TypeOf(*u), dist), false;
-    if (dist > o->range)
+    // The table's range is checked against the spell data too, with the bot's own range talents, so a range the table has wrong
+    // walks the caster in instead of casting a spell the core refuses as out of range.
+    if (dist > o->range || (!o->self_cast && !s.in_spell_range(spell, *u, 0.0f)))
     {
         // Never past the tank toward the mob: the walk-in stops no closer to it than the tank stands, less a couple of yards
         // (brd_roccor 127: the mage walked from 50 y to 27 y of a pack the tank was still 37 y from, stood in front of the pull
@@ -222,9 +227,24 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         if (tank_d >= 0.0f && stop < tank_d - 2.0f) stop = tank_d - 2.0f;
         if (stop > o->range)
             return LogRefusal(low, now, s.name().c_str(), "out of range, the tank stands further off: waiting behind it", u->entry, TypeOf(*u), dist), false;
+        if (stop >= dist)   // inside the table's stop point and still out of the spell's reach: walking in further is not the table's call
+            return LogRefusal(low, now, s.name().c_str(), "out of the spell's range by its data inside the table's range", u->entry, TypeOf(*u), dist), false;
         LogRefusal(low, now, s.name().c_str(), "out of range, moving in", u->entry, TypeOf(*u), dist);
         float const f = stop / dist;   // fraction of the mob->bot line
         return emit.move_to(u->x + (p.x - u->x) * f, u->y + (p.y - u->y) * f, u->z + (p.z - u->z) * f, /*run=*/true);
+    }
+    // In range but no line of sight: walk to a spot that sees the mob, clear of the other packs' reach. Casting from where it stands
+    // only fails again (smgraveyard_vishas, RC10: Polymorph on the Scarlet Torturer five times in 8 s from 28 y behind a wall, every
+    // cast LINE_OF_SIGHT, the hold never landed and the tank pulled three mobs with six more beside them and died).
+    if (!o->self_cast && !u->in_los)
+    {
+        float ox = 0.f, oy = 0.f, oz = 0.f, orad = 0.f;
+        if (States::SightSpotMove(s, *u, /*melee=*/false, /*pack_safe=*/true, emit, ox, oy, oz, orad))
+        {
+            LogRefusal(low, now, s.name().c_str(), "no line of sight, walking to a spot that sees it", u->entry, TypeOf(*u), dist);
+            return true;
+        }
+        return LogRefusal(low, now, s.name().c_str(), "no line of sight and no spot in reach sees it", u->entry, TypeOf(*u), dist), false;
     }
     // In range but walking (a formation step): stop, the cast goes out next tick (a hard cast is refused while moving).
     if (s.is_moving() && s.knows_spell(spell))

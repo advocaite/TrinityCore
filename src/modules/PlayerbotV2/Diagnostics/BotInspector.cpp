@@ -1617,14 +1617,9 @@ std::string BgInfoReport()
     out += "=== Live BG instances ===\n";
     out += "  type  inst  status  alli/max  horde/max  invA  invH  freeA  freeH\n";
 
-    std::unordered_set<uint32> seen_maps;
     uint32 total_bgs = 0;
-    for (BattlemasterListXMapEntry const* xmap : sBattlemasterListXMapStore)
+    for (auto const& [_, free_slot_store] : sBattlegroundMgr->GetBGFreeSlotQueues())
     {
-        if (!xmap || xmap->MapID <= 0) continue;
-        uint32 map_id = uint32(xmap->MapID);
-        if (!seen_maps.insert(map_id).second) continue;
-        auto& free_slot_store = sBattlegroundMgr->GetBGFreeSlotQueueStore(map_id);
         for (Battleground* bg : free_slot_store)
         {
             if (!bg) continue;

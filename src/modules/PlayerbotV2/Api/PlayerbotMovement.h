@@ -162,6 +162,15 @@ void PostTeleportSnap(Player* p);
 // False (nothing done) when it is moving, flying, swimming, on a vehicle / transport / taxi, or the ground is not in range.
 bool SettleToGround(Player* p, float minGap = 2.0f, float maxGap = 30.0f);
 
+// Deep water at (x, y) for this bot (see Api/BotSwim.h): water (not magma or slime) over a floor more than the bot's height under the
+// surface, asked from in it and not from a bridge or a deck above it. True with `swimZ` = where the bot floats, its head out.
+bool SwimLevel(Player* p, float x, float y, float zHint, float& swimZ);
+
+// A headless bot in deep water swims as a player's client would make it: the swimming flag on (swim animation and swim speed for
+// every viewer), off again on land, and a bot standing still in deep water floats at its swim z, not on the floor and not on top of
+// the water. World thread, once per bot per world tick (throttled inside). Leaves a client-driven player alone.
+void UpdateSwimState(Player* p);
+
 // Per-point liquid classification for the routing layer. Mirrors the WoW
 // client's per-cell + depth liquid model:
 // the destination POINT is probed (never the whole tile/chunk — a chunk is

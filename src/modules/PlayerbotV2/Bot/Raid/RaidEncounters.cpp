@@ -82,6 +82,12 @@ bool OwnsAura(uint32_t mapId, uint32_t aura)
     return std::find(rules->noDispel.begin(), rules->noDispel.end(), aura) != rules->noDispel.end();
 }
 
+bool KeepsAura(uint32_t mapId, uint32_t aura)
+{
+    RaidRules const* rules = RulesForMap(mapId);
+    return rules && std::find(rules->noDispel.begin(), rules->noDispel.end(), aura) != rules->noDispel.end();
+}
+
 bool InterruptFirst(uint32_t mapId, uint32_t spell)
 {
     return InterruptOrder(mapId, spell) != kNotInterruptFirst;

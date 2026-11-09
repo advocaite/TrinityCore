@@ -179,6 +179,7 @@ add_library(playerbot-v2-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/PlayerbotV2.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/PlayerbotV2Scripts.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/LfgBotFill.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/DungeonFinder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Services.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Commands/cs_playerbot_v2.cpp
 )
@@ -237,7 +238,8 @@ endif()
 
 trinity_add_module(playerbot-v2 AddSC_playerbot_v2
   CONFIGS
-    ${CMAKE_CURRENT_SOURCE_DIR}/conf/playerbot.conf.dist)
+    ${CMAKE_CURRENT_SOURCE_DIR}/conf/playerbot.conf.dist
+    ${CMAKE_CURRENT_SOURCE_DIR}/conf/zz-0-playerbot-defaults.conf)
 
 # Default settings (world bots, auction house bot, bot logging) as an active file in worldserver.conf.d, so the bots work
 # out of the box. An existing copy is never overwritten.
@@ -254,13 +256,18 @@ if(COPY_CONF)
   if(_pbv2_build_conf_dir)
     # The Looking-for-group settings are a file of their own (zz-forever-lfg.conf), copied the same way.
     set(PLAYERBOT_V2_LFG_CONF ${CMAKE_CURRENT_SOURCE_DIR}/conf/zz-forever-lfg.conf)
+    # The classic script loggers (zz-forever-classic-log.conf) likewise, so an install that already has zz-forever-bots.conf gets them.
+    set(PLAYERBOT_V2_CLASSIC_LOG_CONF ${CMAKE_CURRENT_SOURCE_DIR}/conf/zz-forever-classic-log.conf)
     add_custom_target(playerbot-v2-default-conf ALL
       COMMAND ${CMAKE_COMMAND} -DSRC=${PLAYERBOT_V2_DEFAULT_CONF} -DDST_DIR=${_pbv2_build_conf_dir}
               -P ${PLAYERBOT_V2_COPY_IF_MISSING}
       COMMAND ${CMAKE_COMMAND} -DSRC=${PLAYERBOT_V2_LFG_CONF} -DDST_DIR=${_pbv2_build_conf_dir}
+              -P ${PLAYERBOT_V2_COPY_IF_MISSING}
+      COMMAND ${CMAKE_COMMAND} -DSRC=${PLAYERBOT_V2_CLASSIC_LOG_CONF} -DDST_DIR=${_pbv2_build_conf_dir}
               -P ${PLAYERBOT_V2_COPY_IF_MISSING})
     install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" \"-DSRC=${PLAYERBOT_V2_DEFAULT_CONF}\" \"-DDST_DIR=\$ENV{DESTDIR}${_pbv2_install_conf_dir}\" -P \"${PLAYERBOT_V2_COPY_IF_MISSING}\")")
     install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" \"-DSRC=${PLAYERBOT_V2_LFG_CONF}\" \"-DDST_DIR=\$ENV{DESTDIR}${_pbv2_install_conf_dir}\" -P \"${PLAYERBOT_V2_COPY_IF_MISSING}\")")
+    install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" \"-DSRC=${PLAYERBOT_V2_CLASSIC_LOG_CONF}\" \"-DDST_DIR=\$ENV{DESTDIR}${_pbv2_install_conf_dir}\" -P \"${PLAYERBOT_V2_COPY_IF_MISSING}\")")
   endif()
 endif()
 

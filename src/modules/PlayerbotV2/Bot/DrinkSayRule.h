@@ -14,7 +14,7 @@ namespace Playerbot::Classic {
 inline void SayDrinkingIfDue(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit, uint32 now_ms)
 {
     constexpr uint64 kKey = 0xD81A7C0Full;
-    bool const recent = ai.action_recently_tried(BotAI::ActionKind::OocFood, kKey, now_ms);
+    bool const recent = ai.action_recently_tried(BotAI::ActionKind::OocFood, kKey, now_ms) || SameRest(ai.since_resting_ms(now_ms));
     if (!ShouldSayDrinking(s.is_led_by_player(), s.max_power(POWER_MANA) > 0, s.power_pct(POWER_MANA), recent))
         return;
     emit.say(DrinkSayText(s.guid().GetCounter()));

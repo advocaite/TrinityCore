@@ -1,5 +1,6 @@
 #include "NearestNode3D.h"
 #include "UnifiedTravelGraph.h"
+#include "EntrancePockets.h"
 
 #include "PlayerbotMovement.h"   // SehSafeCalculatePath (tile-race guard)
 #include "PortalIndex.h"
@@ -1081,10 +1082,12 @@ void UnifiedTravelGraph::LogWalkGaps() const
         // Candidate links for the offline navmesh check (src/tools/walk_link_check): per pair of pieces the closest pair of real places
         // (flight master, quest hub, capital) on the same landmass, up to kLinkCandidateYds apart. One line each, with the heights.
         {
-            // On the Classic 1.60 maps every node is tried (their docks and hubs are all there is); elsewhere only the real places.
+            // On the Classic 1.60 maps every node is tried (their docks and hubs are all there is); elsewhere only the real places and
+            // the dungeon entrances (an entrance left out here never got a checked link: Scholomance and the Ahn'Qiraj gates).
             bool const forever = map_id >= kForeverMapFrom;
             auto const isPlace = [forever](GraphNode const& n)
-            { return forever || n.kind == NodeKind::FlightMaster || n.kind == NodeKind::QuestHub || n.kind == NodeKind::Capital; };
+            { return forever || n.kind == NodeKind::FlightMaster || n.kind == NodeKind::QuestHub || n.kind == NodeKind::Capital
+                  || n.kind == NodeKind::DungeonEntry; };
             struct Cand { size_t i, j; float d; };
             std::map<std::pair<size_t, size_t>, Cand> best_pair;
             for (size_t i = 0; i < ids.size(); ++i)
@@ -1173,6 +1176,45 @@ void UnifiedTravelGraph::ConnectIslands()
         for (auto const& e : _adj[i])
             if (e.kind == EdgeKind::Walk) { has_walk[i] = true; break; }
 
+    // Dungeon entrances in walk pieces of entrances only (EntrancePockets.h): Scholomance on Caer Darrow, the two Ahn'Qiraj gates.
+    std::vector<bool> pocket;
+    {
+        std::vector<bool> is_entrance(original_n, false);
+        std::vector<std::pair<size_t, size_t>> walk_edges;
+        for (NodeId i = 0; i < original_n; ++i)
+        {
+            is_entrance[i] = _nodes[i].kind == NodeKind::DungeonEntry;
+            if (i < _adj.size())
+                for (auto const& e : _adj[i])
+                    if (e.kind == EdgeKind::Walk && e.to < original_n && e.to > i)
+                        walk_edges.emplace_back(size_t(i), size_t(e.to));
+        }
+        pocket = FindEntrancePockets(is_entrance, walk_edges);
+    }
+    uint32 dead_ends = 0;
+    for (NodeId i = 0; i < original_n; ++i)
+    {
+        if (!pocket[i]) continue;
+        GraphNode& src = _nodes[i];
+        if (src.map_id >= kForeverMapFrom) continue;
+        auto it = _nodes_by_map.find(src.map_id);
+        if (it == _nodes_by_map.end()) continue;
+        const uint32 src_region = RegionForPosition(src.map_id, src.x, src.y);
+        float nearest_real = std::numeric_limits<float>::max();
+        for (NodeId cand : it->second)
+        {
+            if (cand >= original_n || pocket[cand]) continue;
+            if (RegionForPosition(src.map_id, _nodes[cand].x, _nodes[cand].y) != src_region) continue;
+            nearest_real = std::min(nearest_real, Dist2D(src.x, src.y, _nodes[cand].x, _nodes[cand].y));
+        }
+        if (KeepIslandBridge(true, nearest_real, kFarAttachYds))
+            continue;
+        src.dead_end_entrance = true;
+        ++dead_ends;
+        TC_LOG_INFO("playerbot.v2", "[walk_gaps] '{}' ({:.0f},{:.0f},{:.0f}) map {}: no walk link to a real place (nearest {:.0f} y); "
+                    "routes to it attach to the places around it and walk the last stretch", src.name, src.x, src.y, src.z, src.map_id, nearest_real);
+    }
+
     uint32 bridges_added = 0;
     for (NodeId i = 0; i < original_n; ++i)
     {
@@ -1180,6 +1222,9 @@ void UnifiedTravelGraph::ConnectIslands()
         // Find the closest other node on the same map.
         GraphNode const& src = _nodes[i];
         if (src.map_id >= kForeverMapFrom) continue;   // no unchecked bridge on the Classic 1.60 maps (see kForeverMapFrom)
+        // A pocket entrance a real place can serve gets no straight-line bridge: the nearest node by straight line can lie over a
+        // mountain (Scholomance -> Aerie Peak, 1,133 y over the Alterac foothills).
+        if (src.dead_end_entrance) continue;
         auto it = _nodes_by_map.find(src.map_id);
         if (it == _nodes_by_map.end()) continue;
         NodeId best = INVALID_NODE_ID;
@@ -1188,6 +1233,7 @@ void UnifiedTravelGraph::ConnectIslands()
         for (NodeId cand : it->second)
         {
             if (cand == i) continue;
+            if (_nodes[cand].dead_end_entrance) continue;   // a bridge into a pocket entrance leads nowhere on foot
             // Same landmass only (a bridge across the Teldrassil strait would be
             // a walk edge through the sea).
             if (RegionForPosition(src.map_id, _nodes[cand].x, _nodes[cand].y) != src_region)
@@ -1212,8 +1258,8 @@ void UnifiedTravelGraph::ConnectIslands()
         AddEdge(best, GraphEdge{bid,  EdgeKind::Walk, half, 0, 0});
         ++bridges_added;
     }
-    TC_LOG_INFO("playerbot.v2", "[UnifiedTravelGraph] ConnectIslands: {} bridge nodes added",
-                bridges_added);
+    TC_LOG_INFO("playerbot.v2", "[UnifiedTravelGraph] ConnectIslands: {} bridge nodes added, {} dungeon entrances reached by far attach",
+                bridges_added, dead_ends);
 }
 
 // ---------------------------------------------------------------- Read API
@@ -1512,6 +1558,7 @@ Route UnifiedTravelGraph::FindRoute(RouteRequest const& req) const
         {
             for (NodeId nid : it->second)
             {
+                if (_nodes[nid].dead_end_entrance) continue;   // no walk edge leads on from it (EntrancePockets.h)
                 const float d = Dist2D(req.from_x, req.from_y, _nodes[nid].x, _nodes[nid].y);
                 if (d > radius) continue;
                 if (RegionForPosition(req.from_map, _nodes[nid].x, _nodes[nid].y) != from_region) continue;
@@ -1541,6 +1588,7 @@ Route UnifiedTravelGraph::FindRoute(RouteRequest const& req) const
         {
             for (NodeId nid : it->second)
             {
+                if (_nodes[nid].dead_end_entrance) continue;   // no walk edge leads to it (EntrancePockets.h)
                 if (RegionForPosition(req.to_map, _nodes[nid].x, _nodes[nid].y) != to_region) continue;
                 const float d = Dist2D(req.to_x, req.to_y, _nodes[nid].x, _nodes[nid].y);
                 if (std::fabs(_nodes[nid].z - req.to_z) >

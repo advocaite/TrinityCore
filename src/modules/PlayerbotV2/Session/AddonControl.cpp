@@ -1,4 +1,4 @@
-#include "AddonControl.h"
+﻿#include "AddonControl.h"
 
 #include "Bot/BotAI.h"
 #include "Bot/BotCommandParser.h"
@@ -12,6 +12,8 @@
 #include "Fleet/OwnerRegistry.h"
 #include "Fleet/BotIdentityRegistry.h"
 #include "Fleet/BotPopulationManager.h"
+#include "Fleet/BotSize.h"
+#include "LfgBotFill.h"
 #include "Services.h"
 #include "Session/BotSessionMgr.h"
 #include "Session/HumanLogin.h"
@@ -19,21 +21,27 @@
 #include "Threading/SnapshotPublisher.h"
 #include "Util/ConfigReader.h"
 
+#include "Bag.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "ChatPackets.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "Item.h"
+#include "Group.h"
 #include "Language.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "ObjectGuid.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "QuestDef.h"
+#include "RBAC.h"
 #include "World.h"
 #include "WorldSession.h"
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <map>
@@ -41,6 +49,7 @@
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Playerbot::V2::AddonControl {
@@ -175,11 +184,31 @@ std::vector<std::string> SplitPipes(std::string_view s)
 // themselves and ship it down their session — the LUA CHAT_MSG_ADDON event
 // fires on receipt and the addon's OnAddonMsg dispatches by prefix.
 // ----------------------------------------------------------------------------
+// Accounts whose client asked for its answers as system messages (PING "sys"): the Classic 1.60 client
+// (70658, 2026-10-28) never raised CHAT_MSG_ADDON for these self-whispers, so /fb ping timed out although
+// the request arrived. The ForeverBots add-on hides system lines that start with kSysMarker.
+std::mutex g_sys_mtx;
+std::unordered_set<uint32> g_sys_reply;
+constexpr char const* kSysMarker = "PBC~";
+
+bool SysReply(uint32 account)
+{
+    std::lock_guard lk(g_sys_mtx);
+    return g_sys_reply.count(account) != 0;
+}
+
 void SendAddonRaw(WorldSession* sess, std::string const& body)
 {
     if (!sess) return;
     Player* p = sess->GetPlayer();
     if (!p) return;
+    if (SysReply(sess->GetAccountId()))
+    {
+        WorldPackets::Chat::Chat sys;
+        sys.Initialize(CHAT_MSG_SYSTEM, LANG_UNIVERSAL, nullptr, nullptr, std::string(kSysMarker) + body);
+        sess->SendPacket(sys.Write());
+        return;
+    }
     WorldPackets::Chat::Chat packet;
     // sender == receiver — Blizz client routes self-addressed WHISPER addon
     // messages straight into the CHAT_MSG_ADDON event handler. No real
@@ -455,9 +484,11 @@ void HandleRosterReq(uint32 client_seq, WorldSession* sess, uint32 flags)
         int dist_m = -1;
         std::string zone_name = "-";
         uint8_t role = 0;
+        uint32 spec_id = 0;
 
         if (auto snap = Services::Snapshots().latest(id))
         {
+            spec_id = snap->identity.spec;
             hp_pct = snap->vitals.max_hp > 0
                 ? int((100.0 * snap->vitals.hp) / snap->vitals.max_hp) : 0;
             const int32 mana_cur = snap->vitals.power[0];
@@ -494,14 +525,20 @@ void HandleRosterReq(uint32 client_seq, WorldSession* sess, uint32 flags)
             (void)iq; // current_intent_name not exposed; left as "-".
         }
 
+        // On the owner's saved roster (`.bot save`), and in the owner's group now: the ForeverBots roster window.
+        const bool saved = owner && Services::Owners().SavedBy(id, owner->GetGUID().GetCounter());
+        Group const* owner_group = owner ? owner->GetGroup() : nullptr;
+        const bool grouped = online && owner_group && owner_group->IsMember(guid);
+
         // Build comma-delimited record. Bot names cannot contain commas.
         // Escape happens at the OUTER pipe-field boundary, not here.
         // Field 16 (`headless`) was appended 2026-06-12 for the addon's
         // Log In / Logout actions — positional append keeps old addon
-        // builds decoding fields 1-15 unchanged.
+        // builds decoding fields 1-15 unchanged. Fields 17-19 (saved,
+        // grouped, spec id) were appended the same way for ForeverBots.
         char rec[512];
         std::snprintf(rec, sizeof(rec),
-            "%u,%s,%u,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%u,%s,%s",
+            "%u,%s,%u,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%u,%s,%s,%s,%s,%u",
             unsigned(id),
             cc->Name.c_str(),
             unsigned(cc->Level),
@@ -515,7 +552,10 @@ void HandleRosterReq(uint32 client_seq, WorldSession* sess, uint32 flags)
             last_rule.c_str(),
             /*groupId*/ 0u,
             /*spec*/ "-",
-            headless ? "1" : "0");
+            headless ? "1" : "0",
+            saved ? "1" : "0",
+            grouped ? "1" : "0",
+            unsigned(spec_id));
         records.push_back(Escape(rec));
     }
 
@@ -627,6 +667,284 @@ void HandleBotDetailReq(uint32 client_seq, WorldSession* sess, uint32 guidLow)
 }
 
 // ----------------------------------------------------------------------------
+// GEAR_REQ <guidLow> — the ForeverBots gear window: what one owned, online bot
+// wears and carries. Read from the live Player: addon messages are handled on
+// the world thread (CMSG_CHAT_ADDON_MESSAGE is PROCESS_THREADUNSAFE), while no
+// map updates. Returns:
+//   GEAR_RESP|<guidLow>|<avg ilvl>|<copper>|<free bag slots>|<rec>...
+// where rec is "E,<slot>,<entry>,<ilvl>,<dur%>,<perm enchant>,<bonus:bonus>,
+// <quality>" for a worn item and "B,<bag>,<slot>,<entry>,<count>,<quality>,<ilvl>,
+// <perm enchant>,<bonus:bonus>" for a bag item (bag 0 = backpack, 1-4 = bags).
+// The add-on builds the item links from entry, enchant and bonus lists.
+// ----------------------------------------------------------------------------
+std::string GearBonuses(Item const* item)
+{
+    std::string out;
+    for (int32 b : item->GetBonusListIDs())
+    {
+        if (!out.empty()) out.push_back(':');
+        out.append(std::to_string(b));
+    }
+    return out;
+}
+
+void HandleGearReq(uint32 client_seq, WorldSession* sess, uint32 guidLow)
+{
+    if (!Services::Initialized() || guidLow == 0)
+    {
+        SendFields(sess, client_seq, "GEAR_RESP", {"0"});
+        return;
+    }
+    if (Services::Owners().GetOwner(BotId(guidLow)).account_id != sess->GetAccountId())
+    {
+        PushEvent(sess, "error", std::to_string(guidLow), "auth", "not your bot");
+        SendFields(sess, client_seq, "GEAR_RESP", {std::to_string(guidLow)});
+        return;
+    }
+    Player const* bot = ObjectAccessor::FindConnectedPlayer(
+        ObjectGuid::Create<HighGuid::Player>(uint64(guidLow)));
+    if (!bot)
+    {
+        SendFields(sess, client_seq, "GEAR_RESP", {std::to_string(guidLow)});
+        return;
+    }
+
+    std::vector<std::string> recs;
+    uint32 ilvl_sum = 0, ilvl_n = 0;
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item const* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+        const uint32 ilvl = item->GetItemLevel(bot);
+        if (slot != EQUIPMENT_SLOT_BODY && slot != EQUIPMENT_SLOT_TABARD)
+        {
+            ilvl_sum += ilvl;
+            ++ilvl_n;
+        }
+        const uint32 dur = *item->m_itemData->Durability;
+        const uint32 dur_max = *item->m_itemData->MaxDurability;
+        recs.push_back(Escape(fmt::format("E,{},{},{},{},{},{},{}", slot, item->GetEntry(), ilvl,
+                                          dur_max ? (100 * dur / dur_max) : 100,
+                                          item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT), GearBonuses(item), item->GetQuality())));
+    }
+
+    uint32 free_slots = 0;
+    auto bag_item = [&](uint8 bag_index, Item const* item)
+    {
+        recs.push_back(Escape(fmt::format("B,{},{},{},{},{},{},{},{}", bag_index, item->GetSlot(), item->GetEntry(),
+                                          item->GetCount(), item->GetQuality(), item->GetItemLevel(bot),
+                                          item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT), GearBonuses(item))));
+    };
+    const uint8 backpack_end = uint8(INVENTORY_SLOT_ITEM_START + bot->GetInventorySlotCount());
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < backpack_end; ++slot)
+    {
+        if (Item const* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            bag_item(0, item);
+        else
+            ++free_slots;
+    }
+    for (uint8 bag_slot = INVENTORY_SLOT_BAG_START; bag_slot < INVENTORY_SLOT_BAG_END; ++bag_slot)
+    {
+        Bag const* bag = bot->GetBagByPos(bag_slot);
+        if (!bag)
+            continue;
+        for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+        {
+            if (Item const* item = bag->GetItemByPos(uint8(slot)))
+                bag_item(uint8(bag_slot - INVENTORY_SLOT_BAG_START + 1), item);
+            else
+                ++free_slots;
+        }
+    }
+
+    std::vector<std::string> fields;
+    fields.reserve(recs.size() + 4);
+    fields.push_back(std::to_string(guidLow));
+    fields.push_back(std::to_string(ilvl_n ? ilvl_sum / ilvl_n : 0));
+    fields.push_back(std::to_string(bot->GetMoney()));
+    fields.push_back(std::to_string(free_slots));
+    for (auto& r : recs) fields.push_back(std::move(r));
+    SendFields(sess, client_seq, "GEAR_RESP", fields);
+}
+
+// ----------------------------------------------------------------------------
+// QUESTS_REQ <guidLow> — the ForeverBots quest page: one owned, online bot's
+// quest log, read live on the world thread like GEAR_REQ. Returns:
+//   QUESTS_RESP|<guidLow>|<rec>...
+// with "Q,<quest id>,<status>,<level>,<title>" per quest (status 1 complete,
+// 3 in progress, 5 failed) followed by "O,<quest id>,<have>,<need>,<text>"
+// for each of its shown objectives. Title and text come last: they may hold
+// commas. Texts are the server's default locale; the add-on prefers the
+// client's own quest title when it knows the quest.
+// ----------------------------------------------------------------------------
+void HandleQuestsReq(uint32 client_seq, WorldSession* sess, uint32 guidLow)
+{
+    if (!Services::Initialized() || guidLow == 0)
+    {
+        SendFields(sess, client_seq, "QUESTS_RESP", {"0"});
+        return;
+    }
+    if (Services::Owners().GetOwner(BotId(guidLow)).account_id != sess->GetAccountId())
+    {
+        PushEvent(sess, "error", std::to_string(guidLow), "auth", "not your bot");
+        SendFields(sess, client_seq, "QUESTS_RESP", {std::to_string(guidLow)});
+        return;
+    }
+    Player const* bot = ObjectAccessor::FindConnectedPlayer(
+        ObjectGuid::Create<HighGuid::Player>(uint64(guidLow)));
+    std::vector<std::string> fields{std::to_string(guidLow)};
+    if (!bot)
+    {
+        SendFields(sess, client_seq, "QUESTS_RESP", fields);
+        return;
+    }
+    for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+    {
+        const uint32 quest_id = bot->GetQuestSlotQuestId(slot);
+        if (!quest_id)
+            continue;
+        Quest const* quest = sObjectMgr->GetQuestTemplate(quest_id);
+        if (!quest)
+            continue;
+        const QuestStatus status = bot->GetQuestStatus(quest_id);
+        const uint32 status_code = status == QUEST_STATUS_COMPLETE ? 1u : status == QUEST_STATUS_FAILED ? 5u : 3u;
+        fields.push_back(Escape(fmt::format("Q,{},{},{},{}", quest_id, status_code, bot->GetQuestLevel(quest), quest->GetLogTitle())));
+        for (QuestObjective const& obj : quest->GetObjectives())
+        {
+            if (obj.Flags & QUEST_OBJECTIVE_FLAG_HIDDEN)
+                continue;
+            fields.push_back(Escape(fmt::format("O,{},{},{},{}", quest_id, bot->GetQuestObjectiveData(obj), obj.Amount, obj.Description)));
+        }
+    }
+    SendFields(sess, client_seq, "QUESTS_RESP", fields);
+}
+
+// ----------------------------------------------------------------------------
+// LFG_REQ — the ForeverBots Group finder tab: where the caller stands with the
+// bot dungeon finder (`.bot dungeon`). Returns:
+//   LFG_RESP|<phase>|<dungeon name>|<seconds waited>|<form wait seconds>|
+//            <group members>|<party size>|<can leave 0/1>
+// phase: idle, forming, entering, leaving, inside (DungeonFinderStatus).
+// ----------------------------------------------------------------------------
+void HandleLfgReq(uint32 client_seq, WorldSession* sess)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    if (!me || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "LFG_RESP", {"idle"});
+        return;
+    }
+    DungeonFinderState const st = DungeonFinderStatus(me);
+    SendFields(sess, client_seq, "LFG_RESP", {
+        Escape(st.phase), Escape(st.name), std::to_string(st.waitedSec), std::to_string(st.formSec),
+        std::to_string(st.members), std::to_string(st.size), st.canLeave ? "1" : "0" });
+}
+
+// ----------------------------------------------------------------------------
+// POP_REQ - the ForeverBots World tab: how many world bots the realm has.
+//   POP_REQ|                      ask only
+//   POP_REQ|<off|low|medium|high|file>   set it (GM accounts only; applies now,
+//                                 kept over a restart, Fleet/BotSize.h PopLevel)
+// Returns:
+//   POP_RESP|<off|low|medium|high|file>|<can set 0/1>|<draining 0/1>|<line>|<set result: ok|denied|bad|>
+// ----------------------------------------------------------------------------
+void HandlePopReq(uint32 client_seq, WorldSession* sess, std::vector<std::string> const& fields)
+{
+    if (!sess || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "POP_RESP", {"file", "0", "0", Escape("The bot server is not ready."), "bad"});
+        return;
+    }
+    // The realm owner's account is a GM (the install makes it one); a friend joining a hosted realm is not and can only look.
+    bool const can_set = sess->HasPermission(rbac::RBAC_PERM_COMMAND_GM);
+    auto& pop = Services::Population();
+    std::string result;
+    if (!fields.empty() && !fields[0].empty())
+    {
+        std::string w = fields[0];
+        for (char& ch : w) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        if (!can_set)
+            result = "denied";
+        else if (w == "file")
+        {
+            pop.SetWorldPopulation(-1);
+            result = "ok";
+        }
+        else if (std::optional<V2::Fleet::PopLevel> const lv = V2::Fleet::ParsePopLevel(w))
+        {
+            pop.SetWorldPopulation(int(*lv));
+            result = "ok";
+        }
+        else
+            result = "bad";
+        TC_LOG_INFO("playerbot.v2", "[addon_pbc] {} (account {}) world bots -> {}: {}",
+                    sess->GetPlayer() ? sess->GetPlayer()->GetName() : std::string("?"), sess->GetAccountId(), w, result);
+    }
+    int const now = pop.WorldPopulation();
+    static char const* const kWord[] = { "off", "low", "medium", "high" };
+    SendFields(sess, client_seq, "POP_RESP", {
+        now >= 0 && now <= 3 ? kWord[now] : "file", can_set ? "1" : "0", pop.WorldPopulationDraining() ? "1" : "0",
+        Escape(pop.WorldPopulationLine()), result });
+}
+
+// ----------------------------------------------------------------------------
+// PLACE_REQ - the ForeverBots Positions tab: chosen bots stand in a shape at a spot
+// and stay there (BotCommandParser::PlaceBots, Bot/Placement.h).
+//   PLACE_REQ|<shape>|<tight|normal|wide>|<here|target>|<who>|<who>|...
+//     shape: close circle arc spread line column spear arrow, or follow (let them go)
+//     who:   bot names, or all / tanks / healers / melee / ranged / dps / group1..8 / a class;
+//            none = every bot of yours in the group
+// Returns:
+//   PLACE_RESP|<placed>|<chosen>|<line>
+// ----------------------------------------------------------------------------
+void HandlePlaceReq(uint32 client_seq, WorldSession* sess, std::vector<std::string> const& fields)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    if (!me || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "PLACE_RESP", {"0", "0", Escape("The bot server is not ready.")});
+        return;
+    }
+    auto field = [&](size_t i) { return i < fields.size() ? fields[i] : std::string(); };
+    std::vector<std::string> who;
+    for (size_t i = 3; i < fields.size() && who.size() < 40; ++i)
+        if (!fields[i].empty())
+            who.push_back(fields[i]);
+    BotCommandParser::PlaceResult const r = BotCommandParser::PlaceBots(me, field(0), field(1), field(2), who, "addon");
+    // The answer is a plain system line too: the add-on (0.6.14) no longer waits for PLACE_RESP, which came after its 6 s timeout on a
+    // busy PC with 39 bots (owner report 2026-11-04) although the bots had moved.
+    if (!r.line.empty())
+        ChatHandler(sess).PSendSysMessage("%s", r.line.c_str());
+    SendFields(sess, client_seq, "PLACE_RESP", {std::to_string(r.placed), std::to_string(r.asked), Escape(r.line)});
+}
+
+// ----------------------------------------------------------------------------
+// ASSIGN_REQ — the marker assignments of the caller's group for the Assign
+// panel. It used to ask with a whispered "assign list", and in a dungeon fight
+// the client hands those whispers over as secret strings that no chat filter
+// can read, so "ASSIGN|END|0" showed up in chat. Returns:
+//   ASSIGN_RESP|<count>|<marker 0..7>,<name>,<tank|cc|kill>|...
+// ----------------------------------------------------------------------------
+void HandleAssignReq(uint32 client_seq, WorldSession* sess)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    Group* grp = me ? me->GetGroup() : nullptr;
+    if (!grp || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "ASSIGN_RESP", {"0"});
+        return;
+    }
+    std::vector<BotCommandParser::AssignRow> const rows = BotCommandParser::AssignList(grp);
+    std::vector<std::string> out;
+    out.reserve(rows.size() + 1);
+    out.push_back(std::to_string(rows.size()));
+    for (BotCommandParser::AssignRow const& r : rows)
+        out.push_back(Escape(fmt::format("{},{},{}", r.marker, r.name, r.role)));
+    SendFields(sess, client_seq, "ASSIGN_RESP", out);
+}
+
+// ----------------------------------------------------------------------------
 // CMD — translate "<addr>|<verb>|<args...>" into a synthetic whisper sent
 // from the owner to each addressed bot, then run BotCommandParser::Dispatch.
 // That reuses the entire verb-handling pipeline (authority, squad addressing,
@@ -724,6 +1042,17 @@ void HandlePing(uint32 client_seq, WorldSession* sess,
                 std::vector<std::string> const& fields)
 {
     std::string t0 = fields.empty() ? std::string("0") : fields[0];
+    // Second field: how the client wants its answers from now on, "addon" (hidden add-on whisper, the default) or "sys" (a
+    // system message the add-on hides). The add-on tries addon first and falls back to sys when no answer comes.
+    std::string const mode = fields.size() > 1 ? fields[1] : std::string();
+    if (mode == "sys" || mode == "addon")
+    {
+        std::lock_guard lk(g_sys_mtx);
+        if (mode == "sys") g_sys_reply.insert(sess->GetAccountId());
+        else g_sys_reply.erase(sess->GetAccountId());
+    }
+    TC_LOG_INFO("playerbot.v2", "[addon_pbc] ping from {} (answers as {})",
+                sess->GetPlayer() ? sess->GetPlayer()->GetName() : std::string("?"), SysReply(sess->GetAccountId()) ? "system messages" : "add-on whispers");
     SendFields(sess, client_seq, "PONG", { Escape(t0) });
 }
 
@@ -1269,6 +1598,8 @@ void HandleLogoutReq(uint32 /*client_seq*/, WorldSession* sess,
 void DispatchAssembled(WorldSession* sess, uint32 seq,
                        std::string const& mtype, std::string const& body)
 {
+    TC_LOG_DEBUG("playerbot.v2", "[addon_pbc] {} {} seq {:x} ({} bytes)",
+                 sess->GetPlayer() ? sess->GetPlayer()->GetName() : std::string("?"), mtype, seq, body.size());
     auto fields = SplitPipes(body);
     if      (mtype == "ROSTER_REQ")
     {
@@ -1281,6 +1612,34 @@ void DispatchAssembled(WorldSession* sess, uint32 seq,
         const uint32 g = fields.empty() ? 0u
             : uint32(std::strtoul(fields[0].c_str(), nullptr, 10));
         HandleBotDetailReq(seq, sess, g);
+    }
+    else if (mtype == "GEAR_REQ")
+    {
+        const uint32 g = fields.empty() ? 0u
+            : uint32(std::strtoul(fields[0].c_str(), nullptr, 10));
+        HandleGearReq(seq, sess, g);
+    }
+    else if (mtype == "QUESTS_REQ")
+    {
+        const uint32 g = fields.empty() ? 0u
+            : uint32(std::strtoul(fields[0].c_str(), nullptr, 10));
+        HandleQuestsReq(seq, sess, g);
+    }
+    else if (mtype == "LFG_REQ")
+    {
+        HandleLfgReq(seq, sess);
+    }
+    else if (mtype == "ASSIGN_REQ")
+    {
+        HandleAssignReq(seq, sess);
+    }
+    else if (mtype == "POP_REQ")
+    {
+        HandlePopReq(seq, sess, fields);
+    }
+    else if (mtype == "PLACE_REQ")
+    {
+        HandlePlaceReq(seq, sess, fields);
     }
     else if (mtype == "STATS_REQ")
     {
@@ -1381,7 +1740,10 @@ bool OnAddonWhisper(Player* sender, Player* /*receiver*/,
             && mtype != "LOGIN_REQ"
             && mtype != "LOGOUT_REQ"
             && mtype != "SELF"
-            && mtype != "PING")
+            && mtype != "PING"
+            && mtype != "LFG_REQ"
+            && mtype != "POP_REQ"
+            && mtype != "ASSIGN_REQ")
             return false;
     }
 
@@ -1425,6 +1787,10 @@ bool OnAddonWhisper(Player* sender, Player* /*receiver*/,
 
 void OnSessionLogout(uint32 sessionAccountId)
 {
+    {
+        std::lock_guard lk(g_sys_mtx);
+        g_sys_reply.erase(sessionAccountId);
+    }
     std::lock_guard lk(g_rx_mtx);
     for (auto it = g_rx.begin(); it != g_rx.end(); )
     {

@@ -1,0 +1,14 @@
+# Second worldserver for the 70532 client test realm (realm 74). Copy to worldserver_test70532.conf next to worldserver.conf and
+# start it with:  worldserver -c worldserver_test70532.conf
+# The Forever realms 70-73 keep running on their own worldservers and builds.
+# Everything not listed here keeps the value of worldserver.conf (copy that file first and change only the lines below).
+
+RealmID = 74
+WorldServerPort = 8125
+
+# Separate characters database so test characters never touch the live realm. Same schema as characters, created by the updater.
+# Format: "host;port;user;password;database"
+# CharacterDatabaseInfo = "127.0.0.1;3306;<user>;<password>;characters_test70532"
+
+# No client auth key is known for build 70532 yet.
+Network.SkipBuildAuthKeyCheck = 1

@@ -11,6 +11,83 @@ frame as it does for typed commands.
 local ADDON = ...
 ForeverBotsDB = ForeverBotsDB or {}
 
+-- Client 70685's own bag code (Blizzard_UIPanels_Game ContainerFrame.lua) reads EMPTY_BAG_SLOT_EFFECT_COLOR, which no file of that
+-- client defines: opening bags raised a Lua error and drew empty slots blank. Defining it stops the error, but the same code then
+-- draws a grey bag icon in place of the slot frame of every empty slot. So the global is defined (a client that has it keeps its
+-- own and nothing below runs), and after Blizzard's SyncAppearanceWithHasItem an empty slot gets back the slot frame a filled slot
+-- shows (its NormalTexture). Post-hooks only (hooksecurefunc), and only textures are touched: no Blizzard function is replaced.
+if EMPTY_BAG_SLOT_EFFECT_COLOR == nil and CreateColor then
+    EMPTY_BAG_SLOT_EFFECT_COLOR = CreateColor(1, 1, 1, 1)
+    local look                                          -- the slot frame of a filled slot, once one was seen
+    local waiting = setmetatable({}, { __mode = "k" })  -- empty slots drawn before that
+    local hooked = setmetatable({}, { __mode = "k" })
+    local function HasItem(button)
+        local bag = button.GetBagID and button:GetBagID()
+        return bag ~= nil and C_Container and C_Container.GetContainerItemID(bag, button:GetID()) ~= nil
+    end
+    local function Restore(button)
+        local t = button:GetNormalTexture()
+        if not t then return end
+        if look.atlas then t:SetAtlas(look.atlas) else t:SetTexture(look.file) end
+        t:SetTexCoord(unpack(look.coords))
+        t:SetVertexColor(unpack(look.color))
+        t:SetDesaturated(look.desaturated)
+        t:SetAlpha(look.alpha)
+    end
+    local function AfterSync(button)
+        local t = button:GetNormalTexture()
+        if not t then return end
+        if HasItem(button) then
+            if not look then
+                look = { atlas = t:GetAtlas(), file = t:GetTexture(), coords = { t:GetTexCoord() }, color = { t:GetVertexColor() },
+                         desaturated = t:IsDesaturated() and true or false, alpha = t:GetAlpha() }
+                for b in pairs(waiting) do if not HasItem(b) then Restore(b) end end
+                wipe(waiting)
+            end
+        elseif look then
+            Restore(button)
+        else
+            waiting[button] = true
+        end
+    end
+    local function Hook(button)
+        if hooked[button] or type(button.SyncAppearanceWithHasItem) ~= "function" then return end
+        hooked[button] = true
+        hooksecurefunc(button, "SyncAppearanceWithHasItem", AfterSync)
+    end
+    -- buttons made from now on get it from the mixin; the ones that already exist are hooked one by one
+    local mixinSync
+    if ContainerFrameItemButtonMixin and type(ContainerFrameItemButtonMixin.SyncAppearanceWithHasItem) == "function" then
+        hooksecurefunc(ContainerFrameItemButtonMixin, "SyncAppearanceWithHasItem", AfterSync)
+        mixinSync = ContainerFrameItemButtonMixin.SyncAppearanceWithHasItem
+    end
+    -- EnumerateValidItems counts up to the bag size, not the buttons made: the combined-bags frame knows its size (all bags, 96)
+    -- before it has made its buttons, so before it is first shown every index gives nil (Lua error at login, 2026-10-29). Buttons
+    -- it makes later copy the hooked mixin function, so skipping the missing ones loses nothing.
+    local function HookFrame(frame)
+        if frame and frame.EnumerateValidItems then
+            for _, button in frame:EnumerateValidItems() do
+                if type(button) == "table" and button.SyncAppearanceWithHasItem ~= mixinSync then Hook(button) end
+            end
+        end
+    end
+    local bagHook = CreateFrame("Frame")
+    bagHook:RegisterEvent("PLAYER_ENTERING_WORLD")
+    bagHook:RegisterEvent("BAG_OPEN")
+    bagHook:SetScript("OnEvent", function()
+        HookFrame(ContainerFrameCombinedBags)
+        for i = 1, (NUM_CONTAINER_FRAMES or 13) do HookFrame(_G["ContainerFrame" .. i]) end
+    end)
+end
+
+-- Text the player reads goes through L: the table of the client's language (Locale_ruRU.lua, loaded first, fills
+-- ForeverBotsLocale) or, for any key it does not hold, the English text itself. A key "short:<text>" is the shorter wording for a
+-- narrow button. Words sent to the server (orders, .bot commands) and server replies matched below never go through L.
+local L = setmetatable(ForeverBotsLocale or {}, { __index = function(_, k) return (k:gsub("^short:", "")) end })
+-- On a client that is not English, spell, class and raid marker names come from the client itself, so they read exactly as in
+-- the game; L holds them too for a name the client does not return.
+local CLIENT_NAMES = not (GetLocale and (GetLocale() == "enUS" or GetLocale() == "enGB"))
+
 -- Timing of every handler the add-on gives the client (frame scripts, timers, hooks, chat filters, menu callbacks): client 70630
 -- shows "Script from ForeverBots has exceeded its execution time limit" with an empty stack (BRS 2026-10-27), which names no
 -- function. Each handler is wrapped once, where it is handed over, and keeps its count, total and slowest call under the file line
@@ -128,8 +205,12 @@ local CLASSES = {
     { key = "warlock", label = "Warlock", token = "WARLOCK", roles = { "dps" } },
     { key = "druid",   label = "Druid",   token = "DRUID",   roles = { "tank", "healer", "dps" } },
 }
+for _, c in ipairs(CLASSES) do
+    local native = CLIENT_NAMES and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[c.token]
+    c.label = native or L[c.label]
+end
 
-local ROLE_LABEL = { tank = "Tank", healer = "Heal", dps = "DPS" }
+local ROLE_LABEL = { tank = L["Tank"], healer = L["Heal"], dps = L["DPS"] }
 
 -- What the add-on was doing when the client blocked a call: set before the steps that touch the client's own frames.
 local currentStep = ""
@@ -146,37 +227,78 @@ local function Debug(msg)
     if debugOn then Print(msg) end
 end
 
--- A dot command is handled by the server when it arrives as a normal say message.
+-- A dot command (".bot add mage") is run by the server from any chat line the player sends, before the line is delivered. It
+-- never goes to /say: client 70707 blocks SendChatMessage to SAY from add-on code, also straight from a click ("Interface action
+-- failed because of an AddOn" and "the client blocked SendChatMessage() for ForeverBots (blocked) during: no step marked" three
+-- times when a bot was added from the /fb window, 2026-10-31). In a group it goes as an add-on message on the group channel
+-- (Cmd.Queue below, the route the order buttons and Quick party already use); without a group, from a click, as a whisper to
+-- yourself (Cmd.Say), which the client does not block. From a timer or an event it always goes through Cmd.Queue.
 local helloDotSent = false
+local inAuto = false
+local Cmd = {}
+-- Whispers to bots: the last one the panel or the menu sent per bot (Cmd.NoteOwnWhisper) and when the player last whispered a bot by
+-- hand (CHAT_MSG_WHISPER_INFORM in the "filters" part). WhisperFilter hides "<Bot>: ..." confirmations of the add-on's own orders only.
+Cmd.ownSent, Cmd.typedAt = {}, {}
+function Cmd.NoteOwnWhisper(name, text)
+    local who = type(name) == "string" and strmatch(name, "^[^-]+")
+    if who and type(text) == "string" then Cmd.ownSent[who] = { text = text, at = GetTime and GetTime() or 0 } end
+end
+-- The other files of the add-on (ForeverBots_Net.lua, the windows) share the add-on table; kept in Cmd, not a new local.
+Cmd.ns = select(2, ...) or {}
+Cmd.ns.Print, Cmd.ns.SafeName, Cmd.ns.L = Print, SafeName, L
+Cmd.ns.Queue = function(text) Cmd.Queue(text) end
 local function ServerCommand(text)
+    if inAuto then
+        Cmd.Queue(text)
+        return
+    end
     if not helloDotSent then
         helloDotSent = true
-        SendChatMessage(".bot addon", "SAY")
+        Cmd.Say(".bot addon")
     end
-    SendChatMessage(text, "SAY")
+    Cmd.Say(text)
 end
 
--- Stance toggle of the panel: ForeverBotsDB.stance is "passive" or "aggressive" (nil = never picked: passive, the server's start
--- stance for every bot in your group). The pick is kept between sessions and re-sent to the group whenever it changes (new bots).
-local function StanceIsAggressive()
-    return ForeverBotsDB ~= nil and ForeverBotsDB.stance == "aggressive"
+-- Stance button of the panel, three steps (Karrz 2026-11-03: "passive, defensive and aggressive"). ForeverBotsDB.stance is
+--   "nofight"    - Passive: the bots attack nothing at all, not even to defend; heals and buffs go on (taming a beast, a sheep that
+--                  must not break, a quest mob that must stay alive). Server word "passive".
+--   "defensive"  - Defensive: they start nothing and fight what you pull or what attacks the group (the server's start stance).
+--                  Older add-ons saved this one as "passive".
+--   "aggressive" - Aggressive: they also attack anything hostile within about 10 yards of you.
+-- nil = never picked: Defensive. The pick is kept between sessions and re-sent to the group whenever it changes (new bots).
+-- (Kept on Cmd: the main chunk is at Lua 5.1's 200-local limit.)
+Cmd.STANCES = { "defensive", "aggressive", "nofight" }   -- the order a click steps through
+function Cmd.StanceKey()
+    local st = ForeverBotsDB and ForeverBotsDB.stance
+    if st == "aggressive" or st == "nofight" then return st end
+    return "defensive"   -- nil, "defensive", and the older add-on's "passive"
 end
--- What the button shows: the pick; before one, "Passive" (nothing is sent until you pick, the server starts every grouped bot Passive).
-local function StanceLabel()
-    local stance = ForeverBotsDB and ForeverBotsDB.stance
-    if stance == "aggressive" then return "Aggressive" end
-    if stance == "passive" then return "Passive" end
-    -- Nothing picked yet: every bot in your group starts Passive on the server (it fights only what the group pulled or what
-    -- attacks the group, and follows you back), so the button says so.
-    return "Passive"
+-- The word a plain pick sends (it also answers in the bot whispers) and the stance-only re-send for new bots.
+Cmd.STANCE_ORDER  = { defensive = "defensive", aggressive = "aggressive", nofight = "passive" }
+Cmd.STANCE_RESEND = { defensive = "stance defensive", aggressive = "stance aggressive", nofight = "stance nofight" }
+local function StanceLabel(short)
+    local k = Cmd.StanceKey()
+    if k == "aggressive" then return short and L["Aggr."] or L["Aggressive"] end
+    if k == "nofight" then return L["Passive"] end
+    return short and L["short:Defensive"] or L["Defensive"]
 end
 local stanceBtn
 local function RefreshStance()
     if stanceBtn then
         stanceBtn:SetText(StanceLabel())
-        -- bar.tga rows 5 (blue, Passive) and 6 (red, Aggressive)
-        if stanceBtn.FBSetRow then stanceBtn:FBSetRow(StanceIsAggressive() and 6 or 5) end
+        -- tint: green Passive, blue Defensive, red Aggressive (MakeSkinButton rows 7, 5, 6)
+        local k = Cmd.StanceKey()
+        if stanceBtn.FBSetRow then stanceBtn:FBSetRow(k == "aggressive" and 6 or k == "nofight" and 7 or 5) end
     end
+end
+-- One step on (back with step -1), or straight to a stance key, and send it to the group. Cmd.GroupOrder is set below GroupOrder.
+function Cmd.SetStance(step, key)
+    local list, i = Cmd.STANCES, 1
+    for n, v in ipairs(list) do if v == (key or Cmd.StanceKey()) then i = n end end
+    if not key then i = (i - 1 + (step or 1)) % #list + 1 end
+    ForeverBotsDB.stance = list[i]
+    Cmd.GroupOrder(Cmd.STANCE_ORDER[list[i]])
+    RefreshStance()
 end
 
 -- Bot orders go to the group as addon messages under a fixed prefix; the server reads them like party chat. SendChatMessage
@@ -201,7 +323,6 @@ local ORDER_RETRIES = 6
 -- Anything the add-on sends on its own (a timer, OnUpdate, an event) is not a player action: the client blocks chat sent from
 -- there ("Interface action failed because of an AddOn", Emberseer 2026-10-20). Those paths run under Auto(), and GroupOrder then
 -- only ever uses the addon message (never SendChatMessage, never the chat box) and drops the order when that fails.
-local inAuto = false
 local function Auto(fn, ...)
     local was, step = inAuto, currentStep
     inAuto = true
@@ -212,13 +333,80 @@ local function Auto(fn, ...)
     if not ok then Debug("auto: " .. tostring(err)) end
 end
 
+-- Commands sent without a click, one at a time: the client's addon message budget (about ten at once, then one a second) would
+-- drop most of a 40-player Quick party, so a refused send waits a second and tries the same line again, in order. Kept in one
+-- table: the main chunk is near Lua 5.1's limit of 200 locals.
+Cmd.queue, Cmd.pumping = {}, false
+Cmd.GAP, Cmd.WAIT, Cmd.TRIES = 0.4, 1.0, 20
+function Cmd.SendSelf(text)
+    local send = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
+    -- the group channel when grouped (ns.SelfChannel, ForeverBots_Net.lua: this client's add-on whispers never reach the server)
+    local channel, me = "WHISPER", SafeName("player")
+    if Cmd.ns.SelfChannel then channel, me = Cmd.ns.SelfChannel() end
+    if not (prefixOk and send and (me or channel ~= "WHISPER")) then return false, nil end
+    local ok, res = pcall(send, ORDER_PREFIX, text, channel, me)
+    if ok and (res == nil or res == true or res == 0 or (Enum and Enum.SendAddonMessageResult and res == Enum.SendAddonMessageResult.Success)) then
+        return true
+    end
+    return false, ok and tonumber(res) or nil
+end
+function Cmd.Pump()
+    local head = Cmd.queue[1]
+    if not head then Cmd.pumping = false return end
+    local sent, code = Cmd.SendSelf(head.text)
+    if not sent and code and THROTTLED[code] and head.tries < Cmd.TRIES and C_Timer and C_Timer.After then
+        head.tries = head.tries + 1
+        C_Timer.After(Cmd.WAIT, function() Auto(Cmd.Pump) end)
+        return
+    end
+    table.remove(Cmd.queue, 1)
+    if not sent then
+        Print(L["could not send \"%s\"%s: type it in chat."]:format(head.text, code and (" (addon message result " .. code .. ")") or ""))
+    end
+    if Cmd.queue[1] and C_Timer and C_Timer.After then
+        C_Timer.After(Cmd.GAP, function() Auto(Cmd.Pump) end)
+    else
+        Cmd.pumping = false
+    end
+end
+function Cmd.Queue(text)
+    Cmd.queue[#Cmd.queue + 1] = { text = text, tries = 0 }
+    if not Cmd.pumping then
+        Cmd.pumping = true
+        Cmd.Pump()
+    end
+end
+
+-- A dot command from a click (ServerCommand). Grouped: the add-on message on the group channel, no chat at all. Alone: a whisper
+-- to yourself; the server runs the command and never delivers the whisper, so nothing shows in chat. A whisper the client
+-- refuses raises ADDON_ACTION_BLOCKED during the step "dot command", and the guard below prints the line to type.
+function Cmd.Say(text)
+    if prefixOk and Cmd.ns.SelfChannel and Cmd.ns.SelfChannel() ~= "WHISPER" then
+        Cmd.Queue(text)
+        return
+    end
+    local me = SafeName("player")
+    if not me then
+        Print(L["could not send \"%s\"%s: type it in chat."]:format(text, ""))
+        return
+    end
+    local step = currentStep
+    Step("dot command")
+    Cmd.lastSaid = text
+    local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, me)
+    Step(step)
+    if not ok then
+        Print(L["could not send \"%s\"%s: type it in chat."]:format(text, " (" .. tostring(err) .. ")"))
+    end
+end
+
 local function GroupOrder(text, attempt)
     attempt = attempt or 0
     local channel
     if IsInRaid and IsInRaid() then channel = "RAID"
     elseif (IsInGroup and IsInGroup()) or (GetNumPartyMembers and GetNumPartyMembers() > 0) then channel = "PARTY"
     else
-        Print("you have no group yet: add a bot first.")
+        Print(L["you have no group yet: add a bot first."])
         return
     end
     local code, errText
@@ -246,14 +434,16 @@ local function GroupOrder(text, attempt)
         -- available to the Blizzard UI", so a retry prints the hint instead.
         if attempt == 0 and ChatFrame_OpenChat then
             ChatFrame_OpenChat((channel == "RAID" and "/raid " or "/party ") .. text)
-            Print("the order could not be sent in combat" .. why .. ": press Enter to send it.")
+            Print(L["the order could not be sent in combat%s: press Enter to send it."]:format(why))
         else
-            Print("the order could not be sent in combat" .. why .. ": type it in " .. strlower(channel) .. " chat.")
+            Print(L["the order could not be sent in combat%s: type it in %s chat."]:format(why, L[strlower(channel)]))
         end
         return
     end
     SendChatMessage(text, channel)
 end
+Cmd.GroupOrder = GroupOrder
+Cmd.ns.GroupOrder = function(text) GroupOrder(text) end
 
 -- Raid markers the tank panel cycles through (the chat order words), and the one picked now.
 local TANK_MARKERS = { "skull", "cross", "star", "circle", "diamond", "triangle", "moon", "square" }
@@ -274,7 +464,7 @@ local function Now() return GetTime and GetTime() or 0 end
 
 local function ShowDistance()
     if distText then
-        distText:SetText(ForeverBotsDB.distance and (ForeverBotsDB.distance .. " yd") or "auto")
+        distText:SetText(ForeverBotsDB.distance and L["%d yd"]:format(ForeverBotsDB.distance) or L["auto"])
     end
 end
 
@@ -309,7 +499,7 @@ end
 
 -- Deletes the targeted companion for good, after a confirmation.
 StaticPopupDialogs["FOREVERBOTS_DELETE"] = {
-    text = "Delete %s for good? Its character is removed. (Your own characters summoned as bots are never deleted: use Dismiss for them.)",
+    text = L["Delete %s for good? Its character is removed. (Your own characters summoned as bots are never deleted: use Dismiss for them.)"],
     button1 = YES,
     button2 = NO,
     OnAccept = function(_, name) ServerCommand(".bot delete " .. name) end,
@@ -321,7 +511,7 @@ StaticPopupDialogs["FOREVERBOTS_DELETE"] = {
 local function DeleteTarget()
     local name = UnitExists("target") and UnitIsPlayer("target") and SafeName("target")
     if not name or UnitIsUnit("target", "player") then
-        Print("target the bot you want to delete first.")
+        Print(L["target the bot you want to delete first."])
         return
     end
     local dialog = StaticPopup_Show("FOREVERBOTS_DELETE", name)
@@ -343,6 +533,15 @@ end
 -- "ASSIGN|END|<count>". Those whispers are parsed here and hidden from the chat frame.
 
 local ICON_WORDS = { "star", "circle", "diamond", "triangle", "moon", "square", "cross", "skull" }   -- icon N = word N
+-- What the player reads for a marker word: the client's own raid marker name (RAID_TARGET_N) or L. Markers are the words.
+local MARKER_INDEX = {}
+for i, w in ipairs(ICON_WORDS) do MARKER_INDEX[w] = i end
+local function MarkerName(word)
+    local i = MARKER_INDEX[word]
+    local native = CLIENT_NAMES and i and _G["RAID_TARGET_" .. i]
+    if type(native) == "string" and native ~= "" then return native end
+    return L[word]
+end
 local ICON_TEX = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_"
 local ROLE_CYCLE = { "auto", "tank", "cc", "kill" }
 local roleChoice = 1
@@ -366,12 +565,12 @@ local function RefreshList()
         local a = assignments[i]
         if a and i <= MAX_LIST then
             if i == MAX_LIST and #assignments > MAX_LIST then
-                fs:SetText("+" .. (#assignments - MAX_LIST + 1) .. " more (/fb assign list)")
+                fs:SetText(L["+%d more (/fb assign list)"]:format(#assignments - MAX_LIST + 1))
             else
-                fs:SetText("|T" .. ICON_TEX .. (a.marker + 1) .. ":14|t  " .. a.name .. "  |cff9d9d9d" .. a.role .. "|r")
+                fs:SetText("|T" .. ICON_TEX .. (a.marker + 1) .. ":14|t  " .. a.name .. "  |cff9d9d9d" .. L[a.role] .. "|r")
             end
         else
-            fs:SetText(i == 1 and "|cff9d9d9dNo assignments.|r" or "")
+            fs:SetText(i == 1 and ("|cff9d9d9d" .. L["No assignments."] .. "|r") or "")
         end
     end
 end
@@ -398,7 +597,35 @@ local function RequestList()
     -- (it was the "Interface action failed because of an AddOn" seen when bots join the instance group)
     local okI, inInstance, kind = pcall(IsInInstance)
     if okI and inInstance and (kind == "pvp" or kind == "arena") then return end
+    -- Not in a fight: the client refuses addon sends there, and a whispered answer arrives as a secret string that no chat filter
+    -- can read, so "ASSIGN|END|0" showed in chat (test4 tank run, 2026-10-30). Asked again when the fight ends.
+    if InCombatLockdown and InCombatLockdown() then Cmd.listAfterCombat = true; return end
     if InGroupQuiet() then
+        -- The hidden request first (add-on whisper or hidden system line, whichever this client takes): nothing reaches chat.
+        local Net = Cmd.ns.Net
+        if Net and (Net.mode == "addon" or Net.mode == "sys") then
+            Net.Request("ASSIGN_REQ", {}, function(fields)
+                if not fields then return end   -- an older server: the next roster change asks again
+                local list = {}
+                for i = 2, #fields do
+                    local marker, name, role = strmatch(fields[i], "^(%d),([^,]+),(%a+)$")
+                    if marker then list[#list + 1] = { marker = tonumber(marker), name = name, role = role } end
+                end
+                Cmd.ApplyAssignments(list)
+            end)
+            return
+        end
+        -- The hidden route is not known for this group yet. The login ping goes out before the first bot joins, as a whisper to
+        -- yourself, and clients from 70658 on never pass that to the server, so it ended "none" and the list fell through to the
+        -- whispered "assign list" below: on 70707 the bot's answer is a secret string no chat filter can read, and "ASSIGN|END|0"
+        -- showed in chat each time a bot joined (test item 1, 2026-10-31). Now the ping goes on the group channel; ask again.
+        if Net and Net.EnsureMode and not Net.ModeKnown() then
+            Net.EnsureMode(function() RequestList() end)
+            return
+        end
+        -- The whispered request is left for a client whose chat filter can read the answer (no secret strings): on one that has
+        -- them the answer lines would show in chat, so without the hidden route the list is not asked for.
+        if issecretvalue ~= nil then return end
         local asker = ListAsker()
         if asker and prefixOk then
             -- from a timer: an addon whisper (the server reads the FBOTS prefix like a whisper), never SendChatMessage
@@ -414,25 +641,33 @@ end
 local function RequestListSoon()
     if C_Timer and C_Timer.After then C_Timer.After(0.5, RequestList) else RequestList() end
 end
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:SetScript("OnEvent", function()
+        if Cmd.listAfterCombat then Cmd.listAfterCombat = false; RequestListSoon() end
+    end)
+end
 
 local function AssignTarget(marker, button)   -- marker 1..8; right-click clears the icon
     if not (UnitExists("target") and UnitIsPlayer("target") and not UnitIsUnit("target", "player")
             and UnitIsFriend("player", "target")) then
-        Print("target one of your bots first, then left-click an icon."); SetStatus("|cffff4040Target a bot first.|r")
+        Print(L["target one of your bots first, then left-click an icon."]); SetStatus("|cffff4040" .. L["Target a bot first."] .. "|r")
         return
     end
     local name = SafeName("target")
-    if not name then SetStatus("|cffff4040Target a bot first.|r"); return end
+    if not name then SetStatus("|cffff4040" .. L["Target a bot first."] .. "|r"); return end
     if button == "RightButton" then
         lastAssign = nil
         GroupOrder("assign clear " .. ICON_WORDS[marker])
-        SetStatus("|cffffff00Cleared " .. ICON_WORDS[marker] .. ", asking the server...|r")
+        SetStatus("|cffffff00" .. L["Cleared %s, asking the server..."]:format(MarkerName(ICON_WORDS[marker])) .. "|r")
     else
         local role = ROLE_CYCLE[roleChoice]
         GroupOrder("assign " .. strlower(name) .. " " .. ICON_WORDS[marker] .. (role ~= "auto" and (" " .. role) or ""))
         lastAssign = { name = name, marker = marker, role = role, at = GetTime and GetTime() or 0 }
-        SetStatus("|cffffff00Sent: " .. name .. " on " .. ICON_WORDS[marker] .. ", waiting for the server...|r")
-        Print("sent: " .. name .. " on " .. ICON_WORDS[marker] .. (role ~= "auto" and (" (" .. role .. ")") or "") .. ", waiting for the server to confirm.")
+        SetStatus("|cffffff00" .. L["Sent: %s on %s, waiting for the server..."]:format(name, MarkerName(ICON_WORDS[marker])) .. "|r")
+        Print(L["sent: %s on %s%s, waiting for the server to confirm."]:format(name, MarkerName(ICON_WORDS[marker]),
+            role ~= "auto" and (" (" .. L[role] .. ")") or ""))
         roleChoice = 1
     end
     RequestListSoon()
@@ -445,29 +680,36 @@ local function ParseAssignLine(msg)
         return
     end
     if strmatch(msg, "^ASSIGN|END|") then
-        assignments, pending = pending, {}
-        RefreshList()
-        if lastAssign then
-            local found
-            for _, a in ipairs(assignments) do
-                if a.marker + 1 == lastAssign.marker and strlower(a.name) == strlower(lastAssign.name) then found = a end
-            end
-            if found then
-                SetStatus("|cff00ff00Confirmed: " .. found.name .. ": " .. found.role .. " on " .. ICON_WORDS[found.marker + 1] .. "|r")
-                Print("confirmed: " .. found.name .. ": " .. found.role .. " on " .. ICON_WORDS[found.marker + 1])
-                lastAssign = nil
-            elseif (GetTime and GetTime() or 0) - lastAssign.at > 4 then
-                SetStatus("|cffff4040The server did not confirm " .. lastAssign.name .. " on " .. ICON_WORDS[lastAssign.marker] .. ".|r")
-                Print("the server did not confirm " .. lastAssign.name .. " on " .. ICON_WORDS[lastAssign.marker] .. " (is it your bot, in your group?).")
-                lastAssign = nil
-            end
+        Cmd.ApplyAssignments(pending)
+        pending = {}
+    end
+end
+
+-- The finished list, from the hidden ASSIGN_REQ answer or the whispered "ASSIGN|...|END" lines.
+-- (Cmd fields, not locals: this file's main chunk is at Lua's 200-local limit.)
+function Cmd.ApplyAssignments(list)
+    assignments = list
+    RefreshList()
+    if lastAssign then
+        local found
+        for _, a in ipairs(assignments) do
+            if a.marker + 1 == lastAssign.marker and strlower(a.name) == strlower(lastAssign.name) then found = a end
         end
-        if printNextList then
-            printNextList = false
-            if #assignments == 0 then Print("no assignments.") end
-            for _, a in ipairs(assignments) do
-                Print(ICON_WORDS[a.marker + 1] .. ": " .. a.name .. " (" .. a.role .. ")")
-            end
+        if found then
+            SetStatus("|cff00ff00" .. L["Confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])) .. "|r")
+            Print(L["confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])))
+            lastAssign = nil
+        elseif (GetTime and GetTime() or 0) - lastAssign.at > 4 then
+            SetStatus("|cffff4040" .. L["The server did not confirm %s on %s."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])) .. "|r")
+            Print(L["the server did not confirm %s on %s (is it your bot, in your group?)."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])))
+            lastAssign = nil
+        end
+    end
+    if printNextList then
+        printNextList = false
+        if #assignments == 0 then Print(L["no assignments."]) end
+        for _, a in ipairs(assignments) do
+            Print(MarkerName(ICON_WORDS[a.marker + 1]) .. ": " .. a.name .. " (" .. L[a.role] .. ")")
         end
     end
 end
@@ -480,6 +722,10 @@ local function ConfirmText(msg, author)
     if type(msg) ~= "string" or type(author) ~= "string" or IsSecret(msg) or IsSecret(author) then return nil end
     local who = strmatch(author, "^[^-]+")
     if not who then return nil end
+    -- The answer to a whisper the player typed himself ("gear", "equip upgrades", "stats") is for him to read: only the
+    -- confirmations of the panel's and the menu's own orders are hidden (Gremloc 11-08: "gear" seemed to answer nothing).
+    local asked = Cmd.typedAt and Cmd.typedAt[who]
+    if asked and Now() - asked < 20 then return nil end
     return strmatch(msg, "^" .. who .. ": (.+)$")
 end
 
@@ -489,7 +735,9 @@ local function WhisperFilter(_, _, msg, author)
     -- /fb chat on: show the bot confirmations ("<Bot>: followed you") and distance replies in chat as well
     if ForeverBotsDB.showChat then return false end
     if ConfirmText(msg, author) then return true end
-    return Now() < distSilentUntil and type(msg) == "string" and strmatch(msg, "^Follow distance %d+ yards$") ~= nil
+    if Now() >= distSilentUntil or type(msg) ~= "string" then return false end
+    -- the server answers in the player's language: English, or the Russian line from Util/BotLocaleRu.cpp (written as bytes)
+    return strmatch(msg, "^Follow distance %d+ yards$") ~= nil or strmatch(msg, "^\208\148\208\184\209\129\209\130\208\176\208\189\209\134\208\184\209\143 \209\129\208\187\208\181\208\180\208\190\208\178\208\176\208\189\208\184\209\143: %d+ \209\143\209\128\208\180%.$") ~= nil
 end
 local function OwnListFilter(_, _, msg, author)
     if msg ~= "assign list" and not (Now() < distSilentUntil and type(msg) == "string" and strmatch(msg, "^distance %d+$")) then
@@ -529,6 +777,20 @@ AddPart("filters", function()
     if not ChatFrame_AddMessageEventFilter then return end
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", WhisperFilter)
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", function(_, _, msg) return type(msg) == "string" and not IsSecret(msg) and msg == "assign list" end)
+    -- A whisper the player sent by hand (his own /w or the chat box, not the panel or the menu): the bot's answer stays visible.
+    local typed = CreateFrame("Frame")
+    typed:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
+    typed:SetScript("OnEvent", function(_, _, msg, target)
+        if type(msg) ~= "string" or type(target) ~= "string" or IsSecret(msg) or IsSecret(target) or msg == "assign list" then return end
+        local who = strmatch(target, "^[^-]+")
+        if not who then return end
+        local own = Cmd.ownSent[who]
+        if own and own.text == msg and Now() - own.at < 5 then
+            Cmd.ownSent[who] = nil
+            return
+        end
+        Cmd.typedAt[who] = Now()
+    end)
     for _, ev in ipairs({ "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER" }) do
         ChatFrame_AddMessageEventFilter(ev, OwnListFilter)
     end
@@ -538,7 +800,7 @@ local whisperFrame = CreateFrame("Frame")
 whisperFrame:RegisterEvent("CHAT_MSG_WHISPER")
 whisperFrame:SetScript("OnEvent", function(_, _, msg)
     if IsSecret(msg) then
-        if lastAssign then SetStatus("|cffff8000The server answered but the client hid the reply (restricted chat).|r") end
+        if lastAssign then SetStatus("|cffff8000" .. L["The server answered but the client hid the reply (restricted chat)."] .. "|r") end
         return
     end
     if IsAssignMsg(msg) then ParseAssignLine(msg) end
@@ -607,27 +869,43 @@ orderMacroFrame:SetScript("OnEvent", function() RefreshOrderMacros() end)
 -- click hidden secure buttons that run the same "/party <order>" or "/raid <order>" line as the window buttons, so they work in
 -- combat. Nothing here touches the chat edit box or runs from a timer.
 local KEY_ORDERS = {
-    { "Attack", "attack", "Attack (your target)" },
-    { "Pull", "pull", "Pull" },
-    { "PullBack", "pull back", "Pull back" },
-    { "Follow", "follow", "Follow" },
-    { "Stay", "stay", "Stay" },
-    { "Resume", "resume", "Resume" },
-    { "Stop", "disengage", "Stop attacking" },
-    { "Flee", "flee", "Flee" },
-    { "Come", "come", "Come" },
-    { "FallBack", "fallback", "Fall back" },
-    { "AttackMouseover", "attack", "Attack (mouseover)", "/target [@mouseover,harm,nodead]\n" },
+    { "Attack", "attack", L["Attack (your target)"] },
+    { "Pull", "pull", L["Pull"] },
+    { "PullBack", "pull back", L["Pull back"] },
+    { "Follow", "follow", L["Follow"] },
+    { "Stay", "stay", L["Stay"] },
+    { "Resume", "resume", L["Resume"] },
+    { "Stop", "disengage", L["Stop attacking"] },
+    { "Flee", "flee", L["Flee"] },
+    { "Come", "come", L["Come"] },
+    { "FallBack", "fallback", L["Fall back"] },
+    { "AttackMouseover", "attack", L["Attack (mouseover)"], "/target [@mouseover,harm,nodead]\n" },
+    -- The three stances, one key each (a key works in combat too; the panel's stance button follows it).
+    { "Passive", "passive", L["Stance: Passive (attack nothing)"], nil, "nofight" },
+    { "Defensive", "defensive", L["Stance: Defensive"], nil, "defensive" },
+    { "Aggressive", "aggressive", L["Stance: Aggressive"], nil, "aggressive" },
+    -- Your target goes on (or, pressed again on it, off) the list of mobs your bots never attack; the second key empties the list.
+    { "IgnoreTarget", "ignore target", L["Ignore my target (again: undo)"] },
+    { "IgnoreClear", "ignore clear", L["Clear ignored mobs"] },
 }
 BINDING_HEADER_FOREVERBOTS = "WoW Forever Bots"
-BINDING_NAME_FOREVERBOTS_TOGGLE_WINDOW = "Show / hide the bot window"
-BINDING_NAME_FOREVERBOTS_TOGGLE_STANCE = "Toggle stance (Passive / Aggressive)"
+BINDING_NAME_FOREVERBOTS_TOGGLE_WINDOW = L["Show / hide the bot window"]
+BINDING_NAME_FOREVERBOTS_TOGGLE_STANCE = L["Next stance (Defensive / Aggressive / Passive)"]
 for _, k in ipairs(KEY_ORDERS) do
     local name = "ForeverBotsKey" .. k[1]
     local b = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate")
     b:RegisterForClicks("AnyUp", "AnyDown")
     b.orderText = k[2]
     b.macroPre = k[4]   -- optional macro lines before the order (Attack mouseover targets the unit under the cursor first)
+    if k[5] then
+        -- A stance key: the panel shows it and re-sends it to bots that join (saved like a pick on the button). Plain Lua after the
+        -- secure click, nothing protected, so it runs in combat too.
+        local key = k[5]
+        b:HookScript("OnClick", function()
+            if ForeverBotsDB then ForeverBotsDB.stance = key end
+            RefreshStance()
+        end)
+    end
     secureOrders[#secureOrders + 1] = b
     _G["BINDING_NAME_CLICK " .. name .. ":LeftButton"] = k[3]
 end
@@ -646,7 +924,7 @@ do
             end
         ]])
         UI.keyWindow = b
-        _G["BINDING_NAME_CLICK ForeverBotsKeyWindow:LeftButton"] = "Show / hide the bot window (works in combat)"
+        _G["BINDING_NAME_CLICK ForeverBotsKeyWindow:LeftButton"] = L["Show / hide the bot window (works in combat)"]
     end
 end
 
@@ -658,7 +936,7 @@ do
     b:RegisterForClicks("AnyUp", "AnyDown")
     b:SetAttribute("type", "macro")
     b:SetAttribute("macrotext", ".playerbot lazy")
-    _G["BINDING_NAME_CLICK ForeverBotsKeyLazy:LeftButton"] = "Lazy lock (warlock: next spell on your target)"
+    _G["BINDING_NAME_CLICK ForeverBotsKeyLazy:LeftButton"] = L["Lazy lock (warlock: next spell on your target)"]
 end
 
 -- Duplicate macros: a key bound to a macro ("bind ALT-E MACRO Corruption" in bindings-cache.wtf) runs the first macro of that
@@ -694,11 +972,11 @@ local function RemoveDuplicateMacros()
     local droppedA, differA = Scan(1, numAccount or 0)
     local droppedC, differC = Scan(charFirst, numChar or 0)
     if droppedA + droppedC > 0 then
-        Print("removed " .. (droppedA + droppedC) .. " duplicate macro(s) (same name and text as another), so macro keys stay on the same macro.")
+        Print(L["removed %d duplicate macro(s) (same name and text as another), so macro keys stay on the same macro."]:format(droppedA + droppedC))
     end
     for _, differ in ipairs({ differA, differC }) do
         for name in pairs(differ) do
-            Print("two macros are named |cffffd100" .. name .. "|r but differ; a key bound to that name uses the first. Rename or delete one in /macro.")
+            Print(L["two macros are named %s but differ; a key bound to that name uses the first. Rename or delete one in /macro."]:format("|cffffd100" .. name .. "|r"))
         end
     end
     Step("")
@@ -719,6 +997,7 @@ end)
 local TEXDIR = "Interface\\AddOns\\" .. tostring(ADDON) .. "\\Textures\\"
 local FONT_LABEL = "Fonts\\FRIZQT__.TTF"
 local ROW_NORMAL, ROW_GOLD, ROW_BLUE, ROW_RED = 0, 4, 5, 6   -- resting look, chosen (kept highlighted), blue text, red text
+-- row 7: green text (the stance button's Passive)
 
 -- o.order: a secure order button (runs "/party <order>" or "/raid <order>", also in combat). Same template and font as the
 -- "Raid Info" button of the client's Raid window.
@@ -738,6 +1017,7 @@ local function MakeSkinButton(parent, text, w, h, o)
         if row == ROW_GOLD then self:LockHighlight() else self:UnlockHighlight() end
         if row == ROW_BLUE then self.fbTint = { 0.62, 0.8, 1 }
         elseif row == ROW_RED then self.fbTint = { 1, 0.45, 0.35 }
+        elseif row == 7 then self.fbTint = { 0.45, 1, 0.45 }
         else
             self.fbTint = nil
             local fs = self.GetFontString and self:GetFontString()
@@ -769,8 +1049,8 @@ local GEARS = {
     { "t1", "T1" }, { "t2", "T2" }, { "t3", "T3" },
 }
 local GEAR_NAME = {
-    match = "Match my gear", best = "Best for their level", bis = "Best in slot",
-    t1 = "Tier 1", t2 = "Tier 2", t3 = "Tier 3",
+    match = L["Match my gear"], best = L["Best for their level"], bis = L["Best in slot"],
+    t1 = L["Tier 1"], t2 = L["Tier 2"], t3 = L["Tier 3"],
 }
 local gearSent = "match"           -- what the server holds for this group (its default until we say otherwise)
 
@@ -799,7 +1079,7 @@ end
 local gearBtn
 local function SetGearChoice(g)
     ForeverBotsDB.gear = g
-    if gearBtn then gearBtn:SetText("Gear: " .. (GEAR_NAME[g] and (g == "match" and "Match" or g == "best" and "Best" or g == "bis" and "BiS" or strupper(g)) or g)) end
+    if gearBtn then gearBtn:SetText(L["short:Gear: %s"]:format(GEAR_NAME[g] and (g == "match" and L["Match"] or g == "best" and L["Best"] or g == "bis" and "BiS" or strupper(g)) or g)) end
     SendGear()
 end
 
@@ -849,15 +1129,70 @@ local function QuickParty()
     local size = QuickPartySize()
     local free = size - members
     if free <= 0 then
-        Print("quick party: your group is full (" .. members .. " of " .. size .. ").")
+        Print(L["quick party: your group is full (%d of %d)."]:format(members, size))
         return
     end
-    for i, q in ipairs(QuickPartyRoster(size, free)) do
-        if i == 1 or not (C_Timer and C_Timer.After) then
-            AddBotWithGear(q[1], q[2])
-        else
-            C_Timer.After(0.4 * (i - 1), function() AddBotWithGear(q[1], q[2]) end)   -- a moment apart, as one chat line each
+    -- The first bot is said straight from the click and makes the group; the rest follow a moment apart from a timer, where
+    -- chat is blocked, so they run under Auto() and go out one by one as addon messages (ServerCommand, Cmd.Queue).
+    local roster = QuickPartyRoster(size, free)
+    AddBotWithGear(roster[1][1], roster[1][2])
+    if roster[2] and C_Timer and C_Timer.After then
+        C_Timer.After(0.4, function()
+            Auto(function()
+                for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
+            end)
+        end)
+    else
+        for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
+    end
+end
+
+-- Dungeon finder (".bot dungeon"): pick a dungeon, or any for your level; the server fills the missing roles with your bots at your level
+-- and puts the group inside the dungeon's door. "leave" takes you back to where you queued. The table is the server's default list
+-- (Playerbot.Lfg.BotGroups.Activities): the word the server knows the dungeon by, its name, its level range, its party size.
+-- Kept on UI, not as file locals: the client's Lua allows a function only 200 locals.
+UI.DUNGEONS = {
+    { "rfc", "Ragefire Chasm", 13, 18 }, { "wc", "Wailing Caverns", 15, 24 }, { "vc", "Deadmines", 17, 26 },
+    { "sfk", "Shadowfang Keep", 20, 30 }, { "bfd", "Blackfathom Deeps", 24, 32 }, { "stocks", "Stormwind Stockades", 24, 32 },
+    { "gnomer", "Gnomeregan", 29, 38 }, { "rfk", "Razorfen Kraul", 29, 38 }, { "smgy", "Scarlet Monastery: Graveyard", 30, 38 },
+    { "smlib", "Scarlet Monastery: Library", 33, 41 }, { "smarm", "Scarlet Monastery: Armory", 36, 44 },
+    { "smcath", "Scarlet Monastery: Cathedral", 38, 46 }, { "rfd", "Razorfen Downs", 37, 46 }, { "ulda", "Uldaman", 41, 51 },
+    { "zf", "Zul'Farrak", 44, 54 }, { "mara", "Maraudon", 46, 55 }, { "st", "Sunken Temple", 50, 60 },
+    { "brd", "Blackrock Depths", 52, 60 }, { "dme", "Dire Maul: East", 54, 60 }, { "lbrs", "Lower Blackrock Spire", 55, 60 },
+    { "dmw", "Dire Maul: West", 56, 60 }, { "dmn", "Dire Maul: North", 56, 60 }, { "strat", "Stratholme", 58, 60 },
+    { "scholo", "Scholomance", 58, 60 }, { "ubrs", "Upper Blackrock Spire", 59, 60, 10 },
+}
+
+-- The 5-player dungeons for your level, as the server picks "any": those whose range holds it, else the nearest.
+function UI.DungeonsForLevel(level)
+    local fit, nearest, best = {}, {}, nil
+    for _, d in ipairs(UI.DUNGEONS) do
+        if not d[5] then
+            if level >= d[3] and level <= d[4] then
+                fit[#fit + 1] = d
+            else
+                local off = (level < d[3]) and (d[3] - level) or (level - d[4])
+                if not best or off < best then best = off; nearest = {} end
+                if off == best then nearest[#nearest + 1] = d end
+            end
         end
+    end
+    return (#fit > 0) and fit or nearest
+end
+
+-- Queues for `word` (a dungeon's word, "any", "leave", "cancel" or "list"), with your own role when given. The gear choice goes
+-- first, as for Quick party. From the Group finder tab the line goes as a hidden add-on message (Cmd.Queue), typed it is said.
+function UI.DungeonQueue(word, role, hidden)
+    local line = ".bot dungeon " .. word .. ((role and role ~= "") and (" " .. role) or "")
+    local say = hidden and Cmd.Queue or ServerCommand
+    if word == "leave" or word == "cancel" or word == "list" then
+        say(line)
+        return
+    end
+    local sent = SendGear()
+    say(line)
+    if not sent and C_Timer and C_Timer.After then
+        C_Timer.After(2.5, function() Auto(SendGear) end)
     end
 end
 
@@ -884,11 +1219,11 @@ end
 
 local function RaidReady()
     if InCombatLockdown and InCombatLockdown() then
-        Print("raid ready: not in combat.")
+        Print(L["raid ready: not in combat."])
         return
     end
     if not (C_Timer and C_Timer.After) then
-        Print("raid ready: this client has no timers; use /fb call all.")
+        Print(L["raid ready: this client has no timers; use /fb call all."])
         return
     end
     raidReadyRun = raidReadyRun + 1
@@ -902,7 +1237,7 @@ local function RaidReady()
 
     local function ReadyCheck()
         local ok = pcall(function() DoReadyCheck() end)
-        Print(ok and "raid ready: ready check sent." or "raid ready: done (only the leader can start a ready check).")
+        Print(ok and L["raid ready: ready check sent."] or L["raid ready: done (only the leader can start a ready check)."])
     end
     local function Orders(n)
         GroupOrder("resume")
@@ -915,12 +1250,12 @@ local function RaidReady()
                 GroupOrder("set main tank")
             end
         end)
-        Print("raid ready: " .. n .. " in the group, formation set. Ready check in 20 seconds.")
+        Print(L["raid ready: %d in the group, formation set. Ready check in 20 seconds."]:format(n))
         After(20, ReadyCheck)
     end
     local function Finish(n)
         if n <= 1 then
-            Print("raid ready: no bots joined. Save a group with /fb save all first.")
+            Print(L["raid ready: no bots joined. Save a group with /fb save all first."])
             return
         end
         if n > 5 and not IsRaidNow() then
@@ -935,11 +1270,11 @@ local function RaidReady()
     -- Already in a group: it is the group that gets the orders and the ready check. The saved-roster call replaces the group with the
     -- saved raid (a 10-man in a dungeon was dismissed), so it only runs when you are alone.
     if MemberCount() > 1 then
-        Print("raid ready: using your current group (" .. MemberCount() .. ").")
+        Print(L["raid ready: using your current group (%d)."]:format(MemberCount()))
         Finish(MemberCount())
         return
     end
-    Print("raid ready: calling your saved bots...")
+    Print(L["raid ready: calling your saved bots..."])
     ServerCommand(".bot summon saved")
     local lastN, stable, waited = -1, 0, 0
     local function Poll()
@@ -960,7 +1295,8 @@ local LAYOUT = {
     FOOTER = 38,
     TAB_STEP = 44,    -- side tabs down the right edge
 }
-local TAB_DEFS = { { "orders", "Orders" }, { "bots", "Bots" }, { "form", "Form" }, { "marks", "Marks" } }
+local TAB_DEFS = { { "orders", L["Orders"] }, { "bots", L["Bots"] }, { "form", L["Form"] }, { "marks", L["Marks"] }, { "finder", L["Group finder"] },
+                   { "place", L["Positions"] } }   -- no World bots tab (0.6.13, owner decision 2026-11-04: world bots are set in the launcher only)
 local frameTabs, framePanes = {}, {}
 local emptyFS, ordersGrid, footerFS
 local nativeFrame = false
@@ -1012,7 +1348,7 @@ local function ShowTab(i)
             for n, t in pairs(frameTabs) do t:SetChecked(n == shownTab) end
             if not tabWaitSaid then
                 tabWaitSaid = true
-                Print("that tab opens when combat ends (the client keeps the order buttons fixed in a fight).")
+                Print(L["that tab opens when combat ends (the client keeps the order buttons fixed in a fight)."])
             end
             return
         end
@@ -1034,7 +1370,7 @@ local function UpdateEmpty()
     local grouped = InGroupQuiet() and true or false
     if grouped then emptyFS:Hide() else emptyFS:Show() end
     ordersGrid:SetAlpha(grouped and 1 or 0.45)
-    if footerFS then footerFS:SetText((grouped and ((MemberCount() - 1) .. " bots") or "No bots") .. " - " .. (StanceIsAggressive() and "Aggr." or "Passive")) end
+    if footerFS then footerFS:SetText((grouped and L["%d bots"]:format(MemberCount() - 1) or L["No bots"]) .. " - " .. StanceLabel(true)) end
 end
 
 -- The client's own window: the same portrait frame its Raid and Looking For Group windows use. If this client has no such
@@ -1063,7 +1399,7 @@ local ROLE_ATLAS = {
     dps = { "UI-LFG-RoleIcon-DPS", "groupfinder-icon-role-large-dps" },
 }
 local ROLE_TEXCOORDS = { tank = { 0, 19 / 64, 22 / 64, 41 / 64 }, healer = { 20 / 64, 39 / 64, 1 / 64, 20 / 64 }, dps = { 20 / 64, 39 / 64, 22 / 64, 41 / 64 } }
-local ROLE_NAME = { tank = "Tank", healer = "Healer", dps = "Damage" }
+local ROLE_NAME = { tank = L["Tank"], healer = L["Healer"], dps = L["Damage"] }
 local function SetRoleTexture(tex, role)
     for _, atlas in ipairs(ROLE_ATLAS[role]) do
         local info = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas)
@@ -1110,36 +1446,40 @@ function UI.BuildOrders()
     local Btn, Section, Hint, NewPane = UI.Btn, UI.Section, UI.Hint, UI.NewPane
     ---------------------------------------------------------------------------------------------- orders
     local orders = NewPane()
-    emptyFS = Hint(orders, 0, "|cffc8a050No bots with you yet: see the Bots tab.|r")
+    emptyFS = Hint(orders, 0, "|cffc8a050" .. L["No bots with you yet: see the Bots tab."] .. "|r")
     ordersGrid = CreateFrame("Frame", nil, orders)
     ordersGrid:SetAllPoints(orders)
     local OG = {
         -- word, order, tooltip title, tooltip text
-        { "Follow", "follow", "Follow", "Bots follow you and only defend. They do not advance or pull until you say Attack, Pull or Resume." },
-        { "Stay", "stay", "Stay", "Bots hold where they stand." },
-        { "Stop", "disengage", "Stop", "Bots stop attacking and go back to normal." },
-        { "Attack", "attack", "Attack", "Bots attack your target." },
-        { "Pull", "pull", "Pull", "Your tank bots open on your target; the rest join once it is engaged." },
-        { "Pull back", "pull back", "Pull back", "The main tank bot opens on your target from range, runs back to the rally point (or where it stood) and tanks it there, so nothing else aggros." },
-        { "Come", "come", "Come", "Bots teleport to you." },
-        { "Release", "release", "Release", "After a wipe: every dead bot releases, runs back to its corpse and rejoins you. Living bots ignore it." },
-        { "Fall back", "fallback", "Fall back", "Every bot drops the fight and runs to the rally point, then re-forms there. It fights only what follows until you say Attack, Pull or Resume." },
+        { L["short:Follow"], "follow", L["Follow"], L["Bots follow you and only defend. They do not advance or pull until you say Attack, Pull or Resume."] },
+        { L["Stay"], "stay", L["Stay"], L["Bots hold where they stand."] },
+        { L["Stop"], "disengage", L["Stop"], L["Bots stop attacking and go back to normal."] },
+        { L["Attack"], "attack", L["Attack"], L["Bots attack your target."] },
+        { L["Pull"], "pull", L["Pull"], L["Your tank bots open on your target; the rest join once it is engaged."] },
+        { L["short:Pull back"], "pull back", L["Pull back"], L["The main tank bot opens on your target from range, runs back to the rally point (or where it stood) and tanks it there, so nothing else aggros."] },
+        { L["Come"], "come", L["Come"], L["Bots teleport to you."] },
+        { L["short:Release"], "release", L["Release"], L["After a wipe: every dead bot releases, runs back to its corpse and rejoins you. Living bots ignore it."] },
+        { L["short:Fall back"], "fallback", L["Fall back"], L["Every bot drops the fight and runs to the rally point, then re-forms there. It fights only what follows until you say Attack, Pull or Resume."] },
     }
     for i, d in ipairs(OG) do
         local b = Btn(ordersGrid, ((i - 1) % 3) * 81, 18 + math.floor((i - 1) / 3) * 32, 76, 26, d[1], { order = d[2], size = 11 })
         Tip(b, d[3], d[4])
     end
-    local rally = Btn(ordersGrid, 0, 18 + 3 * 32, 76, 26, "Set rally", { order = "rally here", size = 11 })
-    Tip(rally, "Set rally", "Sets the rally point to where you stand (used by Fall back and Pull back).")
-    -- Stance: Passive (blue word) or Aggressive (red word), sent to the group on every pick and again to every bot that joins.
+    local rally = Btn(ordersGrid, 0, 18 + 3 * 32, 76, 26, L["short:Set rally"], { order = "rally here", size = 11 })
+    Tip(rally, L["Set rally"], L["Sets the rally point to where you stand (used by Fall back and Pull back)."])
+    -- Stance: Defensive (blue word), Aggressive (red) or Passive (green); a click steps on, a right-click back. Sent to the group on
+    -- every pick and again to every bot that joins.
     stanceBtn = Btn(ordersGrid, 81, 18 + 3 * 32, 157, 26, StanceLabel(), { size = 11 })
-    stanceBtn:SetScript("OnClick", function()
-        ForeverBotsDB.stance = StanceIsAggressive() and "passive" or "aggressive"
-        GroupOrder(ForeverBotsDB.stance)
-        RefreshStance()
-    end)
-    Tip(stanceBtn, "Stance", "Passive (the start setting): bots start nothing, fight only what you pull or what attacks the group, and come back to follow you. Aggressive: they also attack anything hostile within about 10 yards of you. Shows what you last sent; it is sent again to every bot that joins.")
+    stanceBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    stanceBtn:SetScript("OnClick", function(_, button) Cmd.SetStance(button == "RightButton" and -1 or 1) end)
+    Tip(stanceBtn, L["Stance"], L["Click for the next stance, right-click for the one before.\nDefensive (the start setting): bots start nothing, fight only what you pull or what attacks the group, and come back to follow you.\nAggressive: they also attack anything hostile within about 10 yards of you.\nPassive: they attack nothing at all, not even to defend you or themselves; healers still heal and everyone still buffs. For taming a beast, a sheep that must not break or a mob that must stay alive.\nShows what you last sent; it is sent again to every bot that joins."])
     RefreshStance()
+    -- Ignore target: your target goes on the list of mobs your bots never attack, even when it attacks you (a beast you tame); the
+    -- same button on it again takes it off. Clear empties the list. Secure order buttons, so they work in combat.
+    local ign = Btn(ordersGrid, 0, 18 + 4 * 32, 157, 26, L["Ignore target"], { order = "ignore target", size = 11 })
+    Tip(ign, L["Ignore target"], L["Your bots will not attack the mob you have targeted, even if it attacks you or them, until you press this again on it (or Clear). They fight every other mob as usual. Area spells wait while it is near. Forgotten after 30 minutes."])
+    local ignClear = Btn(ordersGrid, 162, 18 + 4 * 32, 76, 26, L["short:Clear ignored"], { order = "ignore clear", size = 11 })
+    Tip(ignClear, L["Clear ignored"], L["Your bots may attack every mob again."])
 
     -- Two on/off check boxes at the bottom (the client's own check box). Area spells: on (the server's start setting) the bots use
     -- them as their rotations call for; off, nothing that hits more than one enemy (server: "aoe_all on|off", whispered to one of
@@ -1169,17 +1509,17 @@ function UI.BuildOrders()
         end)
         cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    Switch(LAYOUT.PANE_H - 56, "aoeOn", true, "Area spells",
-        "The bots use their area spells as their rotations call for.",
-        "No spell that hits more than one enemy (Blizzard, Consecration, Multi-Shot, Cleave...): keeps a sheep or sap safe.",
+    Switch(LAYOUT.PANE_H - 56, "aoeOn", true, L["Area spells"],
+        L["The bots use their area spells as their rotations call for."],
+        L["No spell that hits more than one enemy (Blizzard, Consecration, Multi-Shot, Cleave...): keeps a sheep or sap safe."],
         function(on)
             local asker = ListAsker()
             if asker then SendChatMessage("aoe_all " .. (on and "on" or "off"), "WHISPER", nil, asker)
-            else Print("add a bot first: the area-spell setting goes to your group.") end
+            else Print(L["add a bot first: the area-spell setting goes to your group."]) end
         end)
-    Switch(LAYOUT.PANE_H - 28, "cc", true, "Crowd-control marked mobs",
-        "The bots crowd-control the mobs you mark (give a bot and a mob the same icon, see Marks).",
-        "The bots leave marked mobs alone: no crowd control.",
+    Switch(LAYOUT.PANE_H - 28, "cc", true, L["Crowd-control marked mobs"],
+        L["The bots crowd-control the mobs you mark (give a bot and a mob the same icon, see Marks)."],
+        L["The bots leave marked mobs alone: no crowd control."],
         function(on) GroupOrder(on and "crowdcontrol on" or "crowdcontrol off") end)
 end
 
@@ -1187,7 +1527,8 @@ function UI.BuildBots()
     local Btn, Section, Hint, NewPane = UI.Btn, UI.Section, UI.Hint, UI.NewPane
     ---------------------------------------------------------------------------------------------- bots
     local botsPane = NewPane()
-    Section(botsPane, 0, "Add a bot")
+    UI.botsPane = botsPane
+    Section(botsPane, 0, L["Add a bot"])
     -- Every class for both factions: Forever has Dwarf Shamans for the Alliance and Undead Paladins for the Horde.
     local shown = CLASSES
     local selFS = botsPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1203,25 +1544,17 @@ function UI.BuildBots()
         local tex = rb:CreateTexture(nil, "ARTWORK")
         tex:SetAllPoints()
         rb.fbTex = tex
-        -- the small check box at the bottom left of the round icon, as in the Looking For Group window's role row
-        local check = CreateFrame("CheckButton", nil, rb, "UICheckButtonTemplate")
-        check:SetSize(22, 22)
-        check:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", -6, -8)
-        check:EnableMouse(false)
-        check:SetChecked(false)
-        rb.fbCheck = check
+        -- just the role icon, no check box under it (0.6.15, owner decision 2026-11-04): one click on the icon adds the bot
         rb:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight", "ADD")
         rb:SetScript("OnClick", function(self)
             local class = shown[selected]
             if not (class and self.fbRole) then return end
             AddBotWithGear(class.key, self.fbRole)
-            check:SetChecked(true)
-            if C_Timer and C_Timer.After then C_Timer.After(0.8, function() check:SetChecked(false) end) end
         end)
         rb:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Add a " .. (self.fbRole and ROLE_NAME[self.fbRole] or "") .. " bot")
-            GameTooltip:AddLine("A new bot joins you at your level, wearing the gear chosen below.", 1, 1, 1, true)
+            GameTooltip:SetText(L["Add a %s bot"]:format(self.fbRole and ROLE_NAME[self.fbRole] or ""))
+            GameTooltip:AddLine(L["A new bot joins you at your level, wearing the gear chosen below."], 1, 1, 1, true)
             GameTooltip:Show()
         end)
         rb:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1255,16 +1588,16 @@ function UI.BuildBots()
         cb:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(ClassColor(class.token) .. class.label .. "|r")
-            GameTooltip:AddLine("Pick the class, then a role below.", 1, 1, 1, true)
+            GameTooltip:AddLine(L["Pick the class, then a role below."], 1, 1, 1, true)
             GameTooltip:Show()
         end)
         cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
         classBtns[i] = cb
     end
     SelectClass(1)
-    local quick = Btn(botsPane, 0, 106, 117, 24, "Quick party", {})
+    local quick = Btn(botsPane, 0, 106, 117, 24, L["Quick party"], {})
     quick:SetScript("OnClick", QuickParty)
-    Tip(quick, "Quick party", "Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid.")
+    Tip(quick, L["Quick party"], L["Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid."])
     gearBtn = Btn(botsPane, 121, 106, 117, 24, "", {})
     gearBtn:SetScript("OnClick", function()
         local cur = ForeverBotsDB.gear or "match"
@@ -1275,20 +1608,23 @@ function UI.BuildBots()
     end)
     gearBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Gear: " .. (GEAR_NAME[ForeverBotsDB.gear or "match"] or "?"))
-        GameTooltip:AddLine("The gear the next bots wear. Click to go to the next choice: Match, Best, BiS, T1, T2, T3.", 1, 1, 1, true)
+        GameTooltip:SetText(L["Gear: %s"]:format(GEAR_NAME[ForeverBotsDB.gear or "match"] or "?"))
+        GameTooltip:AddLine(L["The gear the next bots wear. Click to go to the next choice: Match, Best, BiS, T1, T2, T3."], 1, 1, 1, true)
         GameTooltip:Show()
     end)
     gearBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     SetGearChoice(GEAR_NAME[ForeverBotsDB.gear or ""] and ForeverBotsDB.gear or "match")
 
-    Section(botsPane, 142, "Your saved bots")
+    Section(botsPane, 142, L["Your saved bots"])
     local SV = {
-        { "Save group", 0, 166, "Puts every bot with you on your saved list.", function() ServerCommand(".bot save all") end },
-        { "Unsave all", 1, 166, "Empties your saved list.", function() ServerCommand(".bot unsave all") end },
-        { "List", 0, 194, "Lists your bots in chat (saved ones are marked).", function() ServerCommand(".bot list") end },
-        { "Regear all", 1, 194, "Re-rolls the gear of your saved bots so they do not all wear the same pieces. Better pieces they already wear stay.", function() ServerCommand(".bot regear all") end },
-        { "Delete target", 0, 222, "Deletes the targeted bot's character for good (asks first).", DeleteTarget },
+        { L["Save group"], 0, 166, L["Puts every bot with you on your saved list."], function() ServerCommand(".bot save all") end },
+        { L["Unsave all"], 1, 166, L["Empties your saved list."], function() ServerCommand(".bot unsave all") end },
+        { L["List"], 0, 194, L["Lists your bots in chat (saved ones are marked)."], function() ServerCommand(".bot list") end },
+        { L["Regear all"], 1, 194, L["Re-rolls the gear of your saved bots so they do not all wear the same pieces. Better pieces they already wear stay."], function() ServerCommand(".bot regear all") end },
+        { L["Delete target"], 0, 222, L["Deletes the targeted bot's character for good (asks first)."], DeleteTarget },
+        { L["Manage bots"], 1, 222, L["Opens the bot manager: every bot you own, online or not, with its details and buttons for it (/fb bots)."], function()
+            if Cmd.ns.Windows then Cmd.ns.Windows.Toggle() end
+        end },
     }
     for _, d in ipairs(SV) do
         local b = Btn(botsPane, d[2] * 121, d[3], 117, 24, d[1], {})
@@ -1305,12 +1641,12 @@ function UI.BuildForm()
     local function Lit(map, key)
         for k, b in pairs(map) do b:FBSetRow(k == key and ROW_GOLD or ROW_NORMAL) end
     end
-    Section(formPane, 0, "Shape")
+    Section(formPane, 0, L["Shape"])
     local SH = {
-        { "circle", "Circle", "Out of combat the bots stand in a ring round you." },
-        { "arrow", "Arrow", "Out of combat the bots form an arrow pointing the way you face." },
-        { "line", "Line", "Out of combat the bots line up abreast behind you." },
-        { "none", "None", "The plain follow behind you." },
+        { "circle", L["Circle"], L["Out of combat the bots stand in a ring round you."] },
+        { "arrow", L["Arrow"], L["Out of combat the bots form an arrow pointing the way you face."] },
+        { "line", L["Line"], L["Out of combat the bots line up abreast behind you."] },
+        { "none", L["None"], L["The plain follow behind you."] },
     }
     for i, d in ipairs(SH) do
         local b = Btn(formPane, (i - 1) * 60, 24, 58, 24, d[2], { order = "formation " .. d[1], size = 11 })
@@ -1318,21 +1654,21 @@ function UI.BuildForm()
         Tip(b, d[2], d[3])
         formBtns[d[1]] = b
     end
-    Section(formPane, 62, "Spacing")
+    Section(formPane, 62, L["Spacing"])
     local SP = {
-        { "tight", "Tight", "About 2.5 yards between bots." },
-        { "close", "Close", "About 4 yards between bots (the default)." },
-        { "spread", "Spread", "About 8 yards between bots." },
+        { "tight", L["Tight"], L["About 2.5 yards between bots."] },
+        { "close", L["Close"], L["About 4 yards between bots (the default)."] },
+        { "spread", L["Spread"], L["About 8 yards between bots."] },
     }
     for i, d in ipairs(SP) do
         local b = Btn(formPane, (i - 1) * 81, 86, 76, 24, d[2], { order = "spacing " .. d[1], size = 11 })
         b:HookScript("PostClick", function() ForeverBotsDB.space = d[1]; Lit(spaceBtns, d[1]) end)
-        Tip(b, d[2] .. " spacing", d[3])
+        Tip(b, L["%s spacing"]:format(d[2]), d[3])
         spaceBtns[d[1]] = b
     end
     Lit(formBtns, ForeverBotsDB.form)
     Lit(spaceBtns, ForeverBotsDB.space)
-    Section(formPane, 124, "Follow distance")
+    Section(formPane, 124, L["Follow distance"])
     local distMinus = Btn(formPane, 70, 148, 28, 24, "-", { size = 13 })
     distMinus:SetScript("OnClick", function() StepDistance(-1) end)
     distText = formPane:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -1341,8 +1677,8 @@ function UI.BuildForm()
     distText:SetJustifyH("CENTER")
     local distPlus = Btn(formPane, 140, 148, 28, 24, "+", { size = 13 })
     distPlus:SetScript("OnClick", function() StepDistance(1) end)
-    Tip(distMinus, "Follow distance", "How far the bots follow you out of combat, 2 to 20 yards. Also sets the formation spacing.")
-    Tip(distPlus, "Follow distance", "How far the bots follow you out of combat, 2 to 20 yards. Also sets the formation spacing.")
+    Tip(distMinus, L["Follow distance"], L["How far the bots follow you out of combat, 2 to 20 yards. Also sets the formation spacing."])
+    Tip(distPlus, L["Follow distance"], L["How far the bots follow you out of combat, 2 to 20 yards. Also sets the formation spacing."])
     ShowDistance()
 end
 
@@ -1350,8 +1686,8 @@ function UI.BuildMarks()
     local Btn, Section, Hint, NewPane = UI.Btn, UI.Section, UI.Hint, UI.NewPane
     ---------------------------------------------------------------------------------------------- marks
     local marksPane = NewPane()
-    Section(marksPane, 0, "Assign a bot to an icon")
-    Hint(marksPane, 24, "Target a bot, then click an icon.")
+    Section(marksPane, 0, L["Assign a bot to an icon"])
+    Hint(marksPane, 24, L["Target a bot, then click an icon."])
     statusFS = marksPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     for i = 1, 8 do
         local ib = CreateFrame("Button", nil, marksPane)
@@ -1368,29 +1704,29 @@ function UI.BuildMarks()
         ib:SetScript("OnClick", function(_, button) AssignTarget(i, button) end)
         ib:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(ICON_WORDS[i])
-            GameTooltip:AddLine("Click: assign the targeted bot", 1, 1, 1)
-            GameTooltip:AddLine("Right-click: clear this icon", 1, 1, 1)
+            GameTooltip:SetText(MarkerName(ICON_WORDS[i]))
+            GameTooltip:AddLine(L["Click: assign the targeted bot"], 1, 1, 1)
+            GameTooltip:AddLine(L["Right-click: clear this icon"], 1, 1, 1)
             GameTooltip:Show()
         end)
         ib:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
     local roleBtn
-    roleBtn = Btn(marksPane, 0, 76, 76, 24, "Role: auto", {})
+    roleBtn = Btn(marksPane, 0, 76, 76, 24, L["Role: %s"]:format(L["auto"]), {})
     roleBtn:SetScript("OnClick", function()
         roleChoice = roleChoice % #ROLE_CYCLE + 1
-        roleBtn:SetText("Role: " .. ROLE_CYCLE[roleChoice])
+        roleBtn:SetText(L["Role: %s"]:format(L[ROLE_CYCLE[roleChoice]]))
     end)
-    Tip(roleBtn, "Role", "auto: a tank bot tanks the mob with that icon, casters crowd-control it until a skull goes on, the rest kill it first. Click to force tank, cc or kill for the next assignment.")
-    local clearAll = Btn(marksPane, 81, 76, 76, 24, "Clear all", {})
+    Tip(roleBtn, L["Role"], L["auto: a tank bot tanks the mob with that icon, casters crowd-control it until a skull goes on, the rest kill it first. Click to force tank, cc or kill for the next assignment."])
+    local clearAll = Btn(marksPane, 81, 76, 76, 24, L["Clear all"], {})
     clearAll:SetScript("OnClick", function()
         GroupOrder("assign clear")
         lastAssign = nil
-        SetStatus("|cffffff00Cleared all, asking the server...|r")
+        SetStatus("|cffffff00" .. L["Cleared all, asking the server..."] .. "|r")
         RequestListSoon()
     end)
-    Tip(clearAll, "Clear all", "Removes every icon assignment. Right-click an icon to clear just that one.")
-    local refreshBtn = Btn(marksPane, 162, 76, 76, 24, "Refresh", {})
+    Tip(clearAll, L["Clear all"], L["Removes every icon assignment. Right-click an icon to clear just that one."])
+    local refreshBtn = Btn(marksPane, 162, 76, 76, 24, L["Refresh"], {})
     refreshBtn:SetScript("OnClick", RequestList)
     statusFS:SetPoint("TOPLEFT", marksPane, "TOPLEFT", 4, -106)
     statusFS:SetWidth(LAYOUT.CONTENT - 8)
@@ -1406,41 +1742,44 @@ function UI.BuildMarks()
     RefreshList()
 
     -- the five list lines end at 174; the Tanks block sits below them and clear of the footer buttons
-    Section(marksPane, 178, "Tanks")
+    Section(marksPane, 178, L["Tanks"])
     local markerBtn
-    local mt = Btn(marksPane, 0, 200, 117, 22, "Main tank", {})
+    local mt = Btn(marksPane, 0, 200, 117, 22, L["Main tank"], {})
     mt:SetScript("OnClick", function() GroupOrder("set main tank") end)
-    Tip(mt, "Make main tank", "Sets the raid Main Tank flag on the raid member you target. Raid groups only.")
-    markerBtn = Btn(marksPane, 121, 200, 117, 22, "Mark: " .. TANK_MARKERS[tankMarker], {})
+    Tip(mt, L["Make main tank"], L["Sets the raid Main Tank flag on the raid member you target. Raid groups only."])
+    markerBtn = Btn(marksPane, 121, 200, 117, 22, L["Mark: %s"]:format(MarkerName(TANK_MARKERS[tankMarker])), {})
     markerBtn:SetScript("OnClick", function(self)
         tankMarker = tankMarker % #TANK_MARKERS + 1
-        self:SetText("Mark: " .. TANK_MARKERS[tankMarker])
+        self:SetText(L["Mark: %s"]:format(MarkerName(TANK_MARKERS[tankMarker])))
     end)
-    Tip(markerBtn, "Marker", "Click to cycle the marker (skull, cross, star, circle, diamond, triangle, moon, square) the next button hands out.")
-    local give = Btn(marksPane, 0, 224, 117, 22, "Give to tank", {})
+    Tip(markerBtn, L["Marker"], L["Click to cycle the marker (skull, cross, star, circle, diamond, triangle, moon, square) the next button hands out."])
+    local give = Btn(marksPane, 0, 224, 117, 22, L["Give to tank"], {})
     give:SetScript("OnClick", function() GroupOrder("tank target " .. TANK_MARKERS[tankMarker]) end)
-    Tip(give, "Give marker to tank", "The tank bot you target holds whichever mob carries this marker (mark the mob yourself with the raid icons).")
-    local clearTanks = Btn(marksPane, 121, 224, 117, 22, "Clear tanks", {})
+    Tip(give, L["Give marker to tank"], L["The tank bot you target holds whichever mob carries this marker (mark the mob yourself with the raid icons)."])
+    local clearTanks = Btn(marksPane, 121, 224, 117, 22, L["Clear tanks"], {})
     clearTanks:SetScript("OnClick", function() GroupOrder("clear tanks") end)
-    Tip(clearTanks, "Clear tanks", "Back to the automatic tank split.")
+    Tip(clearTanks, L["Clear tanks"], L["Back to the automatic tank split."])
 end
 
 function UI.BuildFooter()
     ---------------------------------------------------------------------------------------------- footer
-    -- group and stance on the left (one line, never wrapped), two quick buttons on the right; the text has its own room.
+    -- group and stance on the left (one line, never wrapped) on every tab. Call saved and Dismiss all only on the Bots tab: they
+    -- belong to the Bots pane, so they show and hide with it (owner request 2026-11-04: not on every page). Plain buttons, so
+    -- hiding them is allowed in a fight too.
     footerFS = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     footerFS:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 17)
     footerFS:SetWidth(92)
     footerFS:SetJustifyH("LEFT")
     footerFS:SetWordWrap(false)
-    local fCall = MakeSkinButton(frame, "Call saved", 72, 22, {})
+    local owner = UI.botsPane or frame
+    local fCall = MakeSkinButton(owner, L["Call saved"], 72, 22, {})
     fCall:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -88, 12)
     fCall:SetScript("OnClick", function() ServerCommand(".bot summon saved") end)
-    Tip(fCall, "Call saved", "Brings your saved bots, and every bot in your group, to you.")
-    local fDismiss = MakeSkinButton(frame, "Dismiss all", 74, 22, {})
+    Tip(fCall, L["Call saved"], L["Brings your saved bots, and every bot in your group, to you."])
+    local fDismiss = MakeSkinButton(owner, L["short:Dismiss all"], 74, 22, {})
     fDismiss:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
     fDismiss:SetScript("OnClick", function() ServerCommand(".bot dismiss all") end)
-    Tip(fDismiss, "Dismiss all", "Sends all your bots away.")
+    Tip(fDismiss, L["Dismiss all"], L["Sends all your bots away."])
 end
 
 function UI.BuildTabs()
@@ -1452,13 +1791,15 @@ function UI.BuildTabs()
         bots = "Interface\\Icons\\INV_Misc_GroupNeedMore",
         form = "Interface\\Icons\\INV_Misc_Map_01",
         marks = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
+        finder = "Interface\\Icons\\INV_Misc_Spyglass_03",
+        place = "Interface\\Icons\\Ability_Warrior_DefensiveStance",
     }
     -- The tabs are secure click handlers: the client runs their pane switch as its own code, so they work in combat too (an add-on
     -- function may not show or hide the Orders pane in a fight, 0.5.15 in UBRS 2026-10-26: Follow and Stop could not be reached).
     -- Without the secure template (an older client) a tab is a plain button and a switch to or from Orders waits for the end of combat.
     local switchSnippet = [[
         local want = self:GetAttribute("fbtab")
-        for k = 1, 4 do
+        for k = 1, 7 do
             local p = self:GetFrameRef("fbpane" .. k)
             if p then
                 if k == want then p:Show() else p:Hide() end
@@ -1575,15 +1916,27 @@ local function BuildFrame()
         inset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 6)
     end
 
-    local raidReadyBtn = MakeSkinButton(frame, "Raid ready", LAYOUT.CONTENT, 24, {})
+    local raidReadyBtn = MakeSkinButton(frame, L["Raid ready"], LAYOUT.CONTENT, 24, {})
     raidReadyBtn:SetScript("OnClick", RaidReady)
     raidReadyBtn:SetPoint("TOPLEFT", 11, -36)
-    Tip(raidReadyBtn, "Raid ready", "Alone: calls your saved bots. Already in a group: uses that group and never changes it. Makes the group a raid if it needs one, sets the formation and spacing, and starts a ready check once the bots have buffed. Target your main tank first to set the Main Tank flag too. Not in combat.")
+    Tip(raidReadyBtn, L["Raid ready"], L["Alone: calls your saved bots. Already in a group: uses that group and never changes it. Makes the group a raid if it needs one, sets the formation and spacing, and starts a ready check once the bots have buffed. Target your main tank first to set the Main Tank flag too. Not in combat."])
 
     UI.BuildOrders()
     UI.BuildBots()
     UI.BuildForm()
     UI.BuildMarks()
+    -- Group finder (ForeverBots_Finder.lua): the pane is made here so the fifth tab always has one
+    local finderPane = UI.NewPane()
+    if Cmd.ns.BuildFinder then
+        Cmd.ns.BuildFinder(finderPane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip, DUNGEONS = UI.DUNGEONS,
+                                         DungeonsForLevel = UI.DungeonsForLevel, Queue = UI.DungeonQueue,
+                                         Lfg = function(role) SendGear(); Cmd.Queue(".bot lfg" .. (role and (" " .. role) or "")) end })
+    end
+    -- Positions (ForeverBots_Place.lua): ticked bots stand in a shape here or round the target and stay there
+    local placePane = UI.NewPane()
+    if Cmd.ns.BuildPlace then
+        Cmd.ns.BuildPlace(placePane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip })
+    end
     UI.BuildFooter()
     UI.BuildTabs()
 
@@ -1635,9 +1988,11 @@ distFrame:SetScript("OnUpdate", function(self, elapsed)
         self.stanceAt = nil
         -- The bots of a group start on the server's default stance, so the stance the panel shows is sent to every one of them
         -- (new and re-created bots included); a never-picked stance is sent only inside an instance, where Passive is the default.
+        -- As "stance ...": it sets the stance only. A plain "passive" also calls off an attack under way, so a bot joining just after
+        -- you said "attack" called the whole group off (UBRS: the melee stood by you until you said it again).
         local okI, inInstance = pcall(IsInInstance)
         if GroupSize() > 0 and (ForeverBotsDB.stance or (okI and inInstance)) then
-            Auto(GroupOrder, StanceIsAggressive() and "aggressive" or "passive")
+            Auto(GroupOrder, Cmd.STANCE_RESEND[Cmd.StanceKey()])
         end
         RefreshStance()
     end
@@ -1683,13 +2038,13 @@ function UI.SetWindowShown(show)
         if not show then UI.buildAfterCombat = nil; return end
         if InCombatLockdown and InCombatLockdown() then
             UI.buildAfterCombat = true
-            Print("the bot window opens when combat ends.")
+            Print(L["the bot window opens when combat ends."])
             return
         end
         BuildFrame()
     end
     if not UI.SetShown(frame, show) and UI.afterCombat[frame] ~= nil then
-        Print(show and "the bot window opens when combat ends." or "the bot window closes when combat ends.")
+        Print(show and L["the bot window opens when combat ends."] or L["the bot window closes when combat ends."])
     end
 end
 
@@ -1773,13 +2128,13 @@ local function ToggleMinimapMenu()
             })
         end
         local items = {
-            { "Raid ready", RaidReady },
-            { "Call saved bots", function() ServerCommand(".bot summon saved") end },
-            { "Dismiss all bots", function() ServerCommand(".bot dismiss all") end },
-            { "Hide this button", function()
+            { L["Raid ready"], RaidReady },
+            { L["Call saved bots"], function() ServerCommand(".bot summon saved") end },
+            { L["Dismiss all bots"], function() ServerCommand(".bot dismiss all") end },
+            { L["Hide this button"], function()
                 ForeverBotsDB.minimap.hidden = true
                 mmButton:Hide()
-                Print("minimap button hidden: /fb minimap brings it back.")
+                Print(L["minimap button hidden: /fb minimap brings it back."])
             end },
         }
         for i, it in ipairs(items) do
@@ -1834,9 +2189,9 @@ local function BuildMinimapButton()
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("WoW Forever Bots")
-        GameTooltip:AddLine("Click: open or close the bot window", 1, 1, 1)
-        GameTooltip:AddLine("Right-click: raid ready, call, dismiss", 1, 1, 1)
-        GameTooltip:AddLine("Drag: move this button", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(L["Click: open or close the bot window"], 1, 1, 1)
+        GameTooltip:AddLine(L["Right-click: raid ready, call, dismiss"], 1, 1, 1)
+        GameTooltip:AddLine(L["Drag: move this button"], 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1854,10 +2209,8 @@ end
 
 function ForeverBots_ToggleStance()
     if not ForeverBotsDB then return end
-    ForeverBotsDB.stance = StanceIsAggressive() and "passive" or "aggressive"
-    GroupOrder(ForeverBotsDB.stance)
-    RefreshStance()
-    Print("stance: " .. StanceLabel())
+    Cmd.SetStance(1)
+    Print(L["stance: %s"]:format(StanceLabel()))
 end
 
 ------------------------------------------------------------------------------------------------------------- bot panel
@@ -1897,7 +2250,7 @@ local function InviteByName(name)
         local okC, res = pcall(C_PartyInfo.CanInvite)
         if okC then can = res end
     end
-    if can == false then Print("cannot invite " .. name .. " (the game says you may not invite right now)") end
+    if can == false then Print(L["cannot invite %s (the game says you may not invite right now)"]:format(name)) end
     local sent, how = false, nil
     if C_PartyInfo and C_PartyInfo.InviteUnit then
         local ok, err = pcall(C_PartyInfo.InviteUnit, name)
@@ -1911,7 +2264,7 @@ local function InviteByName(name)
         local ok, err = pcall(SlashCmdList.INVITE, name)
         if ok then sent, how = true, "/invite" else Debug("invite: /invite failed: " .. tostring(err)) end
     end
-    if sent then Print("invite sent to " .. name .. " (" .. how .. ")") else Print("could not send the invite; type /invite " .. name) end
+    if sent then Print(L["invite sent to %s (%s)"]:format(name, how)) else Print(L["could not send the invite; type /invite %s"]:format(name)) end
 end
 
 local function BotWhisper(text)
@@ -1923,6 +2276,7 @@ local function BotWhisper(text)
         pcall(send, ORDER_PREFIX, text, "WHISPER", botName)
     else
         SendChatMessage(text, "WHISPER", nil, botName)
+        Cmd.NoteOwnWhisper(botName, text)
     end
     botSentAt = Now()
     SetBotStatus("|cffffff00" .. text .. " ...|r")
@@ -1930,7 +2284,7 @@ end
 
 local function BotStepDistance(delta)
     botDist = math.max(DIST_MIN, math.min(DIST_MAX, math.floor((botDist or ForeverBotsDB.distance or DIST_START) + delta)))
-    if botDistFS then botDistFS:SetText(botDist .. " yd") end
+    if botDistFS then botDistFS:SetText(L["%d yd"]:format(botDist)) end
     botDistDirtyAt = Now()
 end
 
@@ -1951,9 +2305,9 @@ local function UpdateBotPanel()
     if name ~= botName then
         botName, botClassToken = name, token
         botRoleChoice = 1
-        botRoleBtn:SetText("Role: auto")
+        botRoleBtn:SetText(L["Role: %s"]:format(L["auto"]))
         botDist = ForeverBotsDB.distance or DIST_START
-        botDistFS:SetText(botDist .. " yd")
+        botDistFS:SetText(L["%d yd"]:format(botDist))
         botDistDirtyAt, botSentAt = nil, nil
         SetBotStatus("")
     end
@@ -2017,14 +2371,14 @@ local function BuildBotPanel()
                 local role = ROLE_CYCLE[botRoleChoice]
                 BotWhisper("assign " .. ICON_WORDS[i] .. (role ~= "auto" and (" " .. role) or ""))
                 botRoleChoice = 1
-                botRoleBtn:SetText("Role: auto")
+                botRoleBtn:SetText(L["Role: %s"]:format(L["auto"]))
             end
         end)
         ib:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(ICON_WORDS[i])
-            GameTooltip:AddLine("Click: this bot takes this icon", 1, 1, 1)
-            GameTooltip:AddLine("Right-click: clear it", 1, 1, 1)
+            GameTooltip:SetText(MarkerName(ICON_WORDS[i]))
+            GameTooltip:AddLine(L["Click: this bot takes this icon"], 1, 1, 1)
+            GameTooltip:AddLine(L["Right-click: clear it"], 1, 1, 1)
             GameTooltip:Show()
         end)
         ib:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -2035,27 +2389,28 @@ local function BuildBotPanel()
         b:SetPoint("TOPLEFT", x, y)
         return b
     end
-    B("Follow", 72, 12, -58, function() BotWhisper("follow") end)
-    B("Stay", 72, 87, -58, function() BotWhisper("stay") end)
-    B("Attack", 72, 162, -58, function() BotWhisper("attack") end)
-    B("Pull back", 72, 12, -84, function() BotWhisper("pull back") end)
+    B(L["short:Follow"], 72, 12, -58, function() BotWhisper("follow") end)
+    B(L["Stay"], 72, 87, -58, function() BotWhisper("stay") end)
+    B(L["Attack"], 72, 162, -58, function() BotWhisper("attack") end)
+    B(L["short:Pull back"], 72, 12, -84, function() BotWhisper("pull back") end)
     B("-", 24, 92, -84, function() BotStepDistance(-1) end)
     botDistFS = p:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     botDistFS:SetPoint("TOPLEFT", 118, -89)
     botDistFS:SetWidth(44)
     botDistFS:SetJustifyH("CENTER")
     B("+", 24, 166, -84, function() BotStepDistance(1) end)
-    botRoleBtn = B("Role: auto", 84, 12, -110, function()
+    botRoleBtn = B(L["Role: %s"]:format(L["auto"]), 84, 12, -110, function()
         botRoleChoice = botRoleChoice % #ROLE_CYCLE + 1
-        botRoleBtn:SetText("Role: " .. ROLE_CYCLE[botRoleChoice])
+        botRoleBtn:SetText(L["Role: %s"]:format(L[ROLE_CYCLE[botRoleChoice]]))
     end)
-    B("Dismiss", 72, 102, -110, function() if botName then ServerCommand(".bot dismiss " .. botName) end end)
-    local botStanceAggressive = false
+    B(L["Dismiss"], 72, 102, -110, function() if botName then ServerCommand(".bot dismiss " .. botName) end end)
+    -- This bot's stance, three steps like the window's: Defensive, Aggressive, Passive (attacks nothing).
+    local botStanceStep = 1
     local botStanceBtn
-    botStanceBtn = B("Passive", 56, 177, -110, function()
-        botStanceAggressive = not botStanceAggressive
-        BotWhisper(botStanceAggressive and "aggressive" or "passive")
-        botStanceBtn:SetText(botStanceAggressive and "Aggress." or "Passive")
+    botStanceBtn = B(L["short:Defensive"], 56, 177, -110, function()
+        botStanceStep = botStanceStep % 3 + 1
+        BotWhisper(botStanceStep == 1 and "defensive" or botStanceStep == 2 and "aggressive" or "passive")
+        botStanceBtn:SetText(botStanceStep == 1 and L["short:Defensive"] or botStanceStep == 2 and L["Aggress."] or L["short:Passive"])
     end)
     botStatusFS = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     botStatusFS:SetPoint("TOPLEFT", 14, -136)
@@ -2074,7 +2429,7 @@ local function BuildBotPanel()
         end
         if botSentAt and now - botSentAt > 4 then
             botSentAt = nil
-            SetBotStatus("|cffff4040No answer: is " .. (botName or "it") .. " your bot?|r")
+            SetBotStatus("|cffff4040" .. L["No answer: is %s your bot?"]:format(botName or L["it"]) .. "|r")
         end
     end)
     p:Hide()
@@ -2117,7 +2472,7 @@ end)
 -- Blizzard UI", reported 2026-10-15). Anything that is not a click whispers with SendChatMessage / an addon whisper instead.
 function OpenWhisperBox(name, text)
     if not (ChatEdit_ChooseBoxForSend and ChatEdit_ActivateChat and ChatEdit_UpdateHeader) then
-        Print("type /w " .. name .. " <message> to whisper")
+        Print(L["type /w %s <message> to whisper"]:format(name))
         return
     end
     local eb = ChatEdit_ChooseBoxForSend()
@@ -2138,32 +2493,31 @@ end
 -- (a talent such as Kings or Sanctity). The picks are the server's "prefer <slot> <name>" (memory only there, and here), so the
 -- marks below show what was sent in this session.
 local MARKERS = { "star", "circle", "diamond", "triangle", "moon", "square", "cross", "skull" }
-local MARKER_LABEL = { star = "Star", circle = "Circle", diamond = "Diamond", triangle = "Triangle", moon = "Moon", square = "Square",
-    cross = "Cross", skull = "Skull" }
--- slot word, menu title, class token, { word, label, level } (word = the server's first word for the choice, Bot/OwnerPicks.h)
+-- slot word, menu title, class token, { word, label, level, spell id } (word = the server's first word for the choice,
+-- Bot/OwnerPicks.h). The spell id only names the entry on a client that is not English (SpellLabel); ids checked in SpellName.db2.
 local PICKS = {
     { "blessing", "Blessing", "PALADIN", {
-        { "might", "Blessing of Might", 4 }, { "wisdom", "Blessing of Wisdom", 14 }, { "kings", "Blessing of Kings", 20 },
-        { "salvation", "Blessing of Salvation", 26 }, { "light", "Blessing of Light", 40 }, { "sanctuary", "Blessing of Sanctuary", 30 } } },
+        { "might", "Blessing of Might", 4, 19740 }, { "wisdom", "Blessing of Wisdom", 14, 19742 }, { "kings", "Blessing of Kings", 20, 20217 },
+        { "salvation", "Blessing of Salvation", 26, 1038 }, { "light", "Blessing of Light", 40, 19977 }, { "sanctuary", "Blessing of Sanctuary", 30 } } },
     { "aura", "Aura", "PALADIN", {
-        { "devotion", "Devotion Aura", 1 }, { "retribution", "Retribution Aura", 16 }, { "concentration", "Concentration Aura", 22 },
-        { "shadow", "Shadow Resistance Aura", 28 }, { "frost", "Frost Resistance Aura", 32 }, { "fire", "Fire Resistance Aura", 36 },
-        { "sanctity", "Sanctity Aura", 20 } } },
+        { "devotion", "Devotion Aura", 1, 465 }, { "retribution", "Retribution Aura", 16, 7294 }, { "concentration", "Concentration Aura", 22, 19746 },
+        { "shadow", "Shadow Resistance Aura", 28, 19876 }, { "frost", "Frost Resistance Aura", 32, 19888 }, { "fire", "Fire Resistance Aura", 36, 19891 },
+        { "sanctity", "Sanctity Aura", 20, 20218 } } },
     { "earth", "Earth totem", "SHAMAN", {
-        { "stoneskin", "Stoneskin Totem", 4 }, { "earthbind", "Earthbind Totem", 6 }, { "stoneclaw", "Stoneclaw Totem", 8 },
-        { "strength", "Strength of Earth Totem", 10 }, { "tremor", "Tremor Totem", 18 } } },
+        { "stoneskin", "Stoneskin Totem", 4, 8071 }, { "earthbind", "Earthbind Totem", 6, 2076 }, { "stoneclaw", "Stoneclaw Totem", 8, 5730 },
+        { "strength", "Strength of Earth Totem", 10, 8075 }, { "tremor", "Tremor Totem", 18, 8143 } } },
     { "fire", "Fire totem", "SHAMAN", {
-        { "searing", "Searing Totem", 10 }, { "nova", "Fire Nova Totem", 12 }, { "frost", "Frost Resistance Totem", 24 },
-        { "magma", "Magma Totem", 26 }, { "flametongue", "Flametongue Totem", 28 } } },
+        { "searing", "Searing Totem", 10, 2075 }, { "nova", "Fire Nova Totem", 12, 27623 }, { "frost", "Frost Resistance Totem", 24, 8181 },
+        { "magma", "Magma Totem", 26, 8187 }, { "flametongue", "Flametongue Totem", 28, 8227 } } },
     { "water", "Water totem", "SHAMAN", {
-        { "healing", "Healing Stream Totem", 20 }, { "poison", "Poison Cleansing Totem", 22 }, { "mana", "Mana Spring Totem", 26 },
-        { "fire", "Fire Resistance Totem", 28 }, { "disease", "Disease Cleansing Totem", 38 } } },
+        { "healing", "Healing Stream Totem", 20, 5394 }, { "poison", "Poison Cleansing Totem", 22, 8166 }, { "mana", "Mana Spring Totem", 26, 5675 },
+        { "fire", "Fire Resistance Totem", 28, 8184 }, { "disease", "Disease Cleansing Totem", 38, 8170 } } },
     { "air", "Air totem", "SHAMAN", {
-        { "grounding", "Grounding Totem", 30 }, { "nature", "Nature Resistance Totem", 30 }, { "windfury", "Windfury Totem", 32 },
-        { "windwall", "Windwall Totem", 36 }, { "grace", "Grace of Air Totem", 42 }, { "tranquil", "Tranquil Air Totem", 50 } } },
+        { "grounding", "Grounding Totem", 30, 8177 }, { "nature", "Nature Resistance Totem", 30, 10595 }, { "windfury", "Windfury Totem", 32, 8512 },
+        { "windwall", "Windwall Totem", 36, 15107 }, { "grace", "Grace of Air Totem", 42, 8835 }, { "tranquil", "Tranquil Air Totem", 50 } } },
     { "aspect", "Aspect", "HUNTER", {
-        { "monkey", "Aspect of the Monkey", 4 }, { "hawk", "Aspect of the Hawk", 10 }, { "cheetah", "Aspect of the Cheetah (out of combat)", 20 },
-        { "pack", "Aspect of the Pack (out of combat)", 30 }, { "wild", "Aspect of the Wild", 46 } } },
+        { "monkey", "Aspect of the Monkey", 4, 13163 }, { "hawk", "Aspect of the Hawk", 10, 13165 }, { "cheetah", "Aspect of the Cheetah (out of combat)", 20, 5118 },
+        { "pack", "Aspect of the Pack (out of combat)", 30, 13159 }, { "wild", "Aspect of the Wild", 46, 20043 } } },
     { "demon", "Demon", "WARLOCK", {
         { "imp", "Imp", 1 }, { "voidwalker", "Voidwalker", 10 }, { "succubus", "Succubus", 20 }, { "felhunter", "Felhunter", 30 } } },
 }
@@ -2171,22 +2525,41 @@ local PORTALS = {
     Alliance = { { "stormwind", "Stormwind" }, { "ironforge", "Ironforge" }, { "darnassus", "Darnassus" } },
     Horde = { { "orgrimmar", "Orgrimmar" }, { "undercity", "Undercity" }, { "thunder bluff", "Thunder Bluff" } },
 }
--- Crowd control the owner can say no to for a whole class (the server's "@<class> no <kind>", CcDeny.h): kind word, label.
+-- Crowd control the owner can say no to for a whole class (the server's "@<class> no <kind>", CcDeny.h): kind word, label,
+-- spell ids (as in PICKS).
 local DANGER = {
-    WARRIOR = { { "fear", "Intimidating Shout" } },
-    PRIEST  = { { "fear", "Psychic Scream" }, { "shackle", "Shackle Undead" } },
-    WARLOCK = { { "fear", "Fear, Howl of Terror, Death Coil" }, { "banish", "Banish" }, { "seduce", "Seduction, Enslave Demon" } },
-    MAGE    = { { "sheep", "Polymorph" } },
-    HUNTER  = { { "fear", "Scare Beast" }, { "trap", "Freezing Trap" }, { "sleep", "Wyvern Sting" } },
-    ROGUE   = { { "sap", "Sap" } },
-    DRUID   = { { "sleep", "Hibernate" } },
-    PALADIN = { { "fear", "Turn Undead" } },
+    WARRIOR = { { "fear", "Intimidating Shout", 5246 } },
+    PRIEST  = { { "fear", "Psychic Scream", 8122 }, { "shackle", "Shackle Undead", 1425 } },
+    WARLOCK = { { "fear", "Fear, Howl of Terror, Death Coil", { 663, 5484, 6789 } }, { "banish", "Banish", 710 }, { "seduce", "Seduction, Enslave Demon", { 6358, 1098 } } },
+    MAGE    = { { "sheep", "Polymorph", 118 } },
+    HUNTER  = { { "fear", "Scare Beast", 1513 }, { "trap", "Freezing Trap", 1499 }, { "sleep", "Wyvern Sting", 24335 } },
+    ROGUE   = { { "sap", "Sap", 2070 } },
+    DRUID   = { { "sleep", "Hibernate", 2637 } },
+    PALADIN = { { "fear", "Turn Undead", 2878 } },
 }
+-- The menu name of a spell choice: on a client that is not English, the client's own names for its spell ids (joined with ", ",
+-- and the "out of combat" note kept); otherwise, or when the client does not know an id, L.
+local GetSpellName = (C_Spell and C_Spell.GetSpellName) or GetSpellInfo
+local function SpellLabel(label, ids)
+    if CLIENT_NAMES and ids and GetSpellName then
+        local names = {}
+        for _, id in ipairs(type(ids) == "table" and ids or { ids }) do
+            local ok, n = pcall(GetSpellName, id)
+            if not (ok and type(n) == "string" and n ~= "") then names = nil; break end
+            names[#names + 1] = n
+        end
+        if names then
+            return table.concat(names, ", ") .. (label:find(" (out of combat)", 1, true) and L[" (out of combat)"] or "")
+        end
+    end
+    return L[label]
+end
 local sentPicks = {}   -- [bot name][slot word] = choice word, this session
 
 local function MenuWhisper(who, text)
+    Cmd.NoteOwnWhisper(who, text)
     local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, who)
-    if not ok then Print("could not whisper " .. who .. ": " .. tostring(err)) end
+    if not ok then Print(L["could not whisper %s: %s"]:format(who, tostring(err))) end
 end
 
 -- The group members by name (yourself first), for the summon and soulstone lists.
@@ -2209,45 +2582,51 @@ local function AddBotMenu(root, unit, who)
     local function Send(text) MenuWhisper(who, text) end
     local function Mark(on) return on and "|cff40ff40>|r " or "" end
     local menu = root:CreateButton("WoW Forever Bots")
-    menu:CreateButton("Open the bot panel", function()
+    menu:CreateButton(L["Open the bot panel"], function()
         botForced = { name = who, token = token }
         if not botPanel then BuildBotPanel() end
         UpdateBotPanel()
     end)
-    menu:CreateButton("Follow me", function() Send("follow") end)
-    menu:CreateButton("Stay here", function() Send("stay") end)
-    menu:CreateButton("Attack my target", function() Send("attack") end)
+    menu:CreateButton(L["Follow me"], function() Send("follow") end)
+    menu:CreateButton(L["Stay here"], function() Send("stay") end)
+    menu:CreateButton(L["Attack my target"], function() Send("attack") end)
     local mineAoe = sentPicks[who] and sentPicks[who].aoe
-    local aoe = menu:CreateButton("Area spells")
-    aoe:CreateButton(Mark(mineAoe ~= "off") .. "On", function()
+    local aoe = menu:CreateButton(L["Area spells"])
+    aoe:CreateButton(Mark(mineAoe ~= "off") .. L["On"], function()
         sentPicks[who] = sentPicks[who] or {}; sentPicks[who].aoe = nil; Send("aoe on")
     end)
-    aoe:CreateButton(Mark(mineAoe == "off") .. "Off: nothing that hits more than one enemy", function()
+    aoe:CreateButton(Mark(mineAoe == "off") .. L["Off: nothing that hits more than one enemy"], function()
         sentPicks[who] = sentPicks[who] or {}; sentPicks[who].aoe = "off"; Send("aoe off")
     end)
 
     -- Role: the roles of the class (CLASSES), and auto (the spec decides again).
     for _, c in ipairs(CLASSES) do
         if c.token == token and #c.roles > 1 then
-            local roleMenu = menu:CreateButton("Role")
+            local roleMenu = menu:CreateButton(L["Role"])
             for _, r in ipairs(c.roles) do
                 roleMenu:CreateButton(ROLE_LABEL[r] or r, function() Send("setrole " .. r) end)
             end
-            roleMenu:CreateButton("Auto (by spec)", function() Send("setrole clear") end)
+            roleMenu:CreateButton(L["Auto (by spec)"], function() Send("setrole clear") end)
         end
     end
 
     -- Raid icons: the bot follows the icon you put on a mob (the server's "assign <marker> [kill|cc|tank]").
-    local icons = menu:CreateButton("Raid icon")
-    local function IconList(parent, role)
+    -- One list, a title per job: a submenu per job made this menu four levels deep, and where the screen has no room on the
+    -- right the client opens each level on the other side, so the fourth level lay over the bot menu and the third over the
+    -- unit menu, the text of both mixed (Tornn, 2026-10-29). Every bot submenu is now one level below the bot menu.
+    local icons = menu:CreateButton(L["Raid icon"])
+    local function IconList(title, role)
+        local titled = icons.CreateTitle and pcall(icons.CreateTitle, icons, title)
         for _, m in ipairs(MARKERS) do
-            parent:CreateButton(MARKER_LABEL[m], function() Send("assign " .. m .. (role and (" " .. role) or "")) end)
+            local label = titled and MarkerName(m) or (title .. ": " .. MarkerName(m))
+            icons:CreateButton(label, function() Send("assign " .. m .. (role and (" " .. role) or "")) end)
         end
+        icons:CreateDivider()
     end
-    IconList(icons:CreateButton("Kill it first"), "kill")
-    if token ~= "WARRIOR" and token ~= "SHAMAN" then IconList(icons:CreateButton("Crowd-control it"), "cc") end
-    if token == "WARRIOR" or token == "PALADIN" or token == "DRUID" then IconList(icons:CreateButton("Tank it"), "tank") end
-    icons:CreateButton("Clear", function() Send("assign clear " .. who) end)
+    IconList(L["Kill it first"], "kill")
+    if token ~= "WARRIOR" and token ~= "SHAMAN" then IconList(L["Crowd-control it"], "cc") end
+    if token == "WARRIOR" or token == "PALADIN" or token == "DRUID" then IconList(L["Tank it"], "tank") end
+    icons:CreateButton(L["Clear"], function() Send("assign clear " .. who) end)
 
     -- The bot's own picks for its class.
     local mine = sentPicks[who] or {}
@@ -2256,8 +2635,8 @@ local function AddBotMenu(root, unit, who)
             local sub
             for _, ch in ipairs(slot[4]) do
                 if level >= ch[3] then
-                    sub = sub or menu:CreateButton(slot[2])
-                    sub:CreateButton(Mark(mine[slot[1]] == ch[1]) .. ch[2], function()
+                    sub = sub or menu:CreateButton(L[slot[2]])
+                    sub:CreateButton(Mark(mine[slot[1]] == ch[1]) .. SpellLabel(ch[2], ch[4]), function()
                         sentPicks[who] = sentPicks[who] or {}
                         sentPicks[who][slot[1]] = ch[1]
                         Send("prefer " .. slot[1] .. " " .. ch[1])
@@ -2265,7 +2644,7 @@ local function AddBotMenu(root, unit, who)
                 end
             end
             if sub then
-                sub:CreateButton(Mark(mine[slot[1]] == nil) .. "Auto (the group plan)", function()
+                sub:CreateButton(Mark(mine[slot[1]] == nil) .. L["Auto (the group plan)"], function()
                     if sentPicks[who] then sentPicks[who][slot[1]] = nil end
                     Send("prefer " .. slot[1] .. " auto")
                 end)
@@ -2273,47 +2652,47 @@ local function AddBotMenu(root, unit, who)
         end
     end
     if token == "HUNTER" or token == "WARLOCK" then
-        local pet = menu:CreateButton("Pet")
-        pet:CreateButton(Mark(mine.pet ~= "off") .. "Keep the pet out", function()
+        local pet = menu:CreateButton(L["Pet"])
+        pet:CreateButton(Mark(mine.pet ~= "off") .. L["Keep the pet out"], function()
             sentPicks[who] = sentPicks[who] or {}; sentPicks[who].pet = nil; Send("pet on")
         end)
-        pet:CreateButton(Mark(mine.pet == "off") .. "Dismiss it and keep it away", function()
+        pet:CreateButton(Mark(mine.pet == "off") .. L["Dismiss it and keep it away"], function()
             sentPicks[who] = sentPicks[who] or {}; sentPicks[who].pet = "off"; Send("pet off")
         end)
     end
     if token == "ROGUE" then
-        local st = menu:CreateButton("Stealth")
-        st:CreateButton(Mark(mine.stealth ~= "off") .. "Open from Stealth", function()
+        local st = menu:CreateButton(L["Stealth"])
+        st:CreateButton(Mark(mine.stealth ~= "off") .. L["Open from Stealth"], function()
             sentPicks[who] = sentPicks[who] or {}; sentPicks[who].stealth = nil; Send("stealth on")
         end)
-        st:CreateButton(Mark(mine.stealth == "off") .. "No Stealth (and no Sap)", function()
+        st:CreateButton(Mark(mine.stealth == "off") .. L["No Stealth (and no Sap)"], function()
             sentPicks[who] = sentPicks[who] or {}; sentPicks[who].stealth = "off"; Send("stealth off")
         end)
     end
     if token == "WARLOCK" and level >= 20 then
-        local sm = menu:CreateButton("Summon a player")
+        local sm = menu:CreateButton(L["Summon a player"])
         for _, nm in ipairs(GroupNames()) do
             if nm ~= who then sm:CreateButton(nm, function() Send("ritual " .. nm) end) end
         end
-        sm:CreateButton("Help click the portal (party)", function() GroupOrder("use summoning") end)
+        sm:CreateButton(L["Help click the portal (party)"], function() GroupOrder("use summoning") end)
     end
     if token == "WARLOCK" and level >= 18 then
-        local ss = menu:CreateButton("Soulstone")
+        local ss = menu:CreateButton(L["Soulstone"])
         for _, nm in ipairs(GroupNames()) do
             ss:CreateButton(nm, function() Send("soulstone " .. nm) end)
         end
     end
     -- Mage: conjured water and food are a craft order; the mage asks you to open a trade with it and hands them over.
     if token == "MAGE" and level >= 4 then
-        menu:CreateButton("Conjure water", function() Send("craft water x20") end)
-        if level >= 6 then menu:CreateButton("Conjure food", function() Send("craft food x20") end) end
+        menu:CreateButton(L["Conjure water"], function() Send("craft water x20") end)
+        if level >= 6 then menu:CreateButton(L["Conjure food"], function() Send("craft food x20") end) end
     end
     if token == "MAGE" and level >= 40 then
         local ok, faction = pcall(UnitFactionGroup, unit)
         local list = ok and PORTALS[faction]
         if list then
-            local pm = menu:CreateButton("Open a portal")
-            for _, c in ipairs(list) do pm:CreateButton(c[2], function() Send("portal " .. c[1]) end) end
+            local pm = menu:CreateButton(L["Open a portal"])
+            for _, c in ipairs(list) do pm:CreateButton(L[c[2]], function() Send("portal " .. c[1]) end) end
         end
     end
 
@@ -2321,15 +2700,16 @@ local function AddBotMenu(root, unit, who)
     local danger = DANGER[token]
     if danger then
         local cls = strlower(token)
-        local dm = menu:CreateButton("Danger spells (all " .. cls .. "s)")
+        local native = CLIENT_NAMES and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[token]
+        local dm = menu:CreateButton(native and L["Danger spells (class: %s)"]:format(native) or ("Danger spells (all " .. cls .. "s)"))
         for _, d in ipairs(danger) do
-            dm:CreateButton("No " .. d[2], function() Send("@" .. cls .. " no " .. d[1]) end)
+            dm:CreateButton(L["No %s"]:format(SpellLabel(d[2], d[3])), function() Send("@" .. cls .. " no " .. d[1]) end)
         end
-        dm:CreateButton("No crowd control at all", function() Send("@" .. cls .. " off cc") end)
-        dm:CreateButton("Allow all again", function() Send("@" .. cls .. " on cc") end)
+        dm:CreateButton(L["No crowd control at all"], function() Send("@" .. cls .. " off cc") end)
+        dm:CreateButton(L["Allow all again"], function() Send("@" .. cls .. " on cc") end)
     end
-    menu:CreateButton("What did I pick?", function() Send("prefer") end)
-    menu:CreateButton("Clear my picks", function()
+    menu:CreateButton(L["What did I pick?"], function() Send("prefer") end)
+    menu:CreateButton(L["Clear my picks"], function()
         sentPicks[who] = { aoe = sentPicks[who] and sentPicks[who].aoe }   -- the area-spell switch is not a pick
         Send("prefer clear")
     end)
@@ -2361,7 +2741,7 @@ local function AddPopupEntry()
             if who == "" then return end
             local grouped = (UnitInParty and UnitInParty(unit)) or (UnitInRaid and UnitInRaid(unit))
             root:CreateDivider()
-            root:CreateButton("Whisper (Forever Bots)", function() OpenWhisperBox(who) end)
+            root:CreateButton(L["Whisper (Forever Bots)"], function() OpenWhisperBox(who) end)
             if grouped then
                 AddBotMenu(root, unit, who)
             else
@@ -2381,7 +2761,7 @@ local function AddPopupEntry()
                     end
                 end
                 if not replaced then
-                    root:CreateButton("Invite (Forever Bots)", function() InviteByName(who) end)
+                    root:CreateButton(L["Invite (Forever Bots)"], function() InviteByName(who) end)
                 end
             end
         end)
@@ -2420,7 +2800,7 @@ do
             return false
         end
         lastBg.name, lastBg.text, lastBg.at = name, text, GetTime()
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff80ffTo " .. name .. ": " .. text .. "|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff80ff" .. L["To %s: %s"]:format(name, text) .. "|r")
         return true
     end
 
@@ -2431,7 +2811,7 @@ do
         local name, text = strmatch(msg, "^%s*(%S+)%s+(.-)%s*$")
         if not name then name = strmatch(msg, "^%s*(%S+)%s*$"); text = nil end
         if not name then
-            Print("/w <name> <message> whispers a player")
+            Print(L["/w <name> <message> whispers a player"])
             return
         end
         name = strtrim((strsplit("-", name)))   -- "Name-Realm" -> "Name": a single realm
@@ -2442,18 +2822,18 @@ do
             -- as usual); it needs no second step.
             if text and BgWhisper(name, text) then return end
             -- no chat box from a slash handler: the portrait menu's "Whisper (Forever Bots)" opens it from a click
-            Print("battleground: the whisper to " .. name .. " could not be sent" .. (text and "" or " (type /w " .. name .. " <message>)")
-                .. "; right-click " .. name .. " and choose Whisper (Forever Bots)")
+            Print(L["battleground: the whisper to %s could not be sent%s; right-click %s and choose Whisper (Forever Bots)"]:format(name,
+                text and "" or L[" (type /w %s <message>)"]:format(name), name))
             return
         end
         if not text then
-            Print("type /w " .. name .. " <message> to whisper")
+            Print(L["type /w %s <message> to whisper"]:format(name))
             return
         end
         -- Sent straight from the slash handler (no timer, no hook on SendChatMessage): the client's own /w never works in 70205.
         local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, name)
         if not ok then
-            Print("whisper to " .. name .. " failed: " .. tostring(err))
+            Print(L["whisper to %s failed: %s"]:format(name, tostring(err)))
             return
         end
     end
@@ -2506,7 +2886,15 @@ SlashCmdList.FOREVERBOTS = function(msg)
         if class == "on" then ForeverBotsDB.showChat = true
         elseif class == "off" then ForeverBotsDB.showChat = false
         else ForeverBotsDB.showChat = not ForeverBotsDB.showChat end
-        Print("bot confirmations in chat: " .. (ForeverBotsDB.showChat and "shown" or "hidden (shown in the Bots panel status line)") .. "  (/fb chat on|off)")
+        Print(L["bot confirmations in chat: %s"]:format(ForeverBotsDB.showChat and L["shown"] or L["hidden (shown in the Bots panel status line)"]) .. "  (/fb chat on|off)")
+        return
+    end
+    if verb == "bots" or verb == "manage" or verb == "roster" then
+        if Cmd.ns.Windows then Cmd.ns.Windows.Toggle() else Print(L["%s is missing: reinstall the add-on."]:format("ForeverBots_Windows.lua")) end
+        return
+    end
+    if verb == "ping" then
+        if Cmd.ns.Net then Cmd.ns.Net.Ping() else Print(L["%s is missing: reinstall the add-on."]:format("ForeverBots_Net.lua")) end
         return
     end
     if verb == "minimap" then
@@ -2514,7 +2902,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
         elseif class == "off" then SetMinimapShown(false)
         elseif class == "on" then SetMinimapShown(true)
         else SetMinimapShown(ForeverBotsDB.minimap == nil or ForeverBotsDB.minimap.hidden == true) end
-        Print("minimap button: " .. ((ForeverBotsDB.minimap and ForeverBotsDB.minimap.hidden) and "hidden" or "shown") .. "  (/fb minimap on|off|reset)")
+        Print(L["minimap button: %s"]:format((ForeverBotsDB.minimap and ForeverBotsDB.minimap.hidden) and L["hidden"] or L["shown"]) .. "  (/fb minimap on|off|reset)")
         return
     end
     if verb == "scale" then
@@ -2523,7 +2911,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
             ForeverBotsDB.scale = math.max(SCALE_MIN, math.min(SCALE_MAX, n))
             if frame and UI.Locked(frame) then UI.scaleAfterCombat = true elseif frame then frame:SetScale(WindowScale()) end
         end
-        Print("window size: " .. string.format("%.2f", WindowScale()) .. "  (/fb scale " .. SCALE_MIN .. "-" .. SCALE_MAX .. ", default " .. SCALE_DEFAULT .. ")")
+        Print(L["window size: %.2f  (/fb scale %s-%s, default %s)"]:format(WindowScale(), SCALE_MIN, SCALE_MAX, SCALE_DEFAULT))
         return
     end
     if verb == "perf" then
@@ -2618,6 +3006,37 @@ SlashCmdList.FOREVERBOTS = function(msg)
         show("C_ChatInfo.SendChatMessage", function() return type(C_ChatInfo and C_ChatInfo.SendChatMessage) end)
         return
     end
+    if verb == "bagdebug" then
+        -- Read-only: the texture regions of one empty and one filled bag slot (open the bags first), to find which region holds the
+        -- empty-slot frame that client 70685's bag code replaces (see EMPTY_BAG_SLOT_EFFECT_COLOR at the top of this file)
+        local frame = (ContainerFrameCombinedBags and ContainerFrameCombinedBags:IsShown() and ContainerFrameCombinedBags) or ContainerFrame1
+        if not (frame and frame:IsShown() and frame.EnumerateValidItems) then Print("bagdebug: open your bags first, then type /fb bagdebug") return end
+        local empty, filled
+        for _, b in frame:EnumerateValidItems() do
+            local has = type(b) == "table" and b.GetBagID and C_Container.GetContainerItemID(b:GetBagID(), b:GetID()) ~= nil
+            if has then filled = filled or b else empty = empty or b end
+        end
+        local function dump(label, b)
+            if not b then Print("bagdebug " .. label .. ": none") return end
+            local keys = {}
+            for k, v in pairs(b) do if type(v) == "table" and v.GetObjectType then keys[v] = tostring(k) end end
+            Print("bagdebug " .. label .. " " .. tostring(b:GetDebugName()) .. " bag " .. tostring(b.GetBagID and b:GetBagID()) .. " slot " .. b:GetID()
+                .. " normal=" .. tostring(keys[b:GetNormalTexture() or false] or (b:GetNormalTexture() and "yes" or "nil")))
+            for _, r in ipairs({ b:GetRegions() }) do
+                if r:GetObjectType() == "Texture" then
+                    local ok, line = pcall(function()
+                        local cr, cg, cb, ca = r:GetVertexColor()
+                        return string.format("  %s %s layer=%s tex=%s atlas=%s shown=%s a=%.2f col=%.2f,%.2f,%.2f,%.2f", keys[r] or "?", tostring(r:GetDebugName()),
+                            tostring(r:GetDrawLayer()), tostring(r:GetTexture()), tostring(r:GetAtlas()), tostring(r:IsShown()), r:GetAlpha(), cr, cg, cb, ca)
+                    end)
+                    Print(ok and line or ("  error " .. tostring(line)))
+                end
+            end
+        end
+        dump("empty", empty)
+        dump("filled", filled)
+        return
+    end
     if verb == "frames" then
         local list = ForeverBotsListIssueFrames and ForeverBotsListIssueFrames() or {}
         Print("issue reporter frames hidden: " .. (#list > 0 and table.concat(list, ", ") or "none found") .. " (a new search runs over the next second; type /fb frames again for its result)")
@@ -2657,8 +3076,8 @@ SlashCmdList.FOREVERBOTS = function(msg)
         if class == "on" then ForeverBotsDB.menuEntries = true
         elseif class == "off" then ForeverBotsDB.menuEntries = false
         else ForeverBotsDB.menuEntries = (ForeverBotsDB.menuEntries == false) end
-        Print("Whisper/Invite entries in the portrait right-click menu: " .. (ForeverBotsDB.menuEntries == false and "off" or "on")
-            .. " (takes effect after /reload)  (/fb menu on|off)")
+        Print(L["Whisper/Invite entries in the portrait right-click menu: %s (takes effect after /reload)"]:format(ForeverBotsDB.menuEntries == false and L["off"] or L["on"])
+            .. "  (/fb menu on|off)")
         return
     end
     if verb == "bgw" then
@@ -2689,7 +3108,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
             if not botPanel then BuildBotPanel() end
             UpdateBotPanel()
         end
-        Print("bot panel is " .. (BotPanelEnabled() and "on" or "off") .. ". /fb bot on|off")
+        Print(L["bot panel is %s."]:format(BotPanelEnabled() and L["on"] or L["off"]) .. " /fb bot on|off")
         return
     end
     if verb == "tank" and class and class ~= "" then
@@ -2722,20 +3141,22 @@ SlashCmdList.FOREVERBOTS = function(msg)
     elseif verb == "distance" then
         local n = tonumber(class)
         if n then SetDistance(n)
-        else Print("distance: " .. (ForeverBotsDB.distance and (ForeverBotsDB.distance .. " yards") or "auto") .. ". /fb distance <1-20> sets how far the bots follow you.") end
+        else Print(L["distance: %s. /fb distance <1-20> sets how far the bots follow you."]:format(ForeverBotsDB.distance and L["%d yards"]:format(ForeverBotsDB.distance) or L["auto"])) end
     elseif verb == "resume" then
         GroupOrder("resume")
     elseif verb == "flee" then
         GroupOrder("flee")
     elseif verb == "quick" then
         QuickParty()
+    elseif verb == "dungeon" or verb == "dungeons" then
+        UI.DungeonQueue((class and class ~= "") and class or "list")
     elseif verb == "maintank" then
         GroupOrder((class and class ~= "") and ("set main tank " .. class) or "set main tank")
     elseif verb == "" or verb == nil then
         Toggle()
     else
-        Print("unknown /fb word \"" .. tostring(verb) .. "\" (add-on " .. (UI.version or "?") .. ")")
-        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb debug on|off; /fb perf [reset]; /fb part [name on|off]")
+        Print(L["unknown /fb word \"%s\" (add-on %s)"]:format(tostring(verb), UI.version or "?"))
+        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb dungeon [name|any|leave|cancel]; /fb debug on|off; /fb perf [reset]; /fb part [name on|off]")
     end
 end
 UI.slash = SlashCmdList.FOREVERBOTS
@@ -2745,13 +3166,7 @@ UI.slash = SlashCmdList.FOREVERBOTS
 local function SayHello(attempt)
     attempt = attempt or 1
     Step("hello to the server")
-    local send = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
-    local me = UnitName and UnitName("player")
-    local sent = false
-    if prefixOk and send and me then
-        local ok, res = pcall(send, ORDER_PREFIX, "hello", "WHISPER", me)
-        sent = ok and (res == nil or res == true or res == 0 or (Enum and Enum.SendAddonMessageResult and res == Enum.SendAddonMessageResult.Success))
-    end
+    local sent = Cmd.SendSelf("hello")
     -- Chat to SAY is protected and a timer is not a click, so the silent ".bot addon" greeting is not sent from here; it rides
     -- along with the first command the player sends (see ServerCommand).
     Step("")
@@ -2767,12 +3182,12 @@ loader:SetScript("OnEvent", function()
     local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
     local okV, ver = pcall(getMeta, ADDON, "Version")
     if okV and type(ver) == "string" then UI.version = ver end
-    Print("type /fb for the bot window." .. (UI.version and (" (" .. UI.version .. ")") or ""))
+    Print(L["type /fb for the bot window."] .. (UI.version and (" (" .. UI.version .. ")") or ""))
     -- A second copy of this add-on under another folder name (an old one) sets /fb too, and the copy loaded last owns it: say which.
     if SlashCmdList.FOREVERBOTS ~= UI.slash then
         local okS, secure, who = pcall(issecurevariable, SlashCmdList, "FOREVERBOTS")
-        Print("|cffff4040/fb belongs to another add-on (" .. tostring(okS and not secure and who or "?") .. "), not to this " .. ADDON
-            .. " " .. (UI.version or "") .. ": remove the old copy from Interface\\AddOns.|r")
+        Print("|cffff4040" .. L["/fb belongs to another add-on (%s), not to this %s %s: remove the old copy from Interface\\AddOns."]:format(
+            tostring(okS and not secure and who or "?"), ADDON, UI.version or "") .. "|r")
     end
     if C_Timer and C_Timer.After then C_Timer.After(2, SayHello) else SayHello() end
     PerfWrap("login: menu entries", AddPopupEntry)()
@@ -2964,6 +3379,11 @@ do
                 if C_Timer and C_Timer.After then C_Timer.After(0, Report) else Report() end
                 return
             end
+            if step == "dot command" and Cmd.lastSaid then
+                -- the whisper to yourself that carries a dot command was refused: say what to type instead of only that it failed
+                Print(L["could not send \"%s\"%s: type it in chat."]:format(Cmd.lastSaid, " (" .. func .. "() blocked)"))
+                return
+            end
             Print("the client blocked " .. func .. "() for ForeverBots (blocked) during: " .. step)
             return
         end
@@ -2989,5 +3409,105 @@ do
         ForeverBotsDB.menuEntries = false
     end)
 end
+
+------------------------------------------------------------------------------------------------------ movement keys kept
+-- "I set strafe left/right to Q and E, and every time I reopen the game (or after a loading screen) they are back to default"
+-- (fdshiga, pennywhi, cruborg and others, 2026-11-08). The server keeps the key bindings like any other (the rest of them stay), and
+-- the WTF file has Q and E: it is the client's own turn/strafe code (Blizzard_RPE_TurnStrafe calls
+-- C_KeyBindings.UpdateTurnStrafeBindingsForCharacter after PLAYER_ENTERING_WORLD) that puts its turn/strafe style back on A, D, Q, E
+-- and the arrow keys each time the world loads. This keeps what the player chose: the keys below and the keys of the movement
+-- actions are remembered whenever the bindings change outside a loading screen (per binding set: account, or character when
+-- "Character Specific Key Bindings" is ticked), and put back once the world has loaded. Never in combat (SetBinding is protected
+-- there): then it waits for the fight to end. "/fb part movekeys off" and /reload switch it off.
+-- (A function, not a do block: the file's main chunk is at Lua's limit of 200 local variables.)
+;(function()
+    local MOVE_ACTIONS = { "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT", "STRAFELEFT", "STRAFERIGHT" }
+    local WATCH_KEYS = { "W", "S", "A", "D", "Q", "E", "UP", "DOWN", "LEFT", "RIGHT" }
+    local GUARD_SECONDS = 10           -- after a loading screen, binding changes are the client's, not the player's
+    local guardUntil, restorePending = 0, false
+    local frame = CreateFrame("Frame")
+
+    local function SetKey()
+        local ok, set = pcall(GetCurrentBindingSet)
+        if ok and Enum and Enum.BindingSet and set == Enum.BindingSet.Character then
+            return "char:" .. (SafeName("player") or "?") .. "-" .. (GetRealmName and (SafeStr(GetRealmName()) or "") or "")
+        end
+        return "account"
+    end
+
+    -- key -> action ("" when the key is unbound) for the watched keys and every key bound to a movement action
+    local function Snapshot()
+        local map = {}
+        for _, key in ipairs(WATCH_KEYS) do map[key] = GetBindingAction(key) or "" end
+        for _, action in ipairs(MOVE_ACTIONS) do
+            local keys = { GetBindingKey(action) }
+            for _, key in ipairs(keys) do
+                if type(key) == "string" and key ~= "" then map[key] = action end
+            end
+        end
+        return map
+    end
+
+    local function Remember()
+        ForeverBotsDB.moveKeys = ForeverBotsDB.moveKeys or {}
+        ForeverBotsDB.moveKeys[SetKey()] = Snapshot()
+    end
+
+    local function Restore()
+        restorePending = false
+        local saved = ForeverBotsDB.moveKeys and ForeverBotsDB.moveKeys[SetKey()]
+        if not saved then Remember(); return end
+        if InCombatLockdown and InCombatLockdown() then
+            restorePending = true
+            frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+            return
+        end
+        local changed = 0
+        for key, action in pairs(saved) do
+            local now = GetBindingAction(key) or ""
+            if now ~= action then
+                local ok = pcall(SetBinding, key, action ~= "" and action or nil)
+                if ok then changed = changed + 1 end
+            end
+        end
+        if changed > 0 then
+            -- keep the guard up while our own change fires UPDATE_BINDINGS, then save the set the player uses
+            guardUntil = math.max(guardUntil, GetTime() + 1)
+            pcall(SaveBindings, GetCurrentBindingSet())
+            Debug("movement keys: " .. changed .. " key(s) put back after the client changed them")
+        end
+    end
+
+    local function After(sec, fn) if C_Timer and C_Timer.After then C_Timer.After(sec, fn) else fn() end end
+
+    local function WorldLoaded()
+        guardUntil = GetTime() + GUARD_SECONDS
+        -- the client's change comes right after the world is shown; check a few times while it settles
+        After(1, Restore); After(3, Restore); After(GUARD_SECONDS - 1, Restore)
+    end
+
+    AddPart("movekeys", function()
+        if not (GetBindingAction and GetBindingKey and SetBinding and SaveBindings and GetCurrentBindingSet) then return end
+        frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        frame:RegisterEvent("LOADING_SCREEN_ENABLED")
+        frame:RegisterEvent("UPDATE_BINDINGS")
+        pcall(frame.RegisterEvent, frame, "NOTIFY_TURN_STRAFE_CHANGE")
+        frame:SetScript("OnEvent", function(self, event)
+            if event == "LOADING_SCREEN_ENABLED" then
+                guardUntil = GetTime() + 600   -- until the world is loaded (PLAYER_ENTERING_WORLD sets the real end)
+            elseif event == "PLAYER_ENTERING_WORLD" then
+                WorldLoaded()
+            elseif event == "NOTIFY_TURN_STRAFE_CHANGE" then
+                guardUntil = math.max(guardUntil, GetTime() + 2)
+                After(0.5, Restore)
+            elseif event == "PLAYER_REGEN_ENABLED" then
+                self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+                if restorePending then Restore() end
+            elseif event == "UPDATE_BINDINGS" then
+                if GetTime() >= guardUntil and not restorePending then Remember() end
+            end
+        end)
+    end)
+end)()
 
 PERF.running = nil   -- the file loaded to the end

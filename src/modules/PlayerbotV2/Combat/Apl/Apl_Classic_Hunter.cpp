@@ -10,6 +10,10 @@
 // Pet handling: the emitter exposes pet_attack and the view exposes
 // has_pet / pet_victim / pet_hp_pct, so the pet is sent at the victim,
 // Mend Pet / Revive Pet / Call Pet are cast. Pet growl / feeding are skipped.
+// A hunter with Lone Wolf sends the pet away in a raid (classic_hunter:lone_wolf_dismiss).
+//
+// Multi-Shot and Aimed Shot share one 6 s cooldown in the Forever client (spell category 2), so Multi-Shot, the instant one, takes it
+// and Aimed Shot (a 2 s cast that holds Auto Shot back) is only cast by a hunter without Multi-Shot.
 // Freezing Trap goes down before a pull of a pack (1.12 traps can't be set
 // in combat), so the first add to reach the hunter freezes.
 // Skipped: Feign Death, Scatter Shot, Viper Sting, aspect swapping
@@ -141,7 +145,7 @@ void DoTrueshotAura(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(TRU
 
 bool ShouldCallPet(ApPredicateContext const& ctx)
 {
-    if (ctx.bot.in_combat() || !ctx.bot.pet_guid().IsEmpty() || ctx.bot.owner_pet_off()) return false;
+    if (ctx.bot.in_combat() || !ctx.bot.pet_guid().IsEmpty() || ctx.bot.owner_pet_off() || Classic::LoneWolfKeepsPetAway(ctx.bot)) return false;
     if (!Ready(ctx, CALL_PET)) return false;
     for (auto const& sp : ctx.bot.stable_pets())
         if (sp.slot_kind == 0 && sp.creature_id != 0)
@@ -153,9 +157,36 @@ void DoCallPet(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(CALL_PET
 bool ShouldRevivePet(ApPredicateContext const& ctx)
 {
     // Only when a pet existed and died; an empty guid means never tamed. Not while the owner keeps the pet away ("pet off").
-    return !ctx.bot.owner_pet_off() && !ctx.bot.pet_guid().IsEmpty() && !ctx.bot.has_pet() && Ready(ctx, REVIVE_PET);
+    return !ctx.bot.owner_pet_off() && !Classic::LoneWolfKeepsPetAway(ctx.bot) && !ctx.bot.pet_guid().IsEmpty() && !ctx.bot.has_pet()
+        && Ready(ctx, REVIVE_PET);
 }
 void DoRevivePet(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(REVIVE_PET); }
+
+// Lone Wolf (Bot/ClassicUpkeep.h): in a raid the hunter that took it sends its pet away between fights. Its +20% to every attack is worth
+// more than the pet (scorecard 0.1.29: the marksmanship and survival pets did 47-53 dps of a 550-650 total). The core refuses a dismiss in
+// combat, so it goes out of combat only; one try per 5 s.
+std::mutex g_loneWolfMutex;
+std::unordered_map<uint64, uint32> g_loneWolfLastMs;   // hunter -> when its last dismiss went out
+
+bool ShouldLoneWolfDismiss(ApPredicateContext const& ctx)
+{
+    if (ctx.bot.in_combat() || !ctx.bot.has_pet() || !Classic::LoneWolfKeepsPetAway(ctx.bot))
+        return false;
+    std::lock_guard<std::mutex> lock(g_loneWolfMutex);
+    auto const it = g_loneWolfLastMs.find(ctx.bot.guid().GetCounter());
+    return it == g_loneWolfLastMs.end() || ctx.bot.published_at_ms() - it->second >= 5000u;
+}
+void DoLoneWolfDismiss(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_loneWolfMutex);
+        if (g_loneWolfLastMs.size() > 4096)
+            g_loneWolfLastMs.clear();
+        g_loneWolfLastMs[ctx.bot.guid().GetCounter()] = ctx.bot.published_at_ms();
+    }
+    TC_LOG_INFO("playerbot.v2", "[lone_wolf] {} sends its pet away (raid, Lone Wolf known)", ctx.bot.name());
+    e.dismiss_pet();
+}
 
 bool ShouldMendPet(ApPredicateContext const& ctx)
 {
@@ -472,6 +503,7 @@ ApRule const kRules[] = {
     { ShouldBackOffDeadZone, DoBackOffDeadZone, "classic_hunter:back_off_dead_zone" },
     { ShouldConcussiveShot, DoConcussiveShot, "classic_hunter:concussive_shot" },
     { ShouldTranqShot,     DoTranqShot,     "classic_hunter:tranquilizing_shot" },
+    { ShouldLoneWolfDismiss, DoLoneWolfDismiss, "classic_hunter:lone_wolf_dismiss" },
     { ShouldCallPet,       DoCallPet,       "classic_hunter:call_pet" },
     { ShouldRevivePet,     DoRevivePet,     "classic_hunter:revive_pet" },
     { ShouldMendPet,       DoMendPet,       "classic_hunter:mend_pet" },

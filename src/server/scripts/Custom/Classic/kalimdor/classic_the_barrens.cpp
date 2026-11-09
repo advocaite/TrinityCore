@@ -201,9 +201,7 @@ struct classic_npc_twiggy_flathead : public ScriptedAI
         Initialize();
     }
 
-    // TODO(classic): the event is started by the VMaNGOS areatrigger script "at_twiggy_flathead" (not part of this port).
-    // An AreaTriggerScript must find Twiggy (6248, 30yd) for a player with quest 1719 incomplete and call
-    // twiggy->AI()->SetGUID(player->GetGUID(), DATA_TWIGGY_START_EVENT).
+    // started by classic_at_twiggy_flathead (areatrigger 522, below)
     void SetGUID(ObjectGuid const& guid, int32 id) override
     {
         if (id != DATA_TWIGGY_START_EVENT)
@@ -397,6 +395,28 @@ private:
     ObjectGuid _affrayChallenger[6];
 };
 
+// Areatrigger 522, the Affray ring (VMaNGOS at_twiggy_flathead): a player with The Affray (1719) still open who steps into the
+// ring makes Twiggy start the event. Without it nobody started the event and the Berserker Stance chain stopped here.
+class classic_at_twiggy_flathead : public AreaTriggerScript
+{
+public:
+    classic_at_twiggy_flathead() : AreaTriggerScript("classic_at_twiggy_flathead") { }
+
+    bool OnTrigger(Player* player, AreaTriggerEntry const* /*trigger*/) override
+    {
+        static constexpr uint32 QUEST_THE_AFFRAY = 1719;
+        static constexpr uint32 NPC_TWIGGY_FLATHEAD = 6248;
+
+        if (!player->IsAlive() || player->GetQuestStatus(QUEST_THE_AFFRAY) != QUEST_STATUS_INCOMPLETE)
+            return false;
+
+        if (Creature* twiggy = player->FindNearestCreature(NPC_TWIGGY_FLATHEAD, 30.0f))
+            twiggy->AI()->SetGUID(player->GetGUID(), DATA_TWIGGY_START_EVENT);
+
+        return false;
+    }
+};
+
 /*#####
 ## npc_wizzlecranks_shredder
 #####*/
@@ -434,7 +454,8 @@ struct classic_npc_wizzlecranks_shredder : public EscortAI
 
     void Reset() override
     {
-        if (!HasEscortState(STATE_ESCORT_ESCORTING))
+        // the escort is over before the end scene: an evade then must not stop it halfway (quest never credited)
+        if (!HasEscortState(STATE_ESCORT_ESCORTING) && !_isPostEvent)
         {
             if (me->GetStandState() == UNIT_STAND_STATE_DEAD)
                 me->SetStandState(UNIT_STAND_STATE_STAND);
@@ -454,6 +475,10 @@ struct classic_npc_wizzlecranks_shredder : public EscortAI
         me->SetFaction(CLASSIC_FACTION_RATCHET);
 
         LoadPath(PATH_ESCORT_WIZZLECRANK);
+        // EscortAI despawns 1 s after the last point and ignores that point's 40 s wait, so the shredder vanished right
+        // after "Looks like we're out of the woods" and the end scene (quest credit, Pilot Wizzlecrank) never ran.
+        // The end scene despawns the shredder itself (UpdateEscortAI, step 4).
+        SetDespawnAtEnd(false);
         Start(true, player->GetGUID(), quest);
     }
 
@@ -536,6 +561,13 @@ struct classic_npc_wizzlecranks_shredder : public EscortAI
                         me->SummonCreature(NPC_PILOT_WIZZ, me->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 180s);
                         me->SetHomePosition(me->GetRespawnPosition());   // VMaNGOS ResetHomePosition()
                         break;
+                    case 4:
+                        // broken down shredder: gone after the pilot's 3 minutes, then respawns at the drill site
+                        _isPostEvent = false;
+                        _postEventCount = 0;
+                        _postEventTimer = 1000;
+                        me->DespawnOrUnsummon(175s);
+                        return;
                 }
 
                 ++_postEventCount;
@@ -695,6 +727,7 @@ void AddSC_classic_the_barrens()
 {
     RegisterCreatureAI(classic_npc_gilthares);
     RegisterCreatureAI(classic_npc_twiggy_flathead);
+    new classic_at_twiggy_flathead();
     RegisterCreatureAI(classic_npc_wizzlecranks_shredder);
     RegisterCreatureAI(classic_npc_mission_possible_but_not_probable);
     RegisterCreatureAI(classic_npc_sarilus_foulborne);

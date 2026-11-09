@@ -33,11 +33,15 @@ Guid ResolveController(Guid const& leader, std::vector<Member<Guid>> const& othe
     return Guid{};
 }
 
-// Passive holds only while the human leading the group is not fighting: Passive keeps a bot from STARTING a fight, and once the
-// player is in combat his bots fight with him (the owner, 2026-10-27: "bots should always fight if you're fighting").
-inline bool PassiveHolds(bool passive_stance, bool leader_human, bool leader_alive, bool leader_in_combat)
+// Passive holds only while the group is not fighting: Passive keeps a bot from STARTING a fight, and once the player is in combat his
+// bots fight with him (the owner, 2026-10-27: "bots should always fight if you're fighting"). The group's fight counts as much as his
+// own: a warlock who lets his tank pull is not in combat himself, and his rogue and cat druid stood beside him through every UBRS pull
+// with the kill focus unread ("passive_now 1" on each opener, "on the focus 0", 2026-10-28 22:05-22:10; the owner: "when we're in
+// battle, they should just be going full ham"). `group_fighting` = a living member within kFightJoinYd of the human leader is in
+// combat; which mobs a bot then joins is LeaderFightMayJoin's to say, so an unreachable add across the map still is not one.
+inline bool PassiveHolds(bool passive_stance, bool leader_human, bool leader_alive, bool leader_in_combat, bool group_fighting = false)
 {
-    return passive_stance && !(leader_human && leader_alive && leader_in_combat);
+    return passive_stance && !(leader_human && leader_alive && (leader_in_combat || group_fighting));
 }
 
 // Which mobs a Passive bot joins once the player fights (PassiveHolds false): his own target, a mob within kFightJoinYd of him, or a
@@ -54,15 +58,24 @@ inline bool LeaderFightMayJoin(bool leader_target, float mob_to_leader, float me
     return member_to_leader >= 0.f && member_to_leader <= kFightJoinYd && mob_to_member >= 0.f && mob_to_member <= kFightJoinYd;
 }
 
-// A bot fighting its victim moves for the fight (its chase, the combat gap-close), not after its leader: the follow / formation of a
-// grouped bot stands down while it has a living victim that is in the fight (the mob is in combat or has a victim, or the bot is in
-// combat) or that the owner ordered it at, and the bot is within `kFightMoveLeashYd` of the leader. The follow re-issued every tick
-// replaced the chase start_attack gave it, so a rogue next to a warlock owner casting from 30 y stood beside him and swung at nothing
-// (UBRS 2026-10-27, Eman: "all he's doing is following me around when he should be fighting"). Beyond the leash the follow takes it back.
+// A bot fighting the group's fight moves for it (its chase, the combat gap-close), not after its leader: the follow / formation of a
+// grouped bot stands down while its living victim is the leader's own target, is on the bot, or is the main tank's mob or on a group
+// member within `kFightJoinYd` of the leader (the same reach the Passive join has), and the bot is within `kFightMoveLeashYd` of him.
+// The follow re-issued every tick replaced the chase start_attack gave it, so a rogue next to a warlock owner casting from 30 y stood
+// beside him and swung at nothing (UBRS 2026-10-27, Eman: "all he's doing is following me around when he should be fighting"). Any
+// mob in combat was too wide: a mob some other pull put in combat is not the group's fight (UBRS 16:15: "they should be staying close").
+// The group's mob counts as far out as the Passive join reaches (LeaderFightMayJoin): near him, or on a member near him and fighting that
+// member there. Measured from the player alone, a Dreadweaver 41 y out on the mage by him was no fight of the group's, and the follow
+// recall walked the cat druid back to the warlock as she ran at it (UBRS 2026-10-28 22:14:03-11, Dorianu 242 damage in a 21 s pull).
 constexpr float kFightMoveLeashYd = 45.f;
-inline bool FightOwnsMovement(bool live_victim, bool victim_in_fight, bool owner_ordered_attack, float bot_to_leader)
+inline bool FightOwnsMovement(bool live_victim, bool leader_target, bool group_fight, bool mob_on_me, float mob_to_leader, float bot_to_leader,
+                              float member_to_leader = -1.f, float mob_to_member = -1.f)
 {
-    return live_victim && (victim_in_fight || owner_ordered_attack) && bot_to_leader >= 0.f && bot_to_leader < kFightMoveLeashYd;
+    if (!live_victim || bot_to_leader < 0.f || bot_to_leader >= kFightMoveLeashYd)
+        return false;
+    if (leader_target || mob_on_me)
+        return true;
+    return group_fight && LeaderFightMayJoin(false, mob_to_leader, member_to_leader, mob_to_member);
 }
 
 // Passive: a mob already on the bot is always fought (it cannot be ignored); a mob on someone else is taken only while it is

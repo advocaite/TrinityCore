@@ -30,6 +30,8 @@
 #include "Log.h"
 #include <fstream>
 #include "Player.h"
+#include "../Fleet/PlayerCraftOrders.h"   // .playerbot craftfor
+#include "../Bot/BotBridge.h"           // .playerbot bridgeask
 #include "GameTime.h"
 #include "MovementPackets.h"
 #include "WorldSession.h"
@@ -57,6 +59,7 @@
 #include "Fleet/BotComposition.h"
 #include "Fleet/BotIdentityRegistry.h"
 #include "Fleet/BotPopulationManager.h"
+#include "Fleet/BotSize.h"
 #include "Fleet/InstanceGroupCap.h"
 #include "Fleet/BotSetupPipeline.h"
 #include "Fleet/CompanionDelete.h"
@@ -70,6 +73,7 @@
 #include "Bot/BotRegistry.h"
 #include "Bot/BotPersonality.h"
 #include "Bot/BotTextMgr.h"
+#include "Api/BotLanguage.h"
 #include "Bot/BotRng.h"
 #include "Session/BotSessionMgr.h"
 #include "Threading/TickScheduler.h"
@@ -563,6 +567,11 @@ public:
         static ChatCommandTable v2Table =
         {
             { "inspect",       HandleInspect,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            // Dev checks that need no client logged in (GM console / SOAP): can a player's bags take an item, a craft order as if
+            // a player whispered it, and a line to a bot through the bot bridge as if said in party.
+            { "canstore",      HandleCanStore,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "craftfor",      HandleCraftFor,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "bridgeask",     HandleBridgeAsk,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "status",        HandleStatus,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "activity",      HandleActivity,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "levels",        HandleLevels,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -656,6 +665,7 @@ public:
             { "addon",         HandleBotAddonHello, rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
             { "add",           HandleBotAdd,        rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "lfg",           HandleBotLfg,        rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
+            { "dungeon",       HandleBotDungeon,    rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "call",          HandleBotCall,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             // Every player: brings the caller's own bots only (`.bot summon all|saved|<bot name>`).
             { "summon",        HandleBotSummon,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
@@ -667,7 +677,10 @@ public:
             { "unsave",        HandleBotUnsave,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "delete",        HandleBotDelete,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "list",          HandleBotList,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
+            { "language",      HandleBotLanguage,   rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "world",         HandleBotWorld,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            // GM only: how many world bots the realm has (Off / Low / Medium / High), set in game until the next restart (the launcher's Bots setting decides at every start).
+            { "population",    HandleBotPopulation, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgstress",      HandleBotBgStress,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgsoak",        HandleBotBgSoak,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
@@ -686,8 +699,73 @@ public:
         return root;
     }
 
+    // `.playerbot canstore <player> <item id> [count]`: what the game answers when that many of the item would go into the player's
+    // bags (the check a conjure or craft makes first), with the item's limits and the free bag slots.
+    static bool HandleCanStore(ChatHandler* handler, std::string name, uint32 item, Optional<uint32> count)
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayerByName(name);
+        ItemTemplate const* t = sObjectMgr->GetItemTemplate(item);
+        if (!p || !t)
+        {
+            handler->SendSysMessage(!p ? "No such player online." : "No such item.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        uint32 const n = std::max<uint32>(1, count.value_or(1));
+        ItemPosCountVec dest;
+        uint32 no_space = 0;
+        InventoryResult const r = p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item, n, &no_space);
+        handler->PSendSysMessage("%s, item %u (%s) x%u: InventoryResult %u%s; limit category %u, max count %d, stack %u, carried %u, "
+                                 "free bag slots %u, no room for %u",
+            p->GetName().c_str(), item, t->GetName(DEFAULT_LOCALE), n, uint32(r), r == EQUIP_ERR_OK ? " (fits)" : "",
+            t->GetItemLimitCategory(), t->GetMaxCount(), t->GetMaxStackSize(), p->GetItemCount(item, true), p->GetFreeInventorySlotCount(),
+            no_space);
+        return true;
+    }
+
+    // `.playerbot craftfor <requester> <bot> <order>`: the bot takes a craft order ("craft water 10") from `requester` as if he had
+    // whispered it (no rights check: a test of the craft path itself). The bot's whispers go to the requester and the log.
+    static bool HandleCraftFor(ChatHandler* handler, std::string requester, std::string bot, Tail text)
+    {
+        Player* r = ObjectAccessor::FindConnectedPlayerByName(requester);
+        Player* b = ObjectAccessor::FindConnectedPlayerByName(bot);
+        std::string order(text);
+        if (!r || !b || order.empty())
+        {
+            handler->SendSysMessage("Usage: .playerbot craftfor <requester> <bot> craft <item> [count] (both online)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (order.rfind("craft ", 0) != 0)
+            order = "craft " + order;
+        bool const taken = Playerbot::V2::PlayerCraftOrders::Order(r, b, order);
+        handler->PSendSysMessage("%s: \"%s\" %s (see the [craft_order] lines)", b->GetName().c_str(), order.c_str(),
+                                 taken ? "read as a craft order" : "not a craft order");
+        return true;
+    }
+
+    // `.playerbot bridgeask <from> <bot> <text>`: a chat_in to the bot bridge's program as if `from` had said it in party, so the
+    // program's answer and action can be tested without a client. Needs the bridge on and its program answering.
+    static bool HandleBridgeAsk(ChatHandler* handler, std::string from, std::string bot, Tail text)
+    {
+        Player* f = ObjectAccessor::FindConnectedPlayerByName(from);
+        Player* b = ObjectAccessor::FindConnectedPlayerByName(bot);
+        std::string line(text);
+        if (!f || !b || line.empty())
+        {
+            handler->SendSysMessage("Usage: .playerbot bridgeask <from> <bot> <text> (both online)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        uint64 const id = Playerbot::BotBridge::ReportChat(b, f, "party", line, "");
+        handler->PSendSysMessage(id ? "chat_in %llu written for %s" : "not written (bridge off, or no program answering)",
+                                 (unsigned long long)id, b->GetName().c_str());
+        return true;
+    }
+
     static bool HandleWhisperCmd(ChatHandler* handler, std::string name, Tail text)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         if (!sess || !sess->GetPlayer())
             return false;
@@ -765,8 +843,38 @@ public:
     }
 
     // .bot about: the name of the bots, so it shows in the command list and `.bot` help
+    // .bot language [auto|en|ru]: the language your bots answer you in (whispers, group chat, these command replies). auto, the start
+    // setting, follows the game client's language; the choice is kept per account (Api/BotLanguage.h).
+    static bool HandleBotLanguage(ChatHandler* handler, Optional<std::string> word)
+    {
+        namespace Lang = Playerbot::BotLanguage;
+        WorldSession* sess = handler->GetSession();
+        Player* me = sess ? sess->GetPlayer() : nullptr;
+        if (!me)
+            return false;
+        if (word)
+        {
+            Lang::Pref pref = Lang::Pref::Auto;
+            if (!Lang::ParsePref(*word, pref))
+            {
+                Lang::LocalizedHandler localized(handler);
+                localized.Get()->SendSysMessage("Usage: .bot language auto|en|ru");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            Lang::SetPref(sess->GetAccountId(), pref);
+        }
+        // Taken after the change, so the answer is already in the language just chosen.
+        Lang::LocalizedHandler localized(handler); handler = localized.Get();
+        bool const russian = Lang::LangOf(me) == Playerbot::Locale::Lang::Ru;
+        handler->PSendSysMessage("Bot replies: %s (%s). .bot language auto|en|ru changes it.", russian ? "Russian" : "English",
+            Lang::GetPref(sess->GetAccountId()) == Lang::Pref::Auto ? "your client's language" : "your choice");
+        return true;
+    }
+
     static bool HandleBotAbout(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         handler->SendSysMessage("WoW Forever Bots by Karrz, based on agatho's PlayerbotV2 (GPL-2.0). .bot add <class> [tank|healer|dps], .bot call, .bot dismiss; all orders: BOT_COMMANDS.md");
         return true;
     }
@@ -775,6 +883,7 @@ public:
     // (the Group Finder does the same by itself when nobody joins a posted listing in time). The word is your own role.
     static bool HandleBotLfg(ChatHandler* handler, Optional<std::string> ownRoleArg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         Player* me = sess ? sess->GetPlayer() : nullptr;
         if (!me || !Playerbot::Services::Initialized())
@@ -793,10 +902,46 @@ public:
         return ok ? true : Refuse(handler);
     }
 
+    // .bot dungeon [list | <name|any> [tank|healer|dps] | leave | cancel]: the bot dungeon finder (DungeonFinder.cpp). A dungeon (or any
+    // for your level) is picked, the missing places are filled with your companions and the group is put inside its door; leave
+    // brings you back to where you queued. The role word is your own role.
+    static bool HandleBotDungeon(ChatHandler* handler, Optional<std::string> what, Optional<std::string> ownRoleArg)
+    {
+        WorldSession* sess = handler->GetSession();
+        Player* me = sess ? sess->GetPlayer() : nullptr;
+        if (!me || !Playerbot::Services::Initialized())
+        { handler->SendSysMessage("`.bot dungeon` is in-game only."); return Refuse(handler); }
+        std::string const word = what ? ToLowerAscii(*what) : std::string("list");
+        std::string msg;
+        bool ok = true;
+        if (word == "list")
+            msg = Playerbot::V2::DungeonFinderList(me);
+        else if (word == "leave")
+            ok = Playerbot::V2::DungeonFinderLeave(me, msg);
+        else if (word == "cancel")
+            ok = Playerbot::V2::DungeonFinderCancel(me, msg);
+        else
+        {
+            Playerbot::Role own = Playerbot::Role::Unknown;
+            if (ownRoleArg)
+            {
+                bool roleOk = false;
+                own = ParseRoleWord(*ownRoleArg, roleOk);
+                if (!roleOk)
+                { handler->SendSysMessage("Usage: .bot dungeon <name|any> [tank|healer|dps] (your own role); .bot dungeon list|leave|cancel"); return Refuse(handler); }
+            }
+            ok = Playerbot::V2::DungeonFinderQueue(me, *what, own, msg);
+        }
+        if (!msg.empty())
+            handler->SendSysMessage(msg.c_str());
+        return ok ? true : Refuse(handler);
+    }
+
     // .bot add <class> [tank|healer|dps] [race] [male|female]
     static bool HandleBotAdd(ChatHandler* handler, std::string const& class_arg, Optional<std::string> arg2,
                              Optional<std::string> arg3, Optional<std::string> arg4)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return Refuse(handler); }
         WorldSession* sess = handler->GetSession();
@@ -931,7 +1076,11 @@ public:
 
     // .bot call <name|all>: log your companions in (or fetch the ones already online), level, gear and group them.
     // "all" is your saved roster (`.bot save`) and the companions in your group, not every companion you ever made.
-    static bool HandleBotCall(ChatHandler* handler, std::string const& who) { return CallCompanions(handler, who, false); }
+    static bool HandleBotCall(ChatHandler* handler, std::string const& who)
+    {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
+        return CallCompanions(handler, who, false);
+    }
 
     // groupOnly (`.bot summon all`, Karrz 2026-10-08: in a 2-person party it brought the whole old raid back online): "all" is only the
     // companions in the caller's group right now, wherever they are. It never logs anyone in and never adds anyone.
@@ -1041,6 +1190,7 @@ public:
     // summoned with the GM `.summon`, which stays GM-only).
     static bool HandleBotSummon(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler ? handler->GetSession() : nullptr;
         if (!sess || !sess->GetPlayer())
             return false;
@@ -1116,6 +1266,7 @@ public:
     // "gear t3". Tier sets are worn at the level cap only; the server may disallow modes (Playerbot.OwnedGear.AllowedModes).
     static bool HandleBotGear(ChatHandler* handler, Optional<std::string> mode_arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1144,6 +1295,7 @@ public:
     // Offline companions are skipped: `.bot call` them first.
     static bool HandleBotRegear(ChatHandler* handler, Optional<std::string> who_arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         std::string const who = who_arg ? *who_arg : std::string("all");   // bare `.bot regear` = every companion
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
@@ -1195,6 +1347,7 @@ public:
     // it themselves without the bot logic attaching to it (Module::OnPlayerLogin drives every marked character).
     static bool HandleBotDismiss(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); handler->SetSentErrorMessage(true); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1257,6 +1410,7 @@ public:
     // .bot save <name|all>: put a companion, or every companion with you (online, in your group), on your roster.
     static bool HandleBotSave(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1336,6 +1490,7 @@ public:
     // .bot unsave <name|all>: take a companion, or all of them, off your roster. They stay yours; `.bot call <name>` still works.
     static bool HandleBotUnsave(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1355,6 +1510,7 @@ public:
     // .bot delete <name>: get rid of a companion for good (its character is deleted once it has logged out).
     static bool HandleBotDelete(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1396,6 +1552,38 @@ public:
         return true;
     }
 
+    // `.bot population [off|low|medium|high|file]`: the world bots of the whole realm, right away, until the next restart. No word: what
+    // it is now. `file` hands the numbers back to the config files (Bots.Size and the other Bots.* lines, Playerbot.World.Enable).
+    static bool HandleBotPopulation(ChatHandler* handler, Optional<std::string> word)
+    {
+        if (!Playerbot::Services::Initialized())
+        { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
+        auto& pop = Playerbot::Services::Population();
+        if (word && !word->empty())
+        {
+            std::string const w = ToLowerAscii(*word);
+            if (w == "file" || w == "config" || w == "default")
+                pop.SetWorldPopulation(-1);
+            else if (std::optional<Playerbot::V2::Fleet::PopLevel> const lv = Playerbot::V2::Fleet::ParsePopLevel(w))
+                pop.SetWorldPopulation(int(*lv));
+            else
+            {
+                handler->SendSysMessage("Usage: .bot population off|low|medium|high|file");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            static char const* const kSaid[] = { "World bots: Off until the next restart. The world bots online log out now.",
+                                                 "World bots: Low. Applies now, until the next restart (then the launcher's Bots setting decides).",
+                                                 "World bots: Medium. Applies now, until the next restart (then the launcher's Bots setting decides).",
+                                                 "World bots: High. Applies now, until the next restart (then the launcher's Bots setting decides)." };
+            int const now = pop.WorldPopulation();
+            handler->SendSysMessage(now >= 0 && now <= 3 ? kSaid[now] : "World bots: back to the config files (applies now).");
+            return true;
+        }
+        handler->SendSysMessage(pop.WorldPopulationLine().c_str());
+        return true;
+    }
+
     // `.bot bgstress <bg_type> <cycles> [hold_sec]`: repeated battleground fill / release cycles (see BotPopulationManager).
     static bool HandleBotBgStress(ChatHandler* handler, Optional<uint16> bgType, Optional<uint32> cycles, Optional<uint32> holdSec)
     {
@@ -1420,6 +1608,7 @@ public:
 
     static bool HandleBotList(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -5205,6 +5394,7 @@ public:
     // "no detailed usage information" (`.playerbot summon First Last`, Discord 2026-10-24).
     static bool HandleSummon(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); handler->SetSentErrorMessage(true); return false; }
         std::string target_name(args);
@@ -5374,6 +5564,7 @@ public:
     // line as a secure macro, so it works in combat).
     static bool HandleLazy(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         if (!sess || !sess->GetPlayer())
         {
@@ -5388,6 +5579,7 @@ public:
 
     static bool HandleSelf(ChatHandler* handler, std::string const& arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();

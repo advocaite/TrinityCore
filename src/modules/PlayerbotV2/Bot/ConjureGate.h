@@ -21,4 +21,14 @@ constexpr bool MayConjure(bool in_combat, bool recently_in_combat, int32_t mana,
     return !in_combat && !recently_in_combat && mana >= cost;
 }
 
+// A mage drinks before it conjures: its water, food and gems come out of the same pool it fights with. In UBRS (2026-10-29 09:29:08)
+// three mages at 4-14 % mana conjured a Mana Ruby in the 14 s between two pulls, sat down to drink 3 s later and went into the next
+// pull dry, wanding. Below this mark the conjure waits; the drink (or regen) comes first.
+constexpr int32_t kMageConjureMinManaPct = 80;
+
+constexpr bool MageConjureWaitsForMana(int32_t mana_pct)
+{
+    return mana_pct < kMageConjureMinManaPct;
+}
+
 } // namespace Playerbot::V2

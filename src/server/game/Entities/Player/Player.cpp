@@ -16,6 +16,7 @@
  */
 
 #include "Player.h"
+#include "ClassicWeaponImbue.h"
 #include "CombatEnchantProc.h"
 #include "DeathRecap.h"
 #include "AreaTrigger.h"
@@ -272,6 +273,8 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
 
     m_temporaryUnsummonedPetNumber = 0;
     m_petResummonDelay = 0;
+    m_petParkedForTravel = false;
+    m_petParkedCheckTimer = 0;
     //cache for CreatedBySpell to allow
     //returning reagents for temporarily removed pets
     //when dying/logging out
@@ -957,8 +960,10 @@ void Player::Update(uint32 p_time)
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
 
+    UpdateParkedPet(p_time);
+
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
-    // Classic 1.60 client is still on its loading screen, the client froze on the pet (a warlock's demon out at logout).
+    // Classic 1.60 client is still on its loading screen, the client froze on the pet (warlock demon out at logout, 20 Oct).
     if (m_petResummonDelay)
     {
         if (p_time >= m_petResummonDelay)
@@ -1148,9 +1153,14 @@ void Player::Update(uint32 p_time)
     UpdateHomebindTime(p_time);
 
     Pet* pet = GetPet();
-    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed())
+    // A pet out of sight on the same map (stuck on the terrain, left at a fight) is set down next to its owner, the way a player's pet
+    // catches up in Classic; before, it was dismissed and a warlock's Imp just vanished while fighting or travelling (player report, 3 Nov).
+    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed() && !pet->CatchUpWithOwner())
     //if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityDistance()) && (GetCharmGUID() && (pet->GetGUID() != GetCharmGUID())))
+    {
+        TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: out of its owner's sight", pet->GetName(), pet->GetEntry(), GetName());
         RemovePet(pet, PET_SAVE_NOT_IN_SLOT, true);
+    }
 
     if (IsAlive())
     {
@@ -2391,6 +2401,25 @@ void Player::GrantClassicFreeBankTab()
     SetCharacterBankTabSettings(0, ChatHandler(GetSession()).PGetParseString(LANG_BANK_TAB_NAME, 1), "", "", BagSlotFlags::None);
 }
 
+void Player::UpdateClassicPvPRank()
+{
+    // Classic 1.60: the PvP rank is the renown level of faction 2800 "PvP Rank Points" (renown currency 3473, rank 1 ... 14), but rank
+    // gear (ItemSparse RequiredPVPRank) and the honor kill code read the old honor rank in ActivePlayerData::LifetimeMaxRank, where
+    // rank 1 Private/Scout = 5 ... rank 14 Grand Marshal/High Warlord = 18. Nothing set it, so every rank item stayed red at the
+    // vendor whatever rank the player had. It is the highest rank ever reached: it never goes down.
+    static constexpr uint32 PvPRankRenownCurrencyID = 3473;
+    static constexpr uint8 HonorRankOffset = 4;
+    static constexpr uint8 MaxPvPRank = 14;
+
+    uint32 rank = std::min<uint32>(GetCurrencyQuantity(PvPRankRenownCurrencyID), MaxPvPRank);
+    if (!rank)
+        return;
+
+    uint8 honorRank = uint8(rank + HonorRankOffset);
+    if (honorRank > *m_activePlayerData->LifetimeMaxRank)
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::LifetimeMaxRank), honorRank);
+}
+
 void Player::UpdateClassicLegacyUnlock()
 {
     // Classic 1.60: the Legacy system (micro menu "Legacy", LegacyMicroButtonMixin:IsLegacySystemUnlocked) opens with renown level 1
@@ -2522,10 +2551,32 @@ void Player::InitTalentForLevel()
         ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
-    if (level < 15)
+    // Classic 1.60: the first talent point comes at level 10, not at 15 as on retail; resetting below 15 wiped the
+    // points spent at 10-14 on every level gain and spec swap. The Legacy perk Talented gives points from an earlier level
+    // (5 to 9), and those points must survive a level gain below 10 too.
+    int32 firstTalentLevel = MIN_SPECIALIZATION_LEVEL;
+    if (int32 talentedStartLevel = TraitMgr::PlayerDataAccessor(this).GetClassicTalentedStartLevel(); talentedStartLevel > 0 && talentedStartLevel < firstTalentLevel)
+        firstTalentLevel = talentedStartLevel;
+
+    if (level < firstTalentLevel)
     {
-        // Remove all talent points
-        ResetTalents(true);
+        // Remove all talent points, when any are spent. ResetTalents also dismisses the pet and tells the client its talents were
+        // reset, and without this check that ran on every level gain below the first talent level: a warlock's Imp vanished at
+        // each of levels 2-9 (Azeldof, 2026-11-02).
+        bool anySpent = false;
+        for (uint8 spec = 0; spec < MAX_SPECIALIZATIONS && !anySpent; ++spec)
+            for (auto const& [talentId, state] : *GetTalentMap(spec))
+                if (state != PLAYERSPELL_REMOVED)
+                    anySpent = true;
+
+        if (!anySpent)
+            if (UF::TraitConfig const* activeConfig = GetTraitConfig(m_activePlayerData->ActiveCombatTraitConfigID))
+                for (UF::TraitEntry const& entry : activeConfig->Entries)
+                    if (entry.Rank > 0)
+                        anySpent = true;
+
+        if (anySpent)
+            ResetTalents(true);
     }
     else
     {
@@ -2984,6 +3035,15 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             if (!IsInWorld() && !learning)                   // explicitly load from DB and then exist in it already and set correctly
                 itr->second.state = PLAYERSPELL_UNCHANGED;
 
+            // a spell loaded from character_spell carries no trait; the trait config applied at login names it, so link it here instead of dropping it with the early return
+            if (trait && itr->second.Trait != trait)
+            {
+                itr->second.Trait = trait;
+                if (TraitDefinitionEntry const* traitDefinition = sTraitDefinitionStore.LookupEntry(trait->DefinitionId))
+                    if (traitDefinition->OverridesSpellID)
+                        AddOverrideSpell(traitDefinition->OverridesSpellID, spellId);
+            }
+
             return false;
         }
 
@@ -2996,7 +3056,8 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             dependent_set = true;
         }
 
-        if (itr->second.Trait != trait)
+        // a learn that names no trait (a trainer teaching a former talent such as Mortal Strike) must not drop the link a talent purchase gave it
+        if (trait && itr->second.Trait != trait)
         {
             if (itr->second.Trait)
                 if (TraitDefinitionEntry const* traitDefinition = sTraitDefinitionStore.LookupEntry(itr->second.Trait->DefinitionId))
@@ -3309,8 +3370,28 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
 
             // Runeforging special case
             if ((_spell_idx->second->GetAcquireMethod() == SkillLineAbilityAcquireMethod::AutomaticCharLevel && !HasSkill(_spell_idx->second->SkillLine)) || ((_spell_idx->second->SkillLine == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
+            {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
                     LearnDefaultSkill(rcInfo);
+            }
+            // Classic 1.60: a weapon spell taught by a weapon master (Two-Handed Maces 199, Two-Handed Axes 197 for a shaman) opens its
+            // weapon skill when the race and class may have it. These spells carry no skill effect and those skills are not given at
+            // creation, so the spell was in the spellbook but the weapon could not be equipped ("you don't know how to use it").
+            // Pick Lock 1804 is the same for Lockpicking 633: no skill effect, and its SkillRaceClassInfo 601 has Availability 0, so
+            // rogues had Pick Lock but no Lockpicking ("insufficient skill" on every lock). This runs at login too, so existing
+            // rogues get the skill on their next login.
+            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+                && !HasSkill(_spell_idx->second->SkillLine))
+            {
+                if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
+                {
+                    LearnDefaultSkill(rcInfo);
+                    // Lockpicking starts full (level x 5) so rogues who had Pick Lock without the skill are not sent back to 1;
+                    // after a level gain the cap rises and picking locks raises the value again
+                    if (_spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+                        SetSkill(SKILL_LOCKPICKING, 0, GetMaxSkillValueForLevel(), GetMaxSkillValueForLevel());
+                }
+            }
         }
     }
 
@@ -5616,7 +5697,8 @@ float Player::ApplyRatingDiminishing(CombatRating cr, float bonusValue) const
 
 float Player::GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const
 {
-    float baseExpertise = 7.5f;
+    // Classic 1.60 (vanilla): no innate expertise, creatures keep their full 5% dodge and parry (retail players start at 7.5%)
+    float baseExpertise = 0.0f;
     switch (attType)
     {
         case BASE_ATTACK:
@@ -5882,6 +5964,7 @@ bool Player::UpdateGatherSkill(uint32 skillId, uint32 skillValue, uint32 redLeve
     switch (skillEntry->ParentSkillLineID ? skillEntry->ParentSkillLineID : skillEntry->ID)
     {
         case SKILL_HERBALISM:
+        case SKILL_LOCKPICKING: // Classic 1.60 (vanilla, VMaNGOS): picking a lock raises Lockpicking like a gathering skill
             return UpdateSkillPro(skillId, SkillGainChance(skillValue, grayLevel, greenLevel, yellowLevel) * multiplicator, gatheringSkillGain);
         case SKILL_SKINNING:
             if (sWorld->getIntConfig(CONFIG_SKILL_CHANCE_SKINNING_STEPS) == 0)
@@ -7359,8 +7442,8 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
         // apply honor multiplier from aura (not stacking-get highest)
         AddPct(honor_f, GetMaxPositiveAuraModifierByMiscMask(SPELL_AURA_MOD_HONOR_GAIN_PCT_FROM_SOURCE, 1 << AsUnderlyingType(source)));
         AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
-        // Classic 1.60 Legacy perk For Great Honor 1225501: currency gain aura on Honor (1792); honor is not credited as that currency here
-        AddPct(honor_f, GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_CURRENCY_GAIN, 1792));
+        // Classic 1.60 Legacy perk For Great Honor 1225501 (currency gain aura on Honor 1792) is applied by
+        // ModifyCurrency when the honor is credited below, for kills and battleground honor alike.
         honor_f += _restMgr->GetRestBonusFor(REST_TYPE_HONOR, honor_f);
     }
 
@@ -7381,6 +7464,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
     SendDirectMessage(data.Write());
 
     AddHonorXP(honor);
+
+    // Classic 1.60: honor is the Honor currency (1792). The PvP quartermasters (Lady Palanseer 12792, Brave Stonehide
+    // 12793, Sergeant Thunderhorn 14581) price their goods in it through ItemExtendedCost (11575-11706: 1792 plus marks),
+    // so honor that only fed the retail honor level bar could never be spent.
+    if (honor > 0 && sCurrencyTypesStore.HasRecord(CURRENCY_HONOR_CLASSIC))
+        ModifyCurrency(CURRENCY_HONOR_CLASSIC, honor, CurrencyGainSource::PvPHonorReward);
 
     if (InBattleground() && honor > 0)
     {
@@ -8724,6 +8813,10 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
             case ITEM_MOD_BLOCK_VALUE:                      // Classic 1.60: added to the shield block value
                 m_classicBlockValueBonus += apply ? int32(val) : -int32(val);
                 break;
+            case ITEM_MOD_SPELL_HEALING_DONE:               // Classic 1.60: "Increases healing done by up to X" (393 items, e.g. Truefaith Vestments)
+            case ITEM_MOD_SPELL_DAMAGE_DONE:                // Classic 1.60: "... and damage done by up to Y for all magical spells" (322 items)
+                _ApplyClassicSpellHealingOrDamageMod(statType, int32(val), apply);
+                break;
             default:
                 if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END)
                     _ApplyClassicItemMod(statType, int32(val), apply);
@@ -8780,6 +8873,17 @@ void Player::_ApplyClassicItemMod(int32 statType, int32 val, bool apply)
         for (UnitMods mod : { UNIT_MOD_RESISTANCE_FIRE, UNIT_MOD_RESISTANCE_NATURE, UNIT_MOD_RESISTANCE_FROST, UNIT_MOD_RESISTANCE_SHADOW, UNIT_MOD_RESISTANCE_ARCANE })
             HandleStatFlatModifier(mod, BASE_VALUE, float(val), apply);
     // penetration and the creature type bonuses are read when dealing damage
+}
+
+// Classic 1.60: the vanilla "Increases healing done by up to X and damage done by up to Y for all magical spells and effects" equip
+// spells became the pair ITEM_MOD_SPELL_HEALING_DONE (X, healing only) and ITEM_MOD_SPELL_DAMAGE_DONE (Y, damage of the magic schools
+// only), on items and on enchantments ("Healing Spells +$k1, Damage Spells +$k2"). Plain spell power (ITEM_MOD_SPELL_POWER) adds to both.
+// Read by Unit::SpellBaseDamageBonusDone / SpellBaseHealingBonusDone.
+void Player::_ApplyClassicSpellHealingOrDamageMod(int32 statType, int32 val, bool apply)
+{
+    int32& total = statType == ITEM_MOD_SPELL_HEALING_DONE ? m_classicSpellHealingDone : m_classicSpellDamageDone;
+    total += apply ? val : -val;
+    UpdateSpellDamageAndHealingBonus();
 }
 
 int32 Player::GetClassicSpellDamageDone(uint32 schoolMask) const
@@ -9392,6 +9496,31 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         if (!pEnchant)
             continue;
 
+        // Windfury Weapon (vMaNGOS, Player::CastItemCombatSpell): 20% on a melee hit to gain the rank's Windfury Attack, which adds the extra
+        // attack and the attack power for it; never on the extra attack itself. Done here on the imbue's enchantment, not through the
+        // enchantment's own spell, which Forever points at a dummy aura (Windfury Weapon 439431) with no script.
+        if (e_slot == TEMP_ENCHANTMENT_SLOT)
+        {
+            if (uint32 windfuryAttack = ClassicWeaponImbue::WindfuryAttackForEnchant(enchant_id))
+            {
+                if (canTrigger && !GetLastExtraAttackSpell())
+                    CombatEnchantProc::Dispatch(20.0f, [](float procChance) { return roll_chance(procChance); }, [&]
+                    {
+                        CastSpell(this, windfuryAttack, CastSpellExtraArgs(item));
+                    });
+                continue;
+            }
+        }
+
+        // Flametongue Weapon: every hit with the imbued weapon casts the rank's Flametongue Weapon Proc on the target, which deals the
+        // Fire damage by this weapon's speed. Same reason as Windfury: every rank's enchantment points at a dummy aura (436519).
+        if (uint32 flametongueProc = ClassicWeaponImbue::FlametongueProcForEnchant(enchant_id))
+        {
+            if (canTrigger && damageInfo.GetVictim()->IsAlive())
+                CastSpell(damageInfo.GetVictim(), flametongueProc, CastSpellExtraArgs(item));
+            continue;
+        }
+
         for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
         {
             if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
@@ -9459,6 +9588,27 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                             args.AddSpellMod(static_cast<SpellValueModFloat>(SPELLVALUE_BASE_POINT0 + AsUnderlyingType(spellEffectInfo.EffectIndex)), CalculatePct(spellEffectInfo.CalcValue(this), effectPct));
                 }
                 CastSpell(target, spellInfo->Id, args);
+
+                // Classic 1.60 poisons (vMaNGOS Player::CastItemCombatSpell): each application uses a charge, the last one removes the poison.
+                // 14113 Improved Poisons: "gives Poison applications a $m2% chance to not consume a charge" (effect 1, dummy).
+                if (e_slot == TEMP_ENCHANTMENT_SLOT)
+                {
+                    uint32 const charges = item->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
+                    if (!charges)
+                        return;
+
+                    if (AuraEffect const* improvedPoisons = GetAuraEffect(14113, EFFECT_1))
+                        if (roll_chance(float(improvedPoisons->GetAmount())))
+                            return;
+
+                    if (charges > 1)
+                        item->SetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT, charges - 1);
+                    else
+                    {
+                        ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
+                        item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
+                    }
+                }
             });
         }
     }
@@ -9745,7 +9895,12 @@ void Player::RemovedInsignia(Player* looterPlr)
     if (Battleground* bg = GetBattleground())
     {
         if (bg->GetTypeID() == BATTLEGROUND_AV)
-            bones->m_loot->FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature, this, true);
+        {
+            // Classic 1.60: the AV turn-in items depend on the victim's race and team (Severed Night Elf Head, Stormpike Soldier's Blood).
+            // Loot conditions are checked against the looter, so each victim race has its own loot entry instead.
+            if (!bones->m_loot->FillLoot(CLASSIC_AV_CORPSE_LOOT_ENTRY + GetRace(), LootTemplates_Creature, this, true, true))
+                bones->m_loot->FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature, this, true);
+        }
     }
     // For wintergrasp Quests
     else if (GetZoneId() == AREA_WINTERGRASP)
@@ -9969,6 +10124,7 @@ uint8 Player::FindEquipSlot(Item const* item, uint8 slot, bool swap) const
             slots[0] = EQUIPMENT_SLOT_OFFHAND;
             break;
         case INVTYPE_RANGEDRIGHT:
+        case INVTYPE_RELIC:                                 // Classic: librams, idols and totems go in the ranged slot
             slots[0] = EQUIPMENT_SLOT_RANGED;
             break;
         case INVTYPE_BAG:
@@ -9976,10 +10132,12 @@ uint8 Player::FindEquipSlot(Item const* item, uint8 slot, bool swap) const
                 slots = { ACCOUNT_BANK_SLOT_BAG_START + 0, ACCOUNT_BANK_SLOT_BAG_START + 1, ACCOUNT_BANK_SLOT_BAG_START + 2, ACCOUNT_BANK_SLOT_BAG_START + 3, ACCOUNT_BANK_SLOT_BAG_START + 4, NULL_SLOT };
             else if (item->GetTemplate()->GetId() == ITEM_CHARACTER_BANK_TAB_BAG)
                 slots = { BANK_SLOT_BAG_START + 0, BANK_SLOT_BAG_START + 1, BANK_SLOT_BAG_START + 2, BANK_SLOT_BAG_START + 3, BANK_SLOT_BAG_START + 4, BANK_SLOT_BAG_START + 5 };
-            else if (item->GetTemplate()->GetClass() != ITEM_CLASS_CONTAINER || item->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER)
-                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, NULL_SLOT, NULL_SLOT };
-            else
+            else if (item->GetTemplate()->GetClass() == ITEM_CLASS_CONTAINER && item->GetTemplate()->GetSubClass() == ITEM_SUBCLASS_REAGENT_CONTAINER)
                 slots[0] = REAGENT_BAG_SLOT_START;
+            else if (item->GetTemplate()->FitsReagentBagSlot())  // Classic 1.60 profession and soul bags: any bag slot or the reagent one
+                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, REAGENT_BAG_SLOT_START, NULL_SLOT };
+            else
+                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, NULL_SLOT, NULL_SLOT };
             break;
         case INVTYPE_PROFESSION_TOOL:
         case INVTYPE_PROFESSION_GEAR:
@@ -11174,9 +11332,10 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
         if (Optional<InventoryResult> res2 = tryHandleInvStoreResult(res))
             return *res2;
 
+        // Classic 1.60: a profession or soul bag may sit in the reagent bag slot too (ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT)
         if (pProto->GetBagFamily())
         {
-            for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
+            for (uint32 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; i++)
             {
                 res = CanStoreItem_InBag(i, dest, pProto, count, true, false, pItem, bag, slot);
                 if (Optional<InventoryResult> res2 = tryHandleBagStoreResult(res))
@@ -11205,7 +11364,7 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
     // search free slot - special bag case
     if (pProto->GetBagFamily())
     {
-        for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
+        for (uint32 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; i++)
         {
             res = CanStoreItem_InBag(i, dest, pProto, count, false, false, pItem, bag, slot);
             if (Optional<InventoryResult> res2 = tryHandleBagStoreResult(res))
@@ -11235,7 +11394,10 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
 
     // search free slot
     // new bags can be directly equipped
+    // Classic 1.60 (WoW Forever, Blizzard notes of 2 November 2026): new bags are no longer equipped automatically; the player
+    // puts them on by hand. Classic.AutoEquipNewBags = 1 brings the old behaviour back. Bots still put new bags on themselves.
     if (!pItem && pProto->GetClass() == ITEM_CLASS_CONTAINER &&
+        (sWorld->getBoolConfig(CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS) || (GetSession() && GetSession()->IsBot())) &&
         (pProto->GetBonding() == BIND_NONE || pProto->GetBonding() == BIND_ON_ACQUIRE))
     {
         switch (pProto->GetSubClass())
@@ -12152,8 +12314,9 @@ Item* Player::StoreNewItem(ItemPosCountVec const& pos, uint32 itemId, bool updat
         if (item->GetTemplate()->GetInventoryType() != INVTYPE_NON_EQUIP)
             UpdateAverageItemLevelTotal();
 
-        // Classic 1.60: new ammo goes to the ammo slot when it is empty
-        if (item->GetTemplate()->GetClass() == ITEM_CLASS_PROJECTILE && !GetAmmoId())
+        // Classic 1.60: new ammo goes to the ammo slot when it is empty. The slot can also still name ammo the player no longer has
+        // (the last arrows sold, mailed or destroyed instead of shot), and then new ammo was never picked up until a relog.
+        if (item->GetTemplate()->GetClass() == ITEM_CLASS_PROJECTILE && (!GetAmmoId() || !HasItemCount(GetAmmoId())))
             AutoSelectAmmo();
     }
 
@@ -13909,11 +14072,11 @@ void Player::SendEquipError(InventoryResult msg, Item const* item1 /*= nullptr*/
     SendDirectMessage(failure.Write());
 }
 
-void Player::SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32 /*param*/) const
+void Player::SendBuyError(BuyResult msg, Creature const* creature, uint32 vendorslot) const
 {
     WorldPackets::Item::BuyFailed packet;
     packet.VendorGUID = creature ? creature->GetGUID() : ObjectGuid::Empty;
-    packet.Muid = item;
+    packet.Muid = vendorslot + 1; // the vendor list counts its slots from 1 (MuID)
     packet.Reason = msg;
     SendDirectMessage(packet.Write());
 }
@@ -14567,7 +14730,15 @@ void Player::ApplyEnchantment(Item* item, EnchantmentSlot slot, bool apply, bool
                             ApplyRatingMod(CR_VERSATILITY_DAMAGE_TAKEN, enchant_amount, apply);
                             TC_LOG_DEBUG("entities.player.items", "+ {} VERSATILITY", enchant_amount);
                             break;
+                        case ITEM_MOD_SPELL_HEALING_DONE:   // Classic 1.60: "Healing Spells +$k1, Damage Spells +$k2" (8208, 8212, 8694 ...)
+                        case ITEM_MOD_SPELL_DAMAGE_DONE:
+                            _ApplyClassicSpellHealingOrDamageMod(int32(enchant_spell_id), enchant_amount, apply);
+                            break;
                         default:
+                            // Classic 1.60: school damage, skill and penetration enchantments ("Holy Damage +$k1" 7646, "Lesser Flame" 8700,
+                            // "Skinning +$k1" 8210, "Baleflame" 8706). 124 stays out: enchantment 8203 carries it under the name "Spirit +$k1".
+                            if (int32(enchant_spell_id) >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && int32(enchant_spell_id) <= ITEM_MOD_CLASSIC_ARCANE_PENETRATION)
+                                _ApplyClassicItemMod(int32(enchant_spell_id), enchant_amount, apply);
                             break;
                     }
                     break;
@@ -14738,6 +14909,14 @@ void Player::SendNewItem(Item* item, uint32 quantity, bool pushed, bool created,
 // Classic 1.60: gossip option ids of the trainer / vendor options added to menus that lack them (never used by DB options)
 static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_TRAINER = 2146000001;
 static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_VENDOR  = 2146000002;
+static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_BANK    = 2146000003;
+
+// Legacy perk Personal Banking 1225493: an innkeeper (that is not a banker itself) gives the perk's owner access to the bank
+// (WorldSession::CanUseBank accepts such an innkeeper for the bank actions)
+static bool IsClassicPersonalBankingInnkeeper(Player const* player, Creature const* creature)
+{
+    return creature && creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER) && !creature->HasNpcFlag(UNIT_NPC_FLAG_BANKER) && player->HasAura(1225493);
+}
 
 void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQuests /*= false*/)
 {
@@ -14796,9 +14975,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                     if (!HasPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN) || IsMaxLevel())
                         canTalk = false;
                     break;
+                case GossipOptionNpc::Trainer:
+                {
+                    // A class trainer offers training to its own class only (classic: another class saw no train option, only the
+                    // trainer's talk). The trainer is the option's own, else the creature's, as when the option is picked.
+                    uint32 trainerId = sObjectMgr->GetCreatureTrainerForGossipOption(creature->GetEntry(), menuId, gossipMenuItem.OrderIndex);
+                    if (!trainerId)
+                        trainerId = creature->GetTrainerId();
+                    if (Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(trainerId))
+                        if (!(trainer->GetClassMask() & GetClassMask()))
+                            canTalk = false;
+                    break;
+                }
                 case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
-                case GossipOptionNpc::Trainer:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
@@ -14835,6 +15025,14 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             }
         }
 
+        // Classic 1.60 pet untrain: hunters with their pet out
+        if (Pet::IsPetUntrainGossipOption(gossipMenuItem.GossipOptionID))
+        {
+            Pet* pet = GetPet();
+            if (GetClass() != CLASS_HUNTER || !pet || pet->getPetType() != HUNTER_PET || !pet->IsAlive())
+                canTalk = false;
+        }
+
         // Classic 1.60 dual spec purchase: class trainers of the player's class, from level 10, until bought
         if (IsClassicDualSpecGossipOption(gossipMenuItem.GossipOptionID))
         {
@@ -14860,12 +15058,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             return false;
         };
 
-        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && creature->GetTrainerId() && !hasOption(GossipOptionNpc::Trainer))
+        Trainer::Trainer const* ownTrainer = creature->GetTrainerId() ? sObjectMgr->GetTrainer(creature->GetTrainerId()) : nullptr;
+        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && ownTrainer && (ownTrainer->GetClassMask() & GetClassMask())
+            && !hasOption(GossipOptionNpc::Trainer))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_TRAINER, menu.GetMenuItemCount(), GossipOptionNpc::Trainer, "Train me.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
 
         if (creature->HasNpcFlag(UNIT_NPC_FLAG_VENDOR) && creature->GetVendorItems() && !hasOption(GossipOptionNpc::Vendor))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_VENDOR, menu.GetMenuItemCount(), GossipOptionNpc::Vendor, "Let me browse your goods.", 0,
+                GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
+
+        // Legacy perk Personal Banking 1225493: "All innkeepers can now also grant you access to your bank. This access has a $1261854d
+        // cooldown." (1261854 is the cooldown aura, cast when the bank is opened this way)
+        if (IsClassicPersonalBankingInnkeeper(this, creature) && !HasAura(1261854) && !hasOption(GossipOptionNpc::Banker))
+            menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_BANK, menu.GetMenuItemCount(), GossipOptionNpc::Banker, "I would like to check my deposit box.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
     }
 }
@@ -14909,6 +15115,7 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
         return;
 
     GossipOptionNpc gossipOptionNpc = item->OptionNpc;
+    Optional<int32> const optionSpellId = item->SpellID; // read now: an ActionMenuID below rebuilds the menu that holds item
     ObjectGuid guid = source->GetGUID();
 
     if (source->GetTypeId() == TYPEID_GAMEOBJECT)
@@ -14924,7 +15131,7 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
     int64 cost = int64(item->BoxMoney);
     if (!HasEnoughMoney(cost))
     {
-        SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, nullptr, 0, 0);
+        SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, nullptr, 0);
         PlayerTalkClass->SendCloseGossip();
         return;
     }
@@ -14943,12 +15150,25 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
     switch (gossipOptionNpc)
     {
         case GossipOptionNpc::None:
-            if (IsClassicDualSpecGossipOption(item->GossipOptionID))
+            if (IsClassicDualSpecGossipOption(gossipOptionId))
             {
                 PlayerTalkClass->SendCloseGossip();
                 Creature* creature = source->ToCreature();
                 if (!creature || !creature->CanResetTalents(this) || !PurchaseClassicDualSpec())
                     return;                                 // not charged
+            }
+            else if (Pet::IsPetUntrainGossipOption(gossipOptionId))
+            {
+                PlayerTalkClass->SendCloseGossip();
+                UntrainClassicPet(cost);
+            }
+            else if (optionSpellId)
+            {
+                // Options that hand out an item (quest reports and the like) carry the spell that makes it. Only spells
+                // that create an item are cast here, so options whose spell is just shown in the client stay as they were.
+                if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(*optionSpellId, DIFFICULTY_NONE))
+                    if (spellInfo->HasEffect(SPELL_EFFECT_CREATE_LOOT) || spellInfo->HasEffect(SPELL_EFFECT_CREATE_ITEM))
+                        CastSpell(this, spellInfo->Id, true);
             }
             break;
         case GossipOptionNpc::Vendor:
@@ -14969,6 +15189,16 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
             break;
         case GossipOptionNpc::Taxinode:
             GetSession()->SendTaxiMenu(source->ToCreature());
+            break;
+        case GossipOptionNpc::Banker:
+            // Personal Banking through an innkeeper: the access cooldown starts
+            if (IsClassicPersonalBankingInnkeeper(this, source->ToCreature()))
+            {
+                if (HasAura(1261854))
+                    return;
+                CastSpell(this, 1261854, true);
+            }
+            handled = false;
             break;
         case GossipOptionNpc::Trainer:
         {
@@ -15848,7 +16078,7 @@ void Player::CompleteQuest(uint32 quest_id)
 
         if (Quest const* qInfo = sObjectMgr->GetQuestTemplate(quest_id))
             if (qInfo->HasFlag(QUEST_FLAGS_TRACKING_EVENT))
-                RewardQuest(qInfo, LootItemType::Item, 0, this, false);
+                RewardQuest(qInfo, LootItemType::Item, 0, nullptr, false);   // no quest giver: keep the open gossip menu
     }
 
     if (sWorld->getBoolConfig(CONFIG_QUEST_ENABLE_QUEST_TRACKER)) // check if Quest Tracker is enabled
@@ -16172,7 +16402,7 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
         if (uint32 questMailSender = quest->GetRewMailSenderEntry())
             MailDraft(mail_template_id).SendMailTo(trans, this, questMailSender, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
         else
-            MailDraft(mail_template_id).SendMailTo(trans, this, questGiver, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
+            MailDraft(mail_template_id).SendMailTo(trans, this, questGiver ? questGiver : this, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
         CharacterDatabase.CommitTransaction(trans);
     }
 
@@ -17674,6 +17904,8 @@ void Player::CurrencyChanged(uint32 currencyId, int32 change)
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_CURRENCY, currencyId, change);
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_HAVE_CURRENCY, currencyId, change);
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_OBTAIN_CURRENCY, currencyId, change);
+
+    UpdateClassicPvPRank();
 }
 
 void Player::UpdateQuestObjectiveProgress(QuestObjectiveType objectiveType, int32 objectId, int64 addCount, ObjectGuid victimGuid /*= ObjectGuid::Empty*/,
@@ -19266,7 +19498,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     {
         Battleground* currentBg = nullptr;
         if (m_bgData.bgInstanceID)                                                //saved in Battleground
-            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, BATTLEGROUND_TYPE_NONE);
+            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, m_bgData.queueId);
 
         player_at_bg = currentBg && currentBg->IsPlayerInBattleground(GetGUID());
 
@@ -19336,6 +19568,34 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                 }
                 else
                     transport = transportOnMap;
+            }
+        }
+
+        // A zeppelin or boat between two continents is on the other continent by the time the player logs in again,
+        // so it is not found on the saved map. Look for it on the other maps of its route before sending the player home.
+        if (!transport)
+        {
+            if (TransportSpawn const* transportSpawn = sTransportMgr->GetTransportSpawn(fields.transguid))
+            {
+                if (TransportTemplate const* transportTemplate = sTransportMgr->GetTransportTemplate(transportSpawn->TransportGameObjectId))
+                {
+                    for (uint32 routeMapId : transportTemplate->MapIds)
+                    {
+                        if (routeMapId == mapId)
+                            continue;
+
+                        if (Map* routeMap = sMapMgr->CreateMap(routeMapId, this))
+                        {
+                            if (Transport* transportOnRoute = routeMap->GetTransport(transGUID))
+                            {
+                                transport = transportOnRoute;
+                                mapId = routeMapId;
+                                instanceId = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -24527,7 +24787,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
     CurrencyTypesEntry const* proto = sCurrencyTypesStore.LookupEntry(currency);
     if (!proto)
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, currency, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, vendorSlot);
         return false;
     }
 
@@ -24536,20 +24796,20 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
     {
         TC_LOG_DEBUG("network", "Player::BuyCurrencyFromVendorSlot: Vendor ({}) not found or player '{}' ({}) can't interact with him.",
             vendorGuid.ToString(), GetName(), GetGUID().ToString());
-        SendBuyError(BUY_ERR_DISTANCE_TOO_FAR, nullptr, currency, 0);
+        SendBuyError(BUY_ERR_DISTANCE_TOO_FAR, nullptr, vendorSlot);
         return false;
     }
 
     VendorItemData const* vItems = creature->GetVendorItems();
     if (!vItems || vItems->Empty())
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, currency, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorSlot);
         return false;
     }
 
     if (vendorSlot >= vItems->GetItemCount())
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, currency, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorSlot);
         return false;
     }
 
@@ -24557,18 +24817,20 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
     // store diff item (cheating)
     if (!crItem || crItem->item != currency || crItem->Type != ITEM_VENDOR_TYPE_CURRENCY)
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, currency, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorSlot);
         return false;
     }
 
-    if (count % crItem->maxcount)
+    // a currency row without a stack size sells one at a time (and must not divide by zero)
+    uint32 const stackSize = std::max<uint32>(crItem->maxcount, 1);
+    if (count % stackSize)
     {
         SendEquipError(EQUIP_ERR_CANT_BUY_QUANTITY, nullptr, nullptr);
         return false;
     }
 
     uint64 price = 0;
-    uint32 stacks = count / crItem->maxcount;
+    uint32 stacks = count / stackSize;
     ItemExtendedCostEntry const* iece;
     if (crItem->ExtendedCost)
     {
@@ -24581,25 +24843,26 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         if (iece->Money)
         {
-            uint64 maxStacks = MAX_MONEY_AMOUNT / crItem->maxcount;
-            if (uint64(stacks) > maxStacks)
+            // the price is worked out in 64 bits: a 32-bit product wraps for a large count and sold currency for next to nothing
+            price = uint64(iece->Money) * count;
+            if (price > MAX_MONEY_AMOUNT)
             {
                 TC_LOG_ERROR("entities.player.cheat", "Player::BuyCurrencyFromVendorSlot: Player '{}' ({}) tried to buy currency (ItemID: {}, Count: {}), causing money overflow",
                     GetName(), GetGUID(), currency, count);
-                count = uint32(maxStacks * crItem->maxcount);
-                stacks = maxStacks;
+                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, vendorSlot);
+                return false;
             }
-            price = uint64(iece->Money * count); //it should not exceed MAX_MONEY_AMOUNT
             if (!HasEnoughMoney(price))
             {
-                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency, 0);
+                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, vendorSlot);
                 return false;
             }
         }
 
         for (uint8 i = 0; i < MAX_ITEM_EXT_COST_ITEMS; ++i)
         {
-            if (iece->ItemID[i] && !HasItemCount(iece->ItemID[i], (iece->ItemCount[i] * stacks)))
+            // the needed count must not wrap round for a large purchase
+            if (iece->ItemID[i] && (uint64(iece->ItemCount[i]) * stacks > std::numeric_limits<uint32>::max() || !HasItemCount(iece->ItemID[i], (iece->ItemCount[i] * stacks))))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr);
                 return false;
@@ -24614,7 +24877,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
             CurrencyTypesEntry const* entry = sCurrencyTypesStore.LookupEntry(iece->CurrencyID[i]);
             if (!entry)
             {
-                SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, currency, 0); // Find correct error
+                SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorSlot); // Find correct error
                 return false;
             }
 
@@ -24624,7 +24887,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
             }
-            else if (!HasCurrency(iece->CurrencyID[i], (iece->CurrencyCount[i] * stacks)))
+            else if (uint64(iece->CurrencyCount[i]) * stacks > std::numeric_limits<uint32>::max() || !HasCurrency(iece->CurrencyID[i], (iece->CurrencyCount[i] * stacks)))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
@@ -24641,7 +24904,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         if (iece->MinFactionID && uint32(GetReputationRank(iece->MinFactionID)) < iece->RequiredAchievement)
         {
-            SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, currency, 0);
+            SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, vendorSlot);
             return false;
         }
 
@@ -24659,7 +24922,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
     }
     else // currencies have no price defined, can only be bought with ExtendedCost
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, currency, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, vendorSlot);
         return false;
     }
 
@@ -24708,13 +24971,13 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     ItemTemplate const* pProto = sObjectMgr->GetItemTemplate(item);
     if (!pProto)
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, vendorslot);
         return false;
     }
 
     if (!(pProto->GetAllowableClass() & GetClassMask()) && pProto->GetBonding() == BIND_ON_ACQUIRE && !IsGameMaster())
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, nullptr, vendorslot);
         return false;
     }
 
@@ -24726,7 +24989,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     {
         TC_LOG_DEBUG("network", "Player::BuyItemFromVendorSlot: Vendor ({}) not found or player '{}' ({}) can't interact with him.",
             vendorguid.ToString(), GetName(), GetGUID().ToString());
-        SendBuyError(BUY_ERR_DISTANCE_TOO_FAR, nullptr, item, 0);
+        SendBuyError(BUY_ERR_DISTANCE_TOO_FAR, nullptr, vendorslot);
         return false;
     }
 
@@ -24734,20 +24997,20 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     {
         TC_LOG_DEBUG("condition", "Player::BuyItemFromVendorSlot: Player '{}' ({}) doesn't meed conditions for creature (Entry: {}, Item: {})",
             GetName(), GetGUID().ToString(), creature->GetEntry(), item);
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorslot);
         return false;
     }
 
     VendorItemData const* vItems = creature->GetVendorItems();
     if (!vItems || vItems->Empty())
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorslot);
         return false;
     }
 
     if (vendorslot >= vItems->GetItemCount())
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorslot);
         return false;
     }
 
@@ -24755,7 +25018,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     // store diff item (cheating)
     if (!crItem || crItem->item != item)
     {
-        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
+        SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorslot);
         return false;
     }
 
@@ -24770,14 +25033,14 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
     {
         if (creature->GetVendorItemCurrentCount(crItem) < count)
         {
-            SendBuyError(BUY_ERR_ITEM_ALREADY_SOLD, creature, item, 0);
+            SendBuyError(BUY_ERR_ITEM_ALREADY_SOLD, creature, vendorslot);
             return false;
         }
     }
 
     if (pProto->GetRequiredReputationFaction() && (uint32(GetReputationRank(pProto->GetRequiredReputationFaction())) < pProto->GetRequiredReputationRank()))
     {
-        SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, item, 0);
+        SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, vendorslot);
         return false;
     }
 
@@ -24816,7 +25079,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
             CurrencyTypesEntry const* entry = sCurrencyTypesStore.LookupEntry(iece->CurrencyID[i]);
             if (!entry)
             {
-                SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, item, 0);
+                SendBuyError(BUY_ERR_CANT_FIND_ITEM, creature, vendorslot);
                 return false;
             }
 
@@ -24842,7 +25105,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
 
         if (iece->MinFactionID && int32(GetReputationRank(iece->MinFactionID)) < iece->MinReputation)
         {
-            SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, item, 0);
+            SendBuyError(BUY_ERR_REPUTATION_REQUIRE, creature, vendorslot);
             return false;
         }
 
@@ -24872,7 +25135,8 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
                 GetName(), GetGUID().ToString(), pProto->GetId(), count);
             count = uint32(maxCount);
         }
-        price = uint64(buyPricePerItem * count); //it should not exceed MAX_MONEY_AMOUNT
+        // whole numbers: part of a stack (arrows) rounds up instead of down to free, and full stacks cost exactly the stack price
+        price = (basePrice * count + pProto->GetBuyCount() - 1) / pProto->GetBuyCount();
 
         // reputation discount
         price = uint64(floor(price * GetReputationPriceDiscount(creature)));
@@ -24883,10 +25147,11 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
             price -= CalculatePct(price, priceMod);
 
         price = ApplyClassicLegacyPriceMod(price, 0);   // Legacy perk Bartering
+        price = std::max(uint64(1), price);              // discounts never make a priced item free
 
         if (!HasEnoughMoney(price))
         {
-            SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, item, 0);
+            SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, vendorslot);
             return false;
         }
     }
@@ -26440,6 +26705,10 @@ void Player::LearnSkillRewardedSpells(uint32 skillId, uint32 skillValue, Races r
         {
             case SkillLineAbilityAcquireMethod::AutomaticSkillRank:
             case SkillLineAbilityAcquireMethod::AutomaticCharLevel:
+                // Classic 1.60: an automatic ability may wait for a condition too (warrior Victorious/Offensive State wait for
+                // Victory Rush/Overpower, which teach them through spell_learn_spell)
+                if (!sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SKILL_LINE_ABILITY, ability->ID, this))
+                    continue;
                 break;
             case SkillLineAbilityAcquireMethod::LearnedOrAutomaticCharLevel:
                 // Treat as AutomaticCharLevel when conditions are met, otherwise treat it as Learned (trainer or quest)
@@ -26695,7 +26964,7 @@ Battleground* Player::GetBattleground() const
     if (GetBattlegroundId() == 0)
         return nullptr;
 
-    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.bgTypeID);
+    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.queueId);
 }
 
 uint32 Player::GetBattlegroundQueueJoinTime(BattlegroundQueueTypeId bgQueueTypeId) const
@@ -27265,6 +27534,11 @@ bool Player::HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item cons
                     if (Item* item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, i))
                         if (item != ignoreItem && item->IsFitToSpellRequirements(spellInfo))
                             return true;
+
+                // Classic: librams, idols and totems are armor in the ranged slot
+                if (Item* item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+                    if (item != ignoreItem && item->IsFitToSpellRequirements(spellInfo))
+                        return true;
             }
             else
             {
@@ -27367,7 +27641,11 @@ void Player::InitializeSelfResurrectionSpells()
     for (AuraEffectList::const_iterator itr = dummyAuras.begin(); itr != dummyAuras.end(); ++itr)
     {
         // Soulstone Resurrection                           // prio: 3 (max, non death persistent)
-        if ((*itr)->GetSpellInfo()->SpellFamilyName == SPELLFAMILY_WARLOCK && (*itr)->GetSpellInfo()->SpellFamilyFlags[1] & 0x1000000)
+        // Classic 1.60 (VMaNGOS Player.cpp): the passive ranks 20707, 20762..20765. The retail family flag (0x1000000) is not on them; the client
+        // data has 0x4000000 in the second mask, so the flag check never matched and a Soulstone never resurrected.
+        uint32 const dummyId = (*itr)->GetId();
+        if (dummyId == 20707 || (dummyId >= 20762 && dummyId <= 20765)
+            || ((*itr)->GetSpellInfo()->SpellFamilyName == SPELLFAMILY_WARLOCK && (*itr)->GetSpellInfo()->SpellFamilyFlags[1] & 0x1000000))
             spells[0] = 3026;
         // Twisting Nether                                  // prio: 2 (max)
         else if ((*itr)->GetId() == 23701 && roll_chance(10))
@@ -27381,6 +27659,15 @@ void Player::InitializeSelfResurrectionSpells()
     for (uint32 selfResSpell : spells)
         if (selfResSpell)
             AddSelfResSpell(selfResSpell);
+
+    // Classic 1.60 Legacy perk Play Dead 1225492: "Gives you a $s1% chance of being able to resurrect with $1261698s1% Health and Mana.
+    // Ineffective in dungeons, raids, and battlegrounds. This effect cannot trigger more often than once every $1261707d." 1261698 is the
+    // self resurrection, 1261707 (death persistent) the cooldown.
+    if (int32 chance = GetClassicLegacyPerkAmount(1225492, EFFECT_0); chance > 0 && !GetMap()->Instanceable() && !HasAura(1261707) && roll_chance(chance))
+    {
+        AddSelfResSpell(1261698);
+        CastSpell(this, 1261707, true);
+    }
 }
 
 // Used in triggers for check "Only to targets that grant experience or honor" req
@@ -28289,6 +28576,8 @@ void Player::StoreLootItem(ObjectGuid lootWorldObjectGuid, uint8 lootSlot, Loot*
                 return;
             }
 
+            loot->LogGiven(GetMap(), GetName().c_str(), *item,
+                !item->rollWinnerGUID.IsEmpty() ? "roll winner takes it" : loot->GetLootMethod() == MASTER_LOOT ? "master loot, taken" : "looted");
             Item* newitem = StoreNewItem(dest, item->itemid, true, item->randomBonusListId, item->GetAllowedLooters(), item->context);
             if (newitem)
                 sScriptMgr->OnPlayerLootItem(this, newitem);
@@ -29061,6 +29350,42 @@ void Player::UnsummonPetTemporaryIfAny()
     RemovePet(pet, PET_SAVE_AS_CURRENT);
 }
 
+void Player::ParkPetForTravel()
+{
+    UnsummonPetTemporaryIfAny();
+    if (m_temporaryUnsummonedPetNumber)
+    {
+        m_petParkedForTravel = true;
+        m_petParkedCheckTimer = 2000;
+    }
+}
+
+void Player::UpdateParkedPet(uint32 diff)
+{
+    if (!m_petParkedForTravel)
+        return;
+
+    // Someone else brought the pet back (dismount, teleport) or it was dropped (new summon, death of the pet): nothing left to do.
+    if (!m_temporaryUnsummonedPetNumber || !GetPetGUID().IsEmpty())
+    {
+        m_petParkedForTravel = false;
+        return;
+    }
+
+    if (m_petParkedCheckTimer > diff)
+    {
+        m_petParkedCheckTimer -= diff;
+        return;
+    }
+    m_petParkedCheckTimer = 2000;
+
+    if (!IsInWorld() || IsBeingTeleported() || IsInFlight() || GetTransport() || GetVehicle() || IsPetNeedBeTemporaryUnsummoned())
+        return;
+
+    m_petParkedForTravel = false;
+    ResummonPetTemporaryUnSummonedIfAny();
+}
+
 void Player::ResummonPetTemporaryUnSummonedIfAny()
 {
     if (!m_temporaryUnsummonedPetNumber)
@@ -29285,6 +29610,23 @@ UF::TraitConfig const* Player::GetClassicSpecGroupConfig(bool secondary) const
 bool Player::IsClassicDualSpecGossipOption(int32 gossipOptionId)
 {
     return gossipOptionId >= 95000000 && gossipOptionId < 96000000;
+}
+
+// Classic 1.60 pet trainers: "I wish to untrain my pet." removes the spells pet trainers taught the current pet, which gives back
+// its training points. The gossip box asks first and shows the price; nothing is charged when there is nothing to untrain.
+bool Player::UntrainClassicPet(int64 cost)
+{
+    Pet* pet = GetPet();
+    if (!pet || pet->getPetType() != HUNTER_PET || !pet->IsAlive() || !HasEnoughMoney(cost))
+        return false;
+
+    if (!pet->UntrainTrainerSpells())
+        return false;                                       // nothing taught: not charged
+
+    ModifyMoney(-cost);
+    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+    pet->CastSpell(pet, 14867 /*SPELL_UNTALENT_VISUAL_EFFECT*/, true);
+    return true;
 }
 
 bool Player::PurchaseClassicDualSpec()
@@ -29725,6 +30067,7 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
         } while (entriesResult->NextRow());
     }
 
+    std::vector<WorldPackets::Traits::TraitConfig> loadedConfigs;
     if (configsResult)
     {
         //                    0     1                    2                  3                4            5              6            7      8
@@ -29776,20 +30119,40 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
                 }
             }
 
-            if (TraitMgr::ValidateConfig(traitConfig, this, false, true) != TraitMgr::LearnResult::Ok)
-            {
-                traitConfig.Entries.clear();
-                traitConfig.SubTrees.clear();
-                for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
-                    traitConfig.Entries.emplace_back(grantedEntry);
-
-                // rebuild subtrees
-                TraitMgr::ValidateConfig(traitConfig, this, false, true);
-            }
-
-            AddTraitConfig(traitConfig);
+            loadedConfigs.push_back(std::move(traitConfig));
 
         } while (configsResult->NextRow());
+    }
+
+    // Classic 1.60: the Legacy perk Talented (a Generic config) adds talent points before level 10, and the combat config is
+    // checked against those points. Configs came in id order, so the combat config was checked before the Legacy config was
+    // added: the extra points were missing, the check failed and every talent spent with them was wiped on each login.
+    // Add the other configs first, then the combat ones.
+    std::ranges::stable_partition(loadedConfigs, [](WorldPackets::Traits::TraitConfig const& traitConfig)
+    {
+        return traitConfig.Type != TraitConfigType::Combat;
+    });
+
+    for (WorldPackets::Traits::TraitConfig& traitConfig : loadedConfigs)
+    {
+        if (TraitMgr::LearnResult validateResult = TraitMgr::ValidateConfig(traitConfig, this, false, true); validateResult != TraitMgr::LearnResult::Ok)
+        {
+            // Players report talents reset after a restart or an alt login (player report, 3 Nov) and the cause is not known yet.
+            // Say which config was wiped and why, so the next report can be matched to a log line.
+            TC_LOG_WARN("entities.player.talents", "Player {} ({}): talent config {} (type {}, spec {}) did not pass the check at login (result {}), level {}, {} entries; it is reset.",
+                GetName(), GetGUID().ToString(), traitConfig.ID, AsUnderlyingType(traitConfig.Type), traitConfig.ChrSpecializationID,
+                AsUnderlyingType(validateResult), GetLevel(), traitConfig.Entries.size());
+
+            traitConfig.Entries.clear();
+            traitConfig.SubTrees.clear();
+            for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
+                traitConfig.Entries.emplace_back(grantedEntry);
+
+            // rebuild subtrees
+            TraitMgr::ValidateConfig(traitConfig, this, false, true);
+        }
+
+        AddTraitConfig(traitConfig);
     }
 
     // Remove orphaned trait entries from database
@@ -30655,7 +31018,8 @@ void Player::ApplyTraitEntry(int32 traitNodeEntryId, int32 rank, int32 grantedRa
         if (apply)
             LearnSpell(traitDefinition->SpellID, true, 0, false, PlayerSpellTrait{ .DefinitionId = traitNodeEntry->TraitDefinitionID, .Rank = rank + grantedRanks });
         else
-            RemoveSpell(traitDefinition->SpellID);
+            RemoveSpell(traitDefinition->SpellID, true); // disabled, not removed: higher ranks bought from the trainer come back
+                                                         // when the talent is taken again (LearnSpell re-learns disabled ranks)
     }
 }
 
@@ -31044,8 +31408,9 @@ void Player::SetPetSlot(uint32 petNumber, PetSaveMode dstPetSlot)
                 if (newActivePetIndex)
                     sess->GetPlayer()->GetPetStable()->SetCurrentActivePetIndex(*newActivePetIndex);
 
-                int32 srcPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([srcPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == uint32(srcPetSlot); });
-                int32 dstPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([dstPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == uint32(dstPetSlot); });
+                // Classic 1.60: the update fields hold the client slot numbers (0 = current pet, 1.. = stable), not the saved slot
+                int32 srcPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([srcPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == ToClassicStableSlot(srcPetSlot); });
+                int32 dstPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([dstPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == ToClassicStableSlot(dstPetSlot); });
 
                 // Classic 1.60: client slot numbers and flags; the moved pets show their saved values (official 70291: happiness
                 // is sent again when the pet is stabled)
@@ -32150,7 +32515,8 @@ static bool ForEachEquipmentSlot(InventoryType inventoryType, bool canDualWield,
             return true;
         case INVTYPE_RANGED:
         case INVTYPE_RANGEDRIGHT:
-        case INVTYPE_THROWN: callback(EQUIPMENT_SLOT_RANGED); return true;
+        case INVTYPE_THROWN:
+        case INVTYPE_RELIC: callback(EQUIPMENT_SLOT_RANGED); return true;
         case INVTYPE_WEAPONMAINHAND: callback(EQUIPMENT_SLOT_MAINHAND); return true;
         case INVTYPE_SHIELD:
         case INVTYPE_HOLDABLE:
@@ -32161,7 +32527,6 @@ static bool ForEachEquipmentSlot(InventoryType inventoryType, bool canDualWield,
         case INVTYPE_TABARD:
         case INVTYPE_AMMO:
         case INVTYPE_QUIVER:
-        case INVTYPE_RELIC:
         default:
             return false;
     }
@@ -32881,12 +33246,17 @@ static constexpr Milliseconds SPELL_QUEUE_TIME_WINDOW = 400ms;
 
 bool Player::CanRequestSpellCast(SpellInfo const* spellInfo, Unit const* castingUnit) const
 {
-    if (castingUnit->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > SPELL_QUEUE_TIME_WINDOW)
+    // The client queues a key press made in its last 400 ms of the cast, measured on its own clock. The request reaches us
+    // up to one trip later, when more of the cast seems to be left here, so it was refused with "Another action is in
+    // progress". The window grows by the player's measured latency (at most 250 ms more).
+    Milliseconds const queueWindow = SPELL_QUEUE_TIME_WINDOW + std::min(Milliseconds(GetSession()->GetLatency()), 250ms);
+
+    if (castingUnit->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > queueWindow)
         return false;
 
     for (CurrentSpellTypes spellSlot : { CURRENT_MELEE_SPELL, CURRENT_GENERIC_SPELL })
         if (Spell const* spell = GetCurrentSpell(spellSlot))
-            if (Milliseconds(spell->GetRemainingCastTime()) > SPELL_QUEUE_TIME_WINDOW)
+            if (Milliseconds(spell->GetRemainingCastTime()) > queueWindow)
                 return false;
 
     return true;

@@ -15,6 +15,8 @@
 
 #include "Bot/BotTypes.h"
 
+#include <string>
+
 namespace Playerbot::V2::World {
 
 struct DestinationPick
@@ -44,6 +46,12 @@ DestinationPick PickDestination(uint8 level, bool alliance, uint64 seed);
 // Player::GetZoneId returns it). False for a zone without a leveling range
 // (capitals, instances, battlegrounds, unknown).
 bool VanillaZoneLevelRange(uint32 zone_id, uint8& lo, uint8& hi);
+
+// Where a player of `level` goes on a 1.12 realm, in words for the language model, so its lines and answers name real places for
+// that level ("Westfall" was told to a level 60, "Blackfathom Deeps at 60", PC 2026-11-09): the leveling zones whose range holds the
+// level (no starter zones above 10), the dungeons of the usual party range (Bot/ChannelTalk.h kDungeons), and at 58+ what people do
+// at the level cap. World thread or any thread (DB2 reads only).
+std::string VanillaLevelPlaces(uint8 level);
 
 // True for the six vanilla faction capitals (Stormwind, Ironforge, Darnassus,
 // Orgrimmar, Thunder Bluff, Undercity): no leveling content of their own.

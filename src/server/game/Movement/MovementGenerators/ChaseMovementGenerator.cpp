@@ -85,7 +85,7 @@ bool ChaseMovementGenerator::Initialize(Unit* owner)
     _lastTargetPosition.reset();
     // Pets and guardians of a player are throttled too: MoveSplineInit sends them the same stop packet before every new spline
     // (PlayerSideUnit), so a pet re-pathing on every step of a walking mob was shown sliding in its run pose, as if hovering
-    // (Ironforge 2026-10-26: a bot hunter's wolf).
+    // (Karrz, Ironforge 2026-10-26: a bot hunter's wolf).
     Player const* playerOwner = owner->ToPlayer();
     _throttleRepath = (playerOwner && playerOwner->GetSession() && playerOwner->GetSession()->IsBot())
         || (!owner->IsPlayer() && owner->GetCharmerOrOwnerGUID().IsPlayer());
@@ -217,12 +217,15 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
             bool success = _path->CalculatePath(x, y, z, owner->CanFly());
             if (!success || (_path->GetPathType() & (PATHFIND_NOPATH /* | PATHFIND_INCOMPLETE*/)))
             {
+                if (_noPathStreak < 255)
+                    ++_noPathStreak;
                 if (cOwner)
                     cOwner->SetCannotReachTarget(true);
                 owner->StopMoving();
                 return true;
             }
 
+            _noPathStreak = 0;
             if (shortenPath)
                 _path->ShortenPathUntilDist(PositionToVector3(target->GetPosition()), maxTarget);
 

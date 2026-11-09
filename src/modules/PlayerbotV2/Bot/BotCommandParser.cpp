@@ -1,4 +1,6 @@
 ﻿#include "BotCommandParser.h"
+#include "Api/BotLanguage.h"
+#include "GroupOrderText.h"   // ClassifyGroupOrder: which refused whispers get an answer
 #include "GroupControl.h"
 #include "BotIntent.h"
 #include "BotIntentEmitter.h"
@@ -22,6 +24,8 @@
 #include "OwnerPicks.h"
 #include "../Fleet/PlayerCraftOrders.h"
 #include "BotAddressResolver.h"
+#include "Placement.h"
+#include "ClassicUpkeep.h"   // Classic::IsMeleeSpec for the Positions tab order
 #include "../Diagnostics/BotInspector.h"
 #include "../Diagnostics/PerfCounters.h"
 #include "Util.h"  // Trinity::Tokenize for /diag multi-line output
@@ -66,7 +70,9 @@
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "GameObject.h"      // GAMEOBJECT_TYPE_GUILD_BANK for /gbank
+#include "MageCityPortal.h"
 #include "fmt/format.h"
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 #include <algorithm>
 #include <cmath>     // std::sqrt for /inrange distance calc
 #include <cctype>
@@ -860,7 +866,7 @@ void OrderMainTank(Player* sender, Player* bot, std::string const& name)
         {
             s_last_msg = now;
             if (sender->GetSession())
-                ChatHandler(sender->GetSession()).SendSysMessage("Main tank: needs a raid group (/raid to convert).");
+                Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).SendSysMessage("Main tank: needs a raid group (/raid to convert).");
         }
         return;
     }
@@ -979,21 +985,8 @@ bool OrderAssign(Player* sender, Player* bot, std::string const& normalized)
     if (w[1] == "list")
     {
         if (!speaker) return true;
-        struct Row { uint8 marker; std::string name; char const* role; };
-        std::vector<Row> rows;
-        for (auto const& [tank_low, marker] : Services::Owners().TankMarks(glow))
-            if (Player* t = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(tank_low)))
-                rows.push_back({ uint8(marker & 7), t->GetName(), "tank" });
-        for (GroupReference const& itr : grp->GetMembers())
-        {
-            Player* m = itr.GetSource();
-            if (!m || !Services::Registry().has(m->GetGUID().GetCounter())) continue;
-            OwnerRegistry::RtiOrder const o = Services::Owners().RtiOrderOf(m->GetGUID().GetCounter());
-            for (uint8 s : o.kill) rows.push_back({ uint8(s & 7), m->GetName(), "kill" });
-            for (uint8 s : o.cc)   rows.push_back({ uint8(s & 7), m->GetName(), "cc" });
-        }
-        std::stable_sort(rows.begin(), rows.end(), [](Row const& a, Row const& b) { return a.marker > b.marker; });
-        for (Row const& r : rows)
+        std::vector<BotCommandParser::AssignRow> const rows = BotCommandParser::AssignList(grp);
+        for (BotCommandParser::AssignRow const& r : rows)
             say(fmt::format("ASSIGN|{}|{}|{}", r.marker, r.name, r.role));
         say(fmt::format("ASSIGN|END|{}", rows.size()));
         return true;
@@ -1628,23 +1621,70 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
         return true;   // the confirming "coming to you" comes from ConfirmWhisperOrder
     }
 
-    // ---- combat attitude --------------------------------------------------------------------------------------------
-    // Passive: the bot starts nothing (no autopilot pull, no assist on the owner's target) and defends itself and the group
-    // until attack / pull (a 15 s window) or aggressive. A fight already under way is not dropped. The stance is the panel's
-    // Aggressive / Passive toggle and stays on the bot until changed.
-    if (n == "passive" || n == "defensive")   // "defensive" is the retired third stance: it now means passive
+    // ---- combat attitude ----
+    // Three stances, the panel's one button (Karrz, 2026-11-03: "passive, defensive and aggressive"):
+    //   passive    - BotAI::OwnerStance::NoFight: the bot attacks nothing at all, not to defend itself or the group and not on attack
+    //                or pull, until defensive or aggressive. Heals and buffs go on (a hunter player taming a beast, crowd control
+    //                that must not break, a quest mob that must stay alive).
+    //   defensive  - OwnerStance::Passive (the old "passive"): the bot starts nothing (no autopilot pull, no assist on the owner's
+    //                target) and defends itself and the group until attack / pull (a 15 s window) or aggressive. A fight already
+    //                under way is not dropped.
+    //   aggressive - below.
+    // "stance nofight" / "stance defensive" / "stance aggressive": the add-on's own re-send of the stance its panel shows (when the
+    // group grows, after a loading screen), so new and re-created bots get it. It sets the stance and nothing else: an Attack / Pull
+    // under way or a Stay is kept, and nothing is said. The plain word ended the order: in UBRS a bot joined at 22:05:34, Karrz said
+    // "attack" at 22:05:35, the re-send at 22:05:36 called the whole raid off, and the melee stood by him until he said it again.
+    // "stance passive" is the older add-on's re-send of its Passive, which was the defensive stance.
+    if (n == "stance passive" || n == "stance defensive" || n == "stance aggressive" || n == "stance nofight")
+    {
+        BotAI::OwnerStance const st = n == "stance aggressive" ? BotAI::OwnerStance::Aggressive
+                                    : n == "stance nofight"    ? BotAI::OwnerStance::NoFight
+                                                               : BotAI::OwnerStance::Passive;
+        if (BotAI* ai = Services::Registry().ai(bid))
+        {
+            if (ai->set_owner_stance(st))
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: stance {} (the add-on's re-send)", me, sender->GetName(),
+                            n.substr(7));
+            if (st == BotAI::OwnerStance::NoFight)
+            {
+                Push(bot, StopAttackIntent{});
+                Push(bot, PetSetReactStateIntent{0});
+                Push(bot, PetSetCommandStateIntent{1});
+            }
+        }
+        return true;
+    }
+    if (n == "passive")
     {
         if (BotAI* ai = Services::Registry().ai(bid))
         {
-            if (ai->set_owner_stance(BotAI::OwnerStance::Passive))
-                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: passive (starts no fights until attack / pull)", me, sender->GetName());
-            // Passive after an Attack / Pull ends that order's 15 s window and its Engage at once; a Stay / Hold is kept.
+            if (ai->set_owner_stance(BotAI::OwnerStance::NoFight))
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: passive (attacks nothing, heals and buffs only)", me, sender->GetName());
             ai->close_owner_order_window();
             if (ai->owner_command() == BotAI::OwnerCommand::Engage)
                 ai->exit_manual();
             ai->set_last_owner_name(sender->GetName());
         }
-        say(me + ": passive, defending only until you say attack or pull");
+        // Off the fight at once, the pet too (passive, back to the bot).
+        Push(bot, StopAttackIntent{});
+        Push(bot, PetSetReactStateIntent{0});
+        Push(bot, PetSetCommandStateIntent{1});
+        say(me + ": passive, I attack nothing (I still heal and buff) until you say defensive or aggressive");
+        return true;
+    }
+    if (n == "defensive")
+    {
+        if (BotAI* ai = Services::Registry().ai(bid))
+        {
+            if (ai->set_owner_stance(BotAI::OwnerStance::Passive))
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: defensive (starts no fights until attack / pull)", me, sender->GetName());
+            // Defensive after an Attack / Pull ends that order's 15 s window and its Engage at once; a Stay / Hold is kept.
+            ai->close_owner_order_window();
+            if (ai->owner_command() == BotAI::OwnerCommand::Engage)
+                ai->exit_manual();
+            ai->set_last_owner_name(sender->GetName());
+        }
+        say(me + ": defensive, defending only until you say attack or pull");
         return true;
     }
     if (n == "aggressive")
@@ -1812,13 +1852,339 @@ bool BotCommandParser::ApplyCcOrder(Player* sender, std::string const& line, cha
     }
     TC_LOG_INFO("playerbot.v2", "[cc_order] {} ({}): {} {} for {}", sender->GetName(), via ? via : "?", order->deny ? "deny" : "allow",
                 what, who);
-    ChatHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
+    Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
+    return true;
+}
+
+bool BotCommandParser::ApplyIgnoreOrder(Player* sender, std::string const& line, char const* via)
+{
+    std::string n = line;
+    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    while (!n.empty() && n.back() == ' ') n.pop_back();
+    size_t const b = n.find_first_not_of(' ');
+    n = b == std::string::npos ? std::string() : n.substr(b);
+    bool const toggle = n == "ignore target" || n == "ignore my target";
+    bool const clear  = n == "ignore clear" || n == "ignore none" || n == "unignore all" || n == "ignore off";
+    if ((!toggle && !clear) || !sender || !sender->GetSession())
+        return false;
+    uint32 const account = sender->GetSession()->GetAccountId();
+    if (account == 0)
+        return false;
+    ChatHandler ch(sender->GetSession());
+    if (clear)
+    {
+        size_t const had = Services::Owners().ClearFightIgnore(account);
+        TC_LOG_INFO("playerbot.v2", "[fight_ignore] {} ({}): clear ({} on the list)", sender->GetName(), via ? via : "?", had);
+        ch.PSendSysMessage("%s", had ? "Your bots may attack every mob again." : "Your bots were not ignoring any mob.");
+        return true;
+    }
+    Unit* sel = sender->GetSelectedUnit();
+    if (!sel || sel == sender || sender->IsFriendlyTo(sel))   // a mob: hostile or neutral (a beast before the tame)
+    {
+        ch.PSendSysMessage("%s", "Target the mob your bots should leave alone first (press it again on that mob to undo, "
+                                 "or say 'ignore clear').");
+        return true;
+    }
+    auto const change = Services::Owners().ToggleFightIgnore(account, sel->GetGUID(), GameTime::GetGameTimeMS());
+    if (change == OwnerRegistry::FightIgnoreChange::Repeat)
+        return true;   // the same press again (addon message and chat line): already answered
+    bool const added = change == OwnerRegistry::FightIgnoreChange::Added;
+    TC_LOG_INFO("playerbot.v2", "[fight_ignore] {} ({}): {} {} ({})", sender->GetName(), via ? via : "?", added ? "ignore" : "allow",
+                sel->GetName(), sel->GetGUID().ToString());
+    std::string const answer = added
+        ? fmt::format("Your bots will not attack {}, even if it attacks you (press Ignore target on it again to undo).", sel->GetName())
+        : fmt::format("Your bots may attack {} again.", sel->GetName());
+    ch.PSendSysMessage("%s", answer.c_str());
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// The Positions tab (ForeverBots, PLACE_REQ) and the "place ..." group order: the chosen bots stand in a shape at one spot and stay
+// there (Karrz 2026-11-03). Each bot gets a Stay whose way-back spot is its own slot, so after a fight the group joined it walks
+// back to the slot (idle:owner_stay_return). "Follow" lets them go again. World thread.
+namespace {
+
+// Front-to-back order in a shape: tanks, melee, ranged, healers.
+uint8 PlaceRankOf(Player* p)
+{
+    Role const role = BotCommandParser::BotRole(p);
+    if (role == Role::Tank)   return 0;
+    if (role == Role::Healer) return 3;
+    if (auto snap = Services::Snapshots().latest(p->GetGUID().GetCounter()))
+        return Classic::IsMeleeSpec(snap->identity.cls, snap->identity.spec) ? 1 : 2;
+    return FallbackRankOf(p) == FallbackRank::Melee ? 1 : 2;
+}
+
+bool PlaceIsRanged(Player* p)
+{
+    if (BotCommandParser::BotRole(p) != Role::Dps) return false;
+    if (auto snap = Services::Snapshots().latest(p->GetGUID().GetCounter()))
+        return IsRangedSpec(snap->identity.cls, uint16(snap->identity.spec));
+    return FallbackRankOf(p) == FallbackRank::Back;
+}
+
+uint8 PlaceClassWord(std::string const& w)
+{
+    static constexpr std::pair<char const*, uint8> kClasses[] = {
+        { "warrior", CLASS_WARRIOR }, { "warriors", CLASS_WARRIOR }, { "paladin", CLASS_PALADIN }, { "paladins", CLASS_PALADIN },
+        { "hunter", CLASS_HUNTER }, { "hunters", CLASS_HUNTER }, { "rogue", CLASS_ROGUE }, { "rogues", CLASS_ROGUE },
+        { "priest", CLASS_PRIEST }, { "priests", CLASS_PRIEST }, { "shaman", CLASS_SHAMAN }, { "shamans", CLASS_SHAMAN },
+        { "mage", CLASS_MAGE }, { "mages", CLASS_MAGE }, { "warlock", CLASS_WARLOCK }, { "warlocks", CLASS_WARLOCK },
+        { "druid", CLASS_DRUID }, { "druids", CLASS_DRUID } };
+    for (auto const& [name, cls] : kClasses)
+        if (w == name) return cls;
+    return 0;
+}
+
+// Does bot `m` (in `grp`) match one "who" word: a bot name, all, tanks, healers, melee, ranged, dps, group1..group8, a class?
+bool PlaceWhoMatches(Player* m, Group* grp, std::string const& w)
+{
+    if (w.empty() || w == "all" || w == "everyone" || w == "squad") return true;
+    if (w == "tank" || w == "tanks")                    return BotCommandParser::BotRole(m) == Role::Tank;
+    if (w == "healer" || w == "healers" || w == "heal" || w == "heals") return BotCommandParser::BotRole(m) == Role::Healer;
+    if (w == "dps")                                     return BotCommandParser::BotRole(m) == Role::Dps;
+    if (w == "melee")                                   return BotCommandParser::BotRole(m) == Role::Dps && PlaceRankOf(m) == 1;
+    if (w == "ranged")                                  return PlaceIsRanged(m);
+    if (w.size() == 6 && w.rfind("group", 0) == 0 && w[5] >= '1' && w[5] <= '8')
+        return grp && grp->GetMemberGroup(m->GetGUID()) == uint8(w[5] - '1');
+    if (uint8 const cls = PlaceClassWord(w))           return m->GetClass() == cls;
+    std::string name = m->GetName();
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return name == w;
+}
+
+} // namespace
+
+// "Place at cursor": the order waits (per player, 30 s) for the next ground spot the player points at, a ping
+// (BotCommandParser::TakePendingPlace from Module::OnGroupPingPoint). World thread only.
+namespace {
+struct PendingPlace
+{
+    std::string shape, gap;
+    std::vector<std::string> who;
+    uint32 until_ms = 0;
+};
+std::unordered_map<uint64, PendingPlace> g_pending_place;
+constexpr uint32 kPendingPlaceMs = 30000;
+}
+
+bool BotCommandParser::TakePendingPlace(Player* sender, Position const& point)
+{
+    if (!sender) return false;
+    auto it = g_pending_place.find(sender->GetGUID().GetCounter());
+    if (it == g_pending_place.end()) return false;
+    PendingPlace const pp = it->second;
+    g_pending_place.erase(it);
+    if (GameTime::GetGameTimeMS() > pp.until_ms) return false;
+    PlaceResult const r = PlaceBots(sender, pp.shape, pp.gap, "cursor", pp.who, "ping", &point);
+    if (sender->GetSession())
+        ChatHandler(sender->GetSession()).PSendSysMessage("%s", r.line.c_str());
+    return true;
+}
+
+BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::string const& shape_word, std::string const& gap_word,
+                                                          std::string const& anchor_word, std::vector<std::string> const& who_in,
+                                                          char const* via, Position const* point)
+{
+    PlaceResult res;
+    auto lower = [](std::string s)
+    {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        size_t const b = s.find_first_not_of(" \t");
+        size_t const e = s.find_last_not_of(" \t");
+        return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+    };
+    if (!sender || !sender->GetSession())
+    { res.line = "No player."; return res; }
+    Group* grp = sender->GetGroup();
+    if (!grp)
+    { res.line = "You have no group yet: add a bot first."; return res; }
+
+    std::string const shape_w = lower(shape_word);
+    bool const follow = shape_w == "follow" || shape_w == "back" || shape_w == "free";
+    Placement::Shape shape = Placement::Shape::Circle;
+    if (!follow && !Placement::ParseShape(shape_w, shape))
+    { res.line = "Unknown shape '" + shape_w + "': close, circle, arc, spread, line, column, spear or arrow."; return res; }
+    float gap = 4.0f;
+    std::string const gap_w = lower(gap_word);
+    if (!Placement::ParseGap(gap_w, gap))
+    { res.line = "Unknown gap '" + gap_w + "': tight, normal or wide."; return res; }
+
+    std::vector<std::string> who;
+    for (std::string const& w : who_in)
+        if (std::string lw = lower(w); !lw.empty())
+            who.push_back(std::move(lw));
+
+    // The anchor: in front of the sender (facing his way), his target (facing from it toward him), or a spot he points at (facing
+    // away from him; "cursor": the next ping).
+    std::string const anchor_w = lower(anchor_word);
+    float ax = sender->GetPositionX(), ay = sender->GetPositionY(), az = sender->GetPositionZ(), ao = sender->GetOrientation();
+    float min_r = 3.0f;
+    float clear_ahead = 4.0f;   // the nearest bot of a line, column, spear... stands this far in front of the anchor
+    char const* where = "in front of you";
+    bool const cursor = anchor_w == "cursor" || anchor_w == "point" || anchor_w == "ping";
+    if (!follow && cursor && !point)
+    {
+        PendingPlace& pp = g_pending_place[sender->GetGUID().GetCounter()];
+        pp.shape = shape_w; pp.gap = gap_w; pp.who = who;
+        pp.until_ms = GameTime::GetGameTimeMS() + kPendingPlaceMs;
+        res.line = "Now point at the ground where the bots should stand: ping it (G key, or the ping wheel: On my way) within 30 seconds.";
+        TC_LOG_INFO("playerbot.v2", "[place] {} ({}): {} waits for a ping", sender->GetName(), via ? via : "?", Placement::ShapeName(shape));
+        return res;
+    }
+    if (!follow && cursor && point)
+    {
+        if (point->GetPositionX() == 0.f && point->GetPositionY() == 0.f)
+        { res.line = "That ping had no spot on the ground."; return res; }
+        ax = point->GetPositionX(); ay = point->GetPositionY(); az = point->GetPositionZ();
+        if (sender->GetDistance2d(ax, ay) > 100.0f)
+        { res.line = "That spot is more than 100 yards away."; return res; }
+        ao = sender->GetDistance2d(ax, ay) > 1.0f ? sender->GetAbsoluteAngle(ax, ay) : sender->GetOrientation();   // facing away from you
+        clear_ahead = -1.0f;   // the shape is centred on the spot you pointed at
+        where = "where you pointed";
+    }
+    else if (!follow && (anchor_w == "target" || anchor_w == "my target"))
+    {
+        Unit* sel = sender->GetSelectedUnit();
+        if (!sel || sel == sender || sel->GetMapId() != sender->GetMapId() || !sel->IsInWorld())
+        { res.line = "Target the spot first (a mob, a player or an NPC), or use Here."; return res; }
+        if (Player* sp = sel->ToPlayer(); sp && sp->GetGroup() == grp)
+        { res.line = "Your target is in your group: target a mob or an NPC, or use Place at cursor."; return res; }
+        if (sender->GetDistance2d(sel) > 100.0f)
+        { res.line = "Your target is more than 100 yards away."; return res; }
+        ax = sel->GetPositionX(); ay = sel->GetPositionY(); az = sel->GetPositionZ();
+        ao = sel->GetAbsoluteAngle(sender);   // the shape's front faces the sender
+        min_r = sel->GetCombatReach() + 2.0f;
+        clear_ahead = min_r;   // never inside the target
+        where = "at your target";
+    }
+    else if (!follow && !anchor_w.empty() && anchor_w != "here" && anchor_w != "me")
+    { res.line = "Unknown spot '" + anchor_w + "': here, target or cursor."; return res; }
+
+    // The chosen bots: the sender's bots (or the world bots he leads) in his group, alive, on his map.
+    std::vector<Player*> bots;
+    uint32 far = 0, dead = 0;
+    for (GroupReference const& itr : grp->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || m == sender) continue;
+        if (!Services::Registry().has(m->GetGUID().GetCounter()) || !ControlsForGroupOrder(sender, m)) continue;
+        bool matched = who.empty();
+        for (std::string const& w : who)
+            if (PlaceWhoMatches(m, grp, w)) { matched = true; break; }
+        if (!matched) continue;
+        if (!m->IsAlive()) { ++dead; continue; }
+        if (m->GetMapId() != sender->GetMapId() || m->GetDistance2d(ax, ay) > 150.0f) { ++far; continue; }
+        bots.push_back(m);
+        if (bots.size() >= Placement::kMaxBots) break;
+    }
+    res.asked = uint32(bots.size());
+    if (bots.empty())
+    {
+        res.line = dead || far ? fmt::format("None of the chosen bots can go ({} dead, {} too far or on another map).", dead, far)
+                               : std::string("No bot of yours in the group matches.");
+        return res;
+    }
+
+    if (follow)
+    {
+        for (Player* m : bots)
+            if (DispatchSingle(sender, m, "follow", via))
+                ++res.placed;
+        res.line = fmt::format("{} bot(s) follow you again.", res.placed);
+        TC_LOG_INFO("playerbot.v2", "[place] {} ({}): {} bots follow again", sender->GetName(), via ? via : "?", res.placed);
+        return res;
+    }
+
+    std::stable_sort(bots.begin(), bots.end(), [](Player* a, Player* b)
+    {
+        uint8 const ra = PlaceRankOf(a), rb = PlaceRankOf(b);
+        if (ra != rb) return ra < rb;
+        return a->GetGUID().GetCounter() < b->GetGUID().GetCounter();
+    });
+    std::vector<Placement::Slot> slots = Placement::Slots(shape, uint32(bots.size()), gap, min_r);
+    // Here / target: a line, column, spear... starts in front of you (or of the target), never on your own spot.
+    if (clear_ahead >= 0.0f && !Placement::RingShape(shape))
+        Placement::PushAhead(slots, clear_ahead);
+    uint32 const now = GameTime::GetGameTimeMS();
+    uint32 pulled_in = 0;
+    for (size_t i = 0; i < bots.size() && i < slots.size(); ++i)
+    {
+        Player* m = bots[i];
+        BotAI* ai = Services::Registry().ai(m->GetGUID().GetCounter());
+        if (!ai) continue;
+        float x = ax, y = ay, z = az;
+        Placement::ToWorld(slots[i], ax, ay, ao, x, y);
+        // A slot behind a wall or over a drop: half way in, else the spot itself.
+        if (!FallbackSlotReachable(m, ax, ay, az, x, y, z))
+        {
+            float hx = ax + (x - ax) * 0.5f, hy = ay + (y - ay) * 0.5f, hz = az;
+            if (FallbackSlotReachable(m, ax, ay, az, hx, hy, hz)) { x = hx; y = hy; z = hz; }
+            else { x = ax; y = ay; z = az; }
+            ++pulled_in;
+        }
+        Push(m, MoveToIntent{x, y, z, /*run=*/true});
+        ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty, now, BotAI::kHoldPositionTtlMs);
+        ai->set_stay_return(x, y, z, m->GetMapId(), /*pinned*/ true);   // kept: after every fight it walks back here
+        ai->set_owner_follow_order(false);
+        ai->end_fallback();
+        ai->end_pull_back();
+        ai->end_owner_use();
+        ai->set_last_owner_name(sender->GetName());
+        ++res.placed;
+        TC_LOG_INFO("playerbot.v2", "[place] {} slot {}/{} {} ({:.1f},{:.1f},{:.1f})", m->GetName(), i + 1, bots.size(),
+                    Placement::ShapeName(shape), x, y, z);
+    }
+    std::string who_list = who.empty() ? std::string("all") : std::string();
+    for (std::string const& w : who)
+        who_list += (who_list.empty() ? "" : ",") + w;
+    char const* gap_name = gap <= 2.5f ? "tight" : gap >= 8.0f ? "wide" : "normal";
+    res.line = fmt::format("{} bot(s) in a {} ({} gap) {}. They stay there, and go back after a fight, until you press Follow.", res.placed,
+                           Placement::ShapeName(shape), gap_name, where);
+    if (pulled_in)
+        res.line += fmt::format(" {} spot(s) were behind a wall or a drop, so those bots stand closer in.", pulled_in);
+    if (dead || far)
+        res.line += fmt::format(" Left out: {} dead, {} too far.", dead, far);
+    TC_LOG_INFO("playerbot.v2", "[place] {} ({}): {} {} gap {:.1f} at ({:.1f},{:.1f}) facing {:.0f}deg, {} bots, who '{}'",
+                sender->GetName(), via ? via : "?", Placement::ShapeName(shape), anchor_w.empty() ? "here" : anchor_w, gap, ax, ay,
+                ao * 180.0f / float(M_PI), res.placed, who_list);
+    return res;
+}
+
+bool BotCommandParser::ApplyPlaceOrder(Player* sender, std::string const& line, char const* via)
+{
+    // "place <shape> [tight|normal|wide] [here|target] [who...]" or "place follow [who...]"
+    std::string n = line;
+    std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    std::istringstream in(n);
+    std::string verb;
+    in >> verb;
+    if (verb != "place" || !sender || !sender->GetSession())
+        return false;
+    std::string shape, word, gap, anchor;
+    in >> shape;
+    std::vector<std::string> who;
+    while (in >> word)
+    {
+        float g = 0.f;
+        if (gap.empty() && word != "close" && Placement::ParseGap(word, g)) { gap = word; continue; }
+        if (anchor.empty() && (word == "here" || word == "target" || word == "cursor")) { anchor = word; continue; }
+        who.push_back(word);
+    }
+    PlaceResult const r = PlaceBots(sender, shape, gap, anchor, who, via);
+    ChatHandler(sender->GetSession()).PSendSysMessage("%s", r.line.c_str());
     return true;
 }
 
 bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& msg, char const* via)
 {
     if (!sender || !bot) return false;
+    // "ignore target" / "ignore clear" are the owner's list, like the crowd-control orders: stored once, answered once.
+    if (ApplyIgnoreOrder(sender, msg, via))
+        return true;
+    // "place <shape> ..." (the Positions tab's words typed or whispered): the owner's whole set at once, answered once.
+    if (ApplyPlaceOrder(sender, msg, via))
+        return true;
     // A crowd-control order ("@warlock no fear", "off cc") is the owner's, not each bot's: stored once, answered once.
     if (ApplyCcOrder(sender, msg, via))
         return true;
@@ -1860,6 +2226,25 @@ bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& 
         fmt::format("Squad ({}): {} / {} bot(s) processed.",
                     FormatAddressKind(addr), succeeded, addr.bots.size())});
     return succeeded > 0;
+}
+
+std::vector<BotCommandParser::AssignRow> BotCommandParser::AssignList(Group* grp)
+{
+    std::vector<AssignRow> rows;
+    if (!grp) return rows;
+    for (auto const& [tank_low, marker] : Services::Owners().TankMarks(grp->GetGUID().GetCounter()))
+        if (Player* t = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(tank_low)))
+            rows.push_back({ uint8(marker & 7), t->GetName(), "tank" });
+    for (GroupReference const& itr : grp->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || !Services::Registry().has(m->GetGUID().GetCounter())) continue;
+        OwnerRegistry::RtiOrder const o = Services::Owners().RtiOrderOf(m->GetGUID().GetCounter());
+        for (uint8 s : o.kill) rows.push_back({ uint8(s & 7), m->GetName(), "kill" });
+        for (uint8 s : o.cc)   rows.push_back({ uint8(s & 7), m->GetName(), "cc" });
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](AssignRow const& a, AssignRow const& b) { return a.marker > b.marker; });
+    return rows;
 }
 
 Role BotCommandParser::BotRole(Player* bot_player)
@@ -1933,14 +2318,14 @@ bool BotCommandParser::ControlsForGroupOrder(Player const* sender, Player const*
     if (Services::Owners().GetOwner(bot_id).account_id != 0)
         return Services::Owners().IsOwner(bot_id, sender->GetSession()->GetAccountId(), sender->GetGUID().GetCounter());
     Group const* g = bot->GetGroup();
-    if (!g || g != sender->GetGroup() || (sender->GetSession() && sender->GetSession()->IsBot()))
+    if (!g || g != sender->GetGroup() || !Scenario::PlaysAsHuman(sender))
         return false;
     std::vector<GroupControl::Member<ObjectGuid>> members;
     for (GroupReference const& itr : g->GetMembers())
     {
         Player const* m = itr.GetSource();
         if (!m || m == bot) continue;
-        members.push_back({ m->GetGUID(), !(m->GetSession() && m->GetSession()->IsBot()) });
+        members.push_back({ m->GetGUID(), Scenario::PlaysAsHuman(m) });
     }
     return GroupControl::ResolveController(g->GetLeaderGUID(), members) == sender->GetGUID();
 }
@@ -1955,6 +2340,40 @@ bool BotCommandParser::DispatchSingle(Player* sender, Player* bot, std::string c
     // per bot (whispered chatter reaches here too). Chat handlers can run on map-update threads.
     bool const authorized = IsAuthorized(sender, bot);
     bool const handled = authorized && DispatchSingleImpl(sender, bot, msg);
+    // A whispered order the bot may not take was dropped without a word, so the player could not tell it from a broken command
+    // (Gremloc 11-08: "gear" and "equip upgrades" got no answer). Say why, for the order words only (small talk still goes to the
+    // chat reactor), at most once per 10 s per bot and player.
+    if (!authorized && direct && sender->GetSession() && !Services::Registry().has(sender->GetGUID().GetCounter()))
+    {
+        std::optional<std::string> const order = ::Playerbot::V2::ClassifyGroupOrder(msg, /*owner_words*/ true);
+        if (order && *order != "help" && *order != "who")
+        {
+            static std::mutex s_refuse_mutex;
+            static std::unordered_map<uint64, uint32> s_refused_ms;   // (bot << 32) ^ sender -> when told
+            uint32 const now = GameTime::GetGameTimeMS();
+            uint64 const key = (bot->GetGUID().GetCounter() << 32) ^ sender->GetGUID().GetCounter();
+            bool tell = false;
+            {
+                std::lock_guard<std::mutex> lock(s_refuse_mutex);
+                if (s_refused_ms.size() > 4096) s_refused_ms.clear();
+                uint32& last = s_refused_ms[key];
+                if (last == 0 || now - last >= 10000u)
+                {
+                    last = now ? now : 1u;
+                    tell = true;
+                }
+            }
+            if (tell)
+            {
+                bool const owned = Services::Owners().GetOwner(bot->GetGUID().GetCounter()).account_id != 0;
+                Push(bot, WhisperIntent{sender->GetName(), owned ? std::string("sorry, i only take orders from the player i belong to")
+                                                                 : std::string("i only take orders from my group, invite me first")});
+            }
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} from {} via {}: \"{}\" -> refused (not the owner), told", bot->GetName(),
+                        sender->GetName(), via ? via : "?", msg);
+            return true;
+        }
+    }
     if (handled && direct && t_whisper_replies == 0)
         ConfirmWhisperOrder(sender, bot, Normalize(msg));
     if (!handled)
@@ -1990,8 +2409,22 @@ static bool OrderEquip(Player* sender, Player* bot, std::string const& n)
         arg = n.substr(5);
     std::vector<::Playerbot::V2::Gear::EquipOrderPick> picks;
     std::string const reply = ::Playerbot::V2::Gear::PlanEquipOrder(*snap, bot->GetName(), arg, picks);
+    // A named piece ("equip <item>") is the player's choice: the auto-equip rules keep it on (BotAI::keep_worn), else they put the
+    // old piece back on a few minutes later when their score likes it more. "equip upgrades" follows the score, so nothing to keep.
+    std::string a = arg;
+    while (!a.empty() && a.front() == ' ') a.erase(a.begin());
+    while (!a.empty() && a.back() == ' ') a.pop_back();
+    // The same words PlanEquipOrder reads as "wear the upgrades".
+    bool const upgrades = a.empty() || a == "upgrades" || a == "upgrade" || a == "best" || a == "best gear" || a == "your best gear" ||
+                          a == "all" || a == "everything";
+    bool const named = !upgrades && picks.size() == 1;
+    BotAI* ai = named ? Services::Registry().ai(bot->GetGUID().GetCounter()) : nullptr;
     for (auto const& pk : picks)
+    {
         Push(bot, EquipItemIntent{ pk.bag, pk.slot, pk.to_slot });
+        if (ai)
+            ai->keep_worn(pk.to_slot, pk.entry);
+    }
     Push(bot, WhisperIntent{sender->GetName(), reply});
     TC_LOG_INFO("playerbot.v2", "[owner_order] [gear] {} <- {}: \"{}\" -> {} swap(s)", bot->GetName(), sender->GetName(), n, picks.size());
     return true;
@@ -2779,7 +3212,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         if (std::string const why = Services::Population().BringToOwner(sender, bot, "come"); !why.empty())
         {
             if (why != "in combat with you")   // a bot in your own fight answers when it is over; no line per fighter
-                ChatHandler(sender->GetSession()).PSendSysMessage("%s cannot come: %s.", bot->GetName().c_str(), why.c_str());
+                Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("%s cannot come: %s.", bot->GetName().c_str(), why.c_str());
             return true;
         }
         // After /come the owner usually wants the bot to stay nearby —
@@ -4057,6 +4490,77 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("Clearloot_all: dropped {} corpses across {} bot(s).",
                         total, visited)});
+        return true;
+    }
+    // "focus heal <name>[, <name>...]" / "focus heal me" / "focus heal off": a healer looks after only these group members (and
+    // itself) until "focus heal off". Memory only. Names are matched in the bot's group.
+    if (cmd == "focus" && (parsed.tail == "heal" || parsed.tail.rfind("heal ", 0) == 0))
+    {
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!ai)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Focus heal: bot not registered."});
+            return true;
+        }
+        std::string rest = parsed.tail.size() > 4 ? parsed.tail.substr(5) : std::string();
+        std::replace(rest.begin(), rest.end(), ',', ' ');
+        std::vector<std::string> names;
+        { std::istringstream is(rest); std::string t; while (is >> t) names.push_back(t); }
+        if (names.empty())
+        {
+            std::vector<ObjectGuid> const cur = ai->heal_only();
+            std::string list;
+            for (ObjectGuid const& g : cur)
+                if (Player* p = ObjectAccessor::FindConnectedPlayer(g))
+                    list += (list.empty() ? "" : ", ") + p->GetName();
+            Push(bot, WhisperIntent{sender->GetName(), cur.empty()
+                ? "Focus heal: I heal everyone (focus heal <name>, <name> | focus heal off)."
+                : fmt::format("Focus heal: I heal only {} and myself.", list.empty() ? std::string("players who are offline") : list)});
+            return true;
+        }
+        if (names.size() == 1 && (names[0] == "off" || names[0] == "clear" || names[0] == "all"))
+        {
+            ai->set_heal_only({});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} focus heal off (from {})", bot->GetName(), sender->GetName());
+            Push(bot, WhisperIntent{sender->GetName(), "Focus heal: off, I heal everyone again."});
+            return true;
+        }
+        Group* grp = bot->GetGroup();
+        std::vector<ObjectGuid> picked;
+        std::string ok, missing;
+        for (std::string const& n : names)
+        {
+            Player* m = nullptr;
+            if (n == "me")
+                m = sender;
+            else if (grp)
+                for (GroupReference const& itr : grp->GetMembers())
+                {
+                    Player* gm = itr.GetSource();
+                    if (!gm) continue;
+                    std::string gn = gm->GetName();
+                    std::transform(gn.begin(), gn.end(), gn.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                    if (gn == n) { m = gm; break; }
+                }
+            if (!m || (grp && !grp->IsMember(m->GetGUID())))
+            {
+                missing += (missing.empty() ? "" : ", ") + n;
+                continue;
+            }
+            if (std::find(picked.begin(), picked.end(), m->GetGUID()) != picked.end()) continue;
+            picked.push_back(m->GetGUID());
+            ok += (ok.empty() ? "" : ", ") + m->GetName();
+        }
+        if (picked.empty())
+        {
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Focus heal: {} not in my group; nothing changed.", missing)});
+            return true;
+        }
+        ai->set_heal_only(std::move(picked));
+        TC_LOG_INFO("playerbot.v2", "[owner_order] {} focus heal on {} (from {})", bot->GetName(), ok, sender->GetName());
+        Push(bot, WhisperIntent{sender->GetName(), missing.empty()
+            ? fmt::format("Focus heal: I heal only {} and myself.", ok)
+            : fmt::format("Focus heal: I heal only {} and myself ({} not in my group).", ok, missing)});
         return true;
     }
     if (cmd == "focus")
@@ -8733,24 +9237,41 @@ done_dispel:
         // contains `want`, that's our match. (Multi-language clients
         // would localise — we use the default DBC locale, matching the
         // existing spell-name lookup paths in this file.)
-        uint32 matched = 0;
+        // The six capital cities first, by spell id: the names below are in the server's language, so on a ruRU server the English
+        // city the add-on sends matched nothing (MageCityPortal.h).
+        auto const& known = snap->spellbook.known_spells;   // sorted
+        uint32 matched = ::Playerbot::V2::MageCity::CitySpell(want, cmd == "portal",
+            [&known](uint32 id) { return std::binary_search(known.begin(), known.end(), id); });
         std::string matched_name;
-        for (uint32 sid : snap->spellbook.known_spells)
+        if (matched)
         {
-            SpellInfo const* si = sSpellMgr->GetSpellInfo(sid, DIFFICULTY_NONE);
-            if (!si || !si->SpellName) continue;
-            std::string nm = si->SpellName->Str[sWorld->GetDefaultDbcLocale()];
-            std::string lo;
-            lo.reserve(nm.size());
-            for (char c : nm) lo.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c))));
-            if (lo.size() < prefix_len ||
-                lo.compare(0, prefix_len, prefix) != 0) continue;
-            if (lo.find(want, prefix_len) == std::string::npos) continue;
-            matched = sid;
-            matched_name = std::move(nm);
-            break;
+            SpellInfo const* si = sSpellMgr->GetSpellInfo(matched, DIFFICULTY_NONE);
+            matched_name = si && si->SpellName ? si->SpellName->Str[sWorld->GetDefaultDbcLocale()] : std::to_string(matched);
         }
+        else
+        {
+            for (uint32 sid : known)
+            {
+                SpellInfo const* si = sSpellMgr->GetSpellInfo(sid, DIFFICULTY_NONE);
+                if (!si || !si->SpellName) continue;
+                std::string nm = si->SpellName->Str[sWorld->GetDefaultDbcLocale()];
+                std::string lo;
+                lo.reserve(nm.size());
+                for (char c : nm) lo.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(c))));
+                if (lo.size() < prefix_len ||
+                    lo.compare(0, prefix_len, prefix) != 0) continue;
+                if (lo.find(want, prefix_len) == std::string::npos) continue;
+                matched = sid;
+                matched_name = std::move(nm);
+                break;
+            }
+        }
+        if (matched == 0 && ::Playerbot::V2::MageCity::FindCity(want))
+        { Push(bot, WhisperIntent{sender->GetName(),
+            fmt::format("{}: I don't know the {} to {} (mages learn the teleports of their faction's cities at level 20, the portals at 40).",
+                cmd == "portal" ? "Portal" : "Teleport", cmd == "portal" ? "portal" : "teleport", parsed.tail)});
+          return true; }
         if (matched == 0)
         { Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("{}: no '{}' spell known. (Known city portals/teleports require Mage city teleport / portal training.)",

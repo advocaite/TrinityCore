@@ -30,6 +30,16 @@ public:
     template <class T>
     bool emit(T body)
     {
+        // The owner's full Passive and Ignore target (BotSnapshot::no_fight / fight_ignore): no attack and no harmful spell at a mob
+        // the bot must leave alone, whichever rule asks. Dropped like any refused emit, so the rotation falls through to its next rule.
+        if constexpr (std::is_same_v<T, StartAttackIntent> || std::is_same_v<T, PetAttackIntent>)
+        { if (fight_denied(0, body.target, false)) return false; }
+        if constexpr (std::is_same_v<T, CastSpellIntent>)
+        { if (fight_denied(body.spell_id, body.target, false)) return false; }
+        if constexpr (std::is_same_v<T, PetCastSpellIntent>)
+        { if (fight_denied(body.spell_id, body.target, true)) return false; }
+        if constexpr (std::is_same_v<T, GroundTargetSpellIntent>)
+        { if (fight_denied(body.spell_id, ObjectGuid::Empty, false)) return false; }
         Intent i;
         i.id              = ++(*next_id_);
         i.bot_id          = bot_id_;
@@ -205,6 +215,7 @@ public:
     bool vendor_buy_by_entry(ObjectGuid npc, uint32 item_entry, uint32 count = 1)
     { return emit(VendorIntent{VendorBuyByEntryIntent{npc, item_entry, count}}); }
     bool toggle_pvp() { return emit(TogglePvpIntent{}); }
+    bool set_pvp(bool on) { return emit(SetPvpIntent{ on }); }
     bool add_friend(std::string name, std::string note = {})
     { return emit(AddFriendIntent{std::move(name), std::move(note)}); }
     bool remove_friend(ObjectGuid guid) { return emit(RemoveFriendIntent{guid}); }
@@ -404,6 +415,9 @@ public:
     // Raid preparation: resistance gear for `school` on, or the bot's own back on (0) (EconomyOp::ResistGear).
     bool resist_gear(uint8 school)
     { return emit(EconomyIntent{EconomyOp::ResistGear{school}}); }
+    // Raid preparation: the Onyxia Scale Cloak on in Blackwing Lair, or the bot's own cloak back (EconomyOp::FightCloak).
+    bool fight_cloak(bool on)
+    { return emit(EconomyIntent{EconomyOp::FightCloak{on}}); }
 
     // Battleground / arena queue. `arena_type` 0 = battleground (solo or
     // group-leader), 2/3/5 = arena skirmish bracket (group-leader only).
@@ -460,6 +474,13 @@ private:
     // The owner's "aoe off" (AoeDeny.h, snapshot aoe_denied): a spell that hits more than one enemy is not sent either.
     bool aoe_denied(uint32 spell_id) const;
     bool owner_denied(uint32 spell_id) const { return cc_denied(spell_id) || aoe_denied(spell_id); }
+    // The owner's full Passive (snapshot no_fight): any attack (spell_id 0) or harmful spell. Ignore target (snapshot fight_ignore): an
+    // attack or harmful spell at one of those mobs (no explicit target: the bot's victim or selection, the pet's victim for a pet
+    // spell), or a spell that hits more than one enemy while one of them is near (fight_ignore_near). A friendly spell always goes.
+    bool fight_denied(uint32 spell_id, ObjectGuid target, bool pet) const;
+    // The owner's "focus heal <names>" (snapshot heal_only): a heal, heal over time or absorb on anyone else is not sent. A cast
+    // with no target or on the bot itself always goes.
+    bool heal_denied(uint32 spell_id, ObjectGuid target) const;
     void note_school_cast(uint32 spell_id, ObjectGuid target);
     // Avoided part of the pet's damage schools on `target` (0 = no hold).
     uint8 pet_hold_mask(ObjectGuid target) const;

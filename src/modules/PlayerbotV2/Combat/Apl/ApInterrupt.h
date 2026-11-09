@@ -274,6 +274,9 @@ constexpr uint32 DISPEL_MAGIC = 527;    // priest
 constexpr float  kRange       = 28.f;   // spell range 30, snapshot cadence slack
 constexpr int32  kEmergencyPct = 45;
 constexpr int32  kMinManaPct   = 40;
+// A healer strips only with mana to spare, the same mark as its damage spells (Smite / Holy Fire at 70 %): in smlibrary_loksey
+// (0.1.27 test2) the group's only priest, also its healer, spent its mana on Dispel Magic every 3 s and went dry mid-pull.
+constexpr int32  kHealerMinManaPct = 70;
 constexpr int32  kMinBuffAgeMs = 1500;  // let the cast that applied it finish
 constexpr uint32 kCooldownMs   = 3000;  // per bot: one strip, then look again
 
@@ -355,16 +358,28 @@ inline bool Should(ApPredicateContext const& ctx)
     if (!po.active || !s.is_in_instance()) return false;
     const uint32 spell = Spell(s);
     if (!spell || !s.is_ready(spell)) return false;
-    if (s.max_power(POWER_MANA) <= 0 || s.power_pct(POWER_MANA) < kMinManaPct) return false;
+    if (s.max_power(POWER_MANA) <= 0) return false;
+    const int32 floor_pct = IsHealer(s) ? kHealerMinManaPct : kMinManaPct;
+    const bool mana_ok = s.power_pct(POWER_MANA) >= floor_pct;
     const uint32 now = s.published_at_ms();
-    if (WithLast([&](auto& last)
+    if (mana_ok && WithLast([&](auto& last)
         {
             auto it = last.find(s.guid().GetCounter());
             return it != last.end() && now - it->second < kCooldownMs;
         }))
         return false;
-    if (!Target(s)) return false;
-    return Elected(s, ctx.group);
+    NearbyUnit const* const u = Target(s);
+    if (!u || !Elected(s, ctx.group)) return false;
+    if (!mana_ok)
+    {
+        // Test item 2 (0002): the strip a healer leaves for its heals, said once per 10 s.
+        if (RaidLogDue((uint64(s.guid().GetCounter()) << 8) | 36u, now, 10000u))
+            TC_LOG_INFO("playerbot.v2", "[purge_hold] {} leaves aura {} on entry {} ({}): mana {}% under its {}% mark{}",
+                s.name(), u->magic_buff_spell, u->entry, u->guid.GetCounter(), s.power_pct(POWER_MANA), floor_pct,
+                IsHealer(s) ? " (healer)" : "");
+        return false;
+    }
+    return true;
 }
 
 inline void Cast(ApPredicateContext const& ctx, BotIntentEmitter& e)
@@ -375,11 +390,11 @@ inline void Cast(ApPredicateContext const& ctx, BotIntentEmitter& e)
     if (!u || !spell || !e.cast(spell, u->guid)) return;
     const uint32 now = s.published_at_ms();
     WithLast([&](auto& last) { last[s.guid().GetCounter()] = now; return 0; });
-    if (s.is_in_raid() && RaidLogDue((uint64(s.guid().GetCounter()) << 8) | 35u, now, 3000u))
+    if (RaidLogDue((uint64(s.guid().GetCounter()) << 8) | 35u, now, 3000u))
     {
         CreatureTemplate const* ct = sObjectMgr->GetCreatureTemplate(u->entry);
-        TC_LOG_INFO("playerbot.v2", "[raid_purge] {} strips aura {} from {} ({}) with {}",
-            s.name(), u->magic_buff_spell, ct ? ct->Name : std::string("?"), u->guid.GetCounter(), spell);
+        TC_LOG_INFO("playerbot.v2", "[raid_purge] {} strips aura {} from {} ({}) with {} at {}% mana",
+            s.name(), u->magic_buff_spell, ct ? ct->Name : std::string("?"), u->guid.GetCounter(), spell, s.power_pct(POWER_MANA));
     }
 }
 

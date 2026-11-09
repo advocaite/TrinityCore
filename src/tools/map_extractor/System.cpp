@@ -1108,6 +1108,11 @@ bool IsDeepWaterIgnored(uint32 mapId, uint32 x, uint32 y)
     return false;
 }
 
+// Tiles the WDT lists but that could not be converted (the ADT could not be read from the client, or the .map not written).
+// A client that Battle.net has not finished downloading gives these; the run must not end as a success then (see main()).
+std::size_t FailedTilesContinents = 0;   // maps 0 and 1: the server will not start without their start zones
+std::size_t FailedTilesOther = 0;
+
 void ExtractMaps(uint32 build)
 {
     std::string outputFileName;
@@ -1201,10 +1206,19 @@ void ExtractMaps(uint32 build)
                     else
                     {
                         std::string storagePath = Trinity::StringFormat(R"(World\Maps\{}\{}_{}_{}.adt)", map_ids[z].Directory, map_ids[z].Directory, x, y);
-                        existingTiles[y * WDT_MAP_SIZE + x] = ConvertADT(storagePath, map_ids[z].Name, outputFileName, y, x, build, ignoreDeepWater);
+                        tileOk = ConvertADT(storagePath, map_ids[z].Name, outputFileName, y, x, build, ignoreDeepWater);
+                        existingTiles[y * WDT_MAP_SIZE + x] = tileOk;
                         // No .road file emitted for legacy MAID-less ADTs in
                         // P1.0c. Pre-MAID maps are vanilla-era content and
                         // not the primary target of road-aware pathfinding.
+                    }
+                    if (!tileOk)
+                    {
+                        printf("  tile %04u_%02u_%02u could not be extracted\n", map_ids[z].Id, y, x);
+                        if (map_ids[z].Id == 0 || map_ids[z].Id == 1)
+                            ++FailedTilesContinents;
+                        else
+                            ++FailedTilesOther;
                     }
                 }
 
@@ -1672,7 +1686,7 @@ int main(int argc, char * arg[])
     if (firstInstalledLocale < 0)
     {
         printf("No locales detected\n");
-        return 0;
+        return 1;   // nothing could be read (wrong -p product, wrong path): a failure, not an empty success
     }
 
     if (CONF_extract & EXTRACT_CAMERA)
@@ -1694,6 +1708,17 @@ int main(int argc, char * arg[])
         OpenCascStorage(firstInstalledLocale);
         ExtractMaps(build);
         CascStorage.reset();
+
+        if (FailedTilesContinents || FailedTilesOther)
+            printf("%zu map tiles could not be extracted (%zu of them on Eastern Kingdoms / Kalimdor).\n", FailedTilesContinents + FailedTilesOther, FailedTilesContinents);
+        // A continent tile that could not be read means a client that is not complete (Battle.net still downloading or a damaged
+        // install): the server would stop on "Unable to load map and vmap data for starting zones", so the run is a failure.
+        // Tiles of other maps are only reported: some clients list tiles of maps they do not ship.
+        if (FailedTilesContinents)
+        {
+            printf("Let Battle.net finish downloading the game (or run its Scan and Repair), then extract again.\n");
+            return 2;
+        }
     }
 
     return 0;

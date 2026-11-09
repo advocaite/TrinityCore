@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <string>
 
+#include "ObjectGuid.h"
+
 class Player;
 class Creature;
 
@@ -50,6 +52,7 @@ enum class CharterSignResult : uint8_t
     AlreadySigned       = 4,    // PETITION_SIGN_ALREADY_SIGNED
     SignaturesFull      = 5,    // ≥10 signatures
     WrongFaction        = 6,    // owner+signer factions differ + cross-faction-disabled
+    SignerBusy          = 7,    // signer is running its own bot charter
 };
 
 enum class CharterTurnInResult : uint8_t
@@ -84,6 +87,21 @@ CharterSignResult BotSignGuildCharter(
     Player* signer,
     uint64 petition_item_low);
 
+// ----- Sign a charter a player offered -----
+//
+// A real player pressed "Request Signature" on this bot. Mirrors
+// WorldSession::HandleSignPetition, with two changes for bots:
+//   - "already signed" is checked per character, not per account, because
+//     up to 10 pool bots share one account and only one of them could
+//     ever sign otherwise;
+//   - the owner's charter item gets the new signature count (the core
+//     handler updates the signer's bag, which never holds the charter).
+// On Ok the owner's client gets SMSG_PETITION_SIGN_RESULTS so the
+// charter window shows the new name.
+CharterSignResult BotSignOfferedCharter(
+    Player* signer,
+    ObjectGuid petition_guid);
+
 // ----- Turn in charter -----
 //
 // Mirrors WorldSession::HandleTurnInPetition. On Ok the guild is
@@ -117,6 +135,7 @@ enum class RecruitResult : uint8_t
     BadTarget    = 2,
     GuildFull    = 3,
     AddFailed    = 4,
+    Invited      = 5,   // a real player got a normal guild invite (accepts or declines himself)
 };
 
 RecruitResult BotRecruitToGuild(

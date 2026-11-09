@@ -65,6 +65,12 @@ inline std::string StripLinks(std::string const& raw, std::uint32_t& first_entry
         if (raw[i] == '|' && i + 1 < raw.size())
         {
             char const t = raw[i + 1];
+            if (t == 'c' && i + 2 < raw.size() && raw[i + 2] == 'n')         // |cnIQ4: (the 12.x client's quality colour)
+            {
+                std::size_t const colon = raw.find(':', i + 3);
+                i = colon == std::string::npos ? raw.size() : colon + 1;
+                continue;
+            }
             if (t == 'c' && i + 10 <= raw.size()) { i += 10; continue; }      // |cAARRGGBB
             if (t == 'r') { i += 2; continue; }
             if (t == 'H')

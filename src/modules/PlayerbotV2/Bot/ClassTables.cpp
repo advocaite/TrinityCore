@@ -241,7 +241,7 @@ bool IsHealerSpec(uint8 cls, uint16 spec)
     return false;
 }
 
-// Highest-damage PvE spec per class (raid scorecard + chris's list): Fury, Ret, MM, Combat, Shadow, Enhancement, Fire, Destruction, Cat.
+// Highest-damage PvE spec per class (raid scorecard + Karrz's list): Fury, Ret, MM, Combat, Shadow, Enhancement, Fire, Destruction, Cat.
 uint32 DpsSpecForClass(uint8 cls)
 {
     switch (cls)

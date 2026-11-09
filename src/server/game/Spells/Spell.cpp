@@ -24,6 +24,7 @@
 #include "BattlePetMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
+#include "ClassicAutoShot.h"
 #include "ClassicOpcodes.h"
 #include "CollectionMgr.h"
 #include "CombatLogPackets.h"
@@ -64,6 +65,8 @@
 #include "TradeData.h"
 #include "TraitPackets.h"
 #include "TransmogMgr.h"
+#include <mutex>
+#include <unordered_set>
 #include "UniqueTrackablePtr.h"
 #include "Util.h"
 #include "VMapFactory.h"
@@ -762,7 +765,7 @@ void Spell::SelectSpellTargets()
                             case TARGET_SELECT_CATEGORY_NEARBY:
                             case TARGET_SELECT_CATEGORY_CONE:
                             case TARGET_SELECT_CATEGORY_AREA:
-                            case TARGET_SELECT_CATEGORY_LINE:
+                            case TARGET_SELECT_CATEGORY_RECT:
                                 return true;
                             default:
                                 break;
@@ -968,7 +971,7 @@ void Spell::SelectEffectImplicitTargets(SpellEffectInfo const& spellEffectInfo, 
 
             SelectImplicitTrajTargets(spellEffectInfo, targetType);
             break;
-        case TARGET_SELECT_CATEGORY_LINE:
+        case TARGET_SELECT_CATEGORY_RECT:
             SelectImplicitLineTargets(spellEffectInfo, targetType, targetIndex, effectMask);
             break;
         case TARGET_SELECT_CATEGORY_DEFAULT:
@@ -1968,6 +1971,7 @@ void Spell::SelectImplicitLineTargets(SpellEffectInfo const& spellEffectInfo, Sp
     SpellTargetObjectTypes objectType = targetType.GetObjectType();
     SpellTargetCheckTypes selectionType = targetType.GetCheckType();
     Position const* dst = nullptr;
+    SpellRange radius = spellEffectInfo.CalcRadius(m_caster, targetIndex) * m_spellValue->RadiusMod;
     switch (targetType.GetReferenceType())
     {
         case TARGET_REFERENCE_TYPE_SRC:
@@ -1975,6 +1979,7 @@ void Spell::SelectImplicitLineTargets(SpellEffectInfo const& spellEffectInfo, Sp
             break;
         case TARGET_REFERENCE_TYPE_DEST:
             dst = m_targets.GetDstPos();
+            radius.Max = std::min(radius.Max, m_caster->GetExactDist2d(dst));
             break;
         case TARGET_REFERENCE_TYPE_CASTER:
             dst = m_caster;
@@ -1988,11 +1993,10 @@ void Spell::SelectImplicitLineTargets(SpellEffectInfo const& spellEffectInfo, Sp
     }
 
     ConditionContainer* condList = spellEffectInfo.ImplicitTargetConditions.get();
-    SpellRange radius = spellEffectInfo.CalcRadius(m_caster, targetIndex) * m_spellValue->RadiusMod;
 
     if (uint32 containerTypeMask = GetSearcherTypeMask(m_spellInfo, spellEffectInfo, objectType, condList))
     {
-        Trinity::WorldObjectSpellLineTargetCheck check(m_caster, dst, m_spellInfo->Width ? m_spellInfo->Width : m_caster->GetCombatReach(), radius, m_caster, m_spellInfo, selectionType, condList, objectType);
+        Trinity::WorldObjectSpellLineTargetCheck check(m_caster, dst, m_spellInfo->Width ? m_spellInfo->Width / 2.0f : m_caster->GetCombatReach(), radius, m_caster, m_spellInfo, selectionType, condList, objectType);
         Trinity::WorldObjectListSearcher<Trinity::WorldObjectSpellLineTargetCheck> searcher(m_caster, targets, check, containerTypeMask);
         SearchTargets<Trinity::WorldObjectListSearcher<Trinity::WorldObjectSpellLineTargetCheck>>(searcher, containerTypeMask, m_caster, m_caster, radius.Max);
 
@@ -3301,6 +3305,16 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                         if (hitInfo.AuraDuration > 0)
                         {
                             hitInfo.AuraDuration *= m_spellValue->DurationMul;
+
+                            // Classic 1.60 Legacy perk Better Living Through Chemistry 1225504: "Increases the duration of beneficial effects
+                            // from elixirs and flasks by $s1%" (the item cast is a consumable of the elixir or flask subclass)
+                            if (hitInfo.Positive && m_castItemEntry)
+                                if (Player const* targetPlayer = unit->ToPlayer())
+                                    if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(m_castItemEntry);
+                                        proto && proto->GetClass() == ITEM_CLASS_CONSUMABLE
+                                        && (proto->GetSubClass() == ITEM_SUBCLASS_ELIXIR || proto->GetSubClass() == ITEM_SUBCLASS_FLASK))
+                                        if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(1225504, EFFECT_0); pct > 0)
+                                            AddPct(hitInfo.AuraDuration, pct);
 
                             // Haste modifies duration of channeled spells
                             if (m_spellInfo->IsChanneled())
@@ -4917,9 +4931,21 @@ void Spell::SendSpellGo()
     }
 
     // The missile is launched by this packet: without the ammo display the client draws it as a white box. Shots whose cast start is
-    // never sent (Auto Shot's repeats, other triggered ranged spells) would otherwise carry display 0.
+    // never sent (Auto Shot's repeats, other triggered ranged spells) were left with display 0 (PC 20 Oct, squares on some of a hunter's moves).
     if (castFlags & CAST_FLAG_PROJECTILE)
+    {
         castData.AmmoDisplayID = GetSpellCastDataAmmo();
+        static std::mutex missileLogMutex;
+        static std::unordered_set<uint32> missileLogged;
+        bool first;
+        {
+            std::lock_guard<std::mutex> lock(missileLogMutex);
+            first = m_caster->IsPlayer() && missileLogged.insert(m_spellInfo->Id).second;
+        }
+        if (first)
+            TC_LOG_INFO("playerbot.v2", "[missile] spell {} visual {} ammo display {} cast flags 0x{:X} triggered 0x{:X}", m_spellInfo->Id,
+                m_SpellVisual.SpellXSpellVisualID, castData.AmmoDisplayID, castFlags, uint32(_triggeredCastFlags));
+    }
 
     packet.LogData.Initialize(this);
 
@@ -4987,18 +5013,19 @@ int32 Spell::GetSpellCastDataAmmo()
             if (ammoInventoryType == INVTYPE_THROWN)
             {
                 ammoDisplayID = pItem->GetDisplayId(playerCaster);
-                // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square.
+                // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square (UBRS and Red Cloud Mesa, 20 Oct).
                 if (!ammoDisplayID || ammoDisplayID >= 500000)
-                    ammoDisplayID = 23211;
+                    ammoDisplayID = 5996;      // plain arrow (23211 was the fire arrow of item 19082)
             }
             else if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(playerCaster->GetAmmoId()))   // Classic 1.60 ammo slot
             {
-                // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no model and the
-                // client draws a white box for it; bots take ammo that has its own display (Player::AutoSelectAmmo), so
+                // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no material and
+                // the client draws a white box for it (PC log 20 Oct); bots take ammo that has its own display (Player::AutoSelectAmmo), so
                 // this is the fallback only: an arrow model, for bullets too (every classic bullet has the generic display).
                 ammoDisplayID = Player::GetAmmoDisplayId(ammo);
                 if (!Player::HasDrawableAmmoDisplay(ammo))
-                    ammoDisplayID = 23211;   // an arrow display seen to draw (item 19082); no classic bullet has a display of its own
+                    ammoDisplayID = 5996;   // plain arrow: the arrow model of 737993 (17490) with a material (19706). 23211, used before, is
+                                            // item 19082 "Monster - Fire Arrow" (model 17481), so every Rough Arrow flew burning (Discord, 8 Nov)
                 ammoInventoryType = INVTYPE_AMMO;
             }
             else if (playerCaster->HasAura(46699))      // Requires No Ammo
@@ -5746,6 +5773,21 @@ void Spell::TakeReagents()
     if (p_caster->CanNoReagentCast(m_spellInfo))
         return;
 
+    // Classic 1.60 Legacy perk Optimization 1225460: "Materials used by your Engineering, Blacksmithing, Leatherworking, and Tailoring recipes
+    // have a $s1% chance per item to be refunded on completing the recipe." A refunded material is simply not taken.
+    int32 refundChance = p_caster->GetClassicLegacyPerkAmount(1225460, EFFECT_0);
+    if (refundChance > 0)
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(m_spellInfo->Id);
+        bool const optimizedRecipe = std::any_of(bounds.first, bounds.second, [](auto const& pair)
+        {
+            uint32 const skill = pair.second->SkillLine;
+            return skill == SKILL_ENGINEERING || skill == SKILL_BLACKSMITHING || skill == SKILL_LEATHERWORKING || skill == SKILL_TAILORING;
+        });
+        if (!optimizedRecipe)
+            refundChance = 0;
+    }
+
     for (uint32 x = 0; x < MAX_SPELL_REAGENTS; ++x)
     {
         if (m_spellInfo->Reagent[x] <= 0)
@@ -5776,6 +5818,17 @@ void Spell::TakeReagents()
         // if GetItemTarget is also spell reagent
         if (m_targets.GetItemTargetEntry() == itemid)
             m_targets.SetItemTarget(nullptr);
+
+        if (refundChance > 0)
+        {
+            uint32 refunded = 0;
+            for (uint32 i = 0; i < uint32(m_spellInfo->ReagentCount[x]); ++i)
+                if (roll_chance(refundChance))
+                    ++refunded;
+            itemcount -= std::min(refunded, itemcount);
+            if (!itemcount)
+                continue;
+        }
 
         p_caster->DestroyItemCount(itemid, itemcount, true);
     }
@@ -5925,6 +5978,10 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
             }
 
             if ((IsAutoRepeat() || m_spellInfo->CategoryId == 76) && !m_caster->ToUnit()->isAttackReady(RANGED_ATTACK))
+                return SPELL_FAILED_DONT_REPORT;
+
+            // Classic 1.60: Auto Shot waits for its half-second wind-up like it waits for the swing timer (queued, shot on a later update)
+            if (m_spellInfo->Id == ClassicAutoShot::SpellId && !m_caster->ToUnit()->IsClassicAutoShotWindupDone())
                 return SPELL_FAILED_DONT_REPORT;
         }
     }
@@ -7981,16 +8038,9 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
                         return SPELL_FAILED_NOT_TRADEABLE;
                 }
 
-                // Apply item level restriction
-                if (!m_spellInfo->HasAttribute(SPELL_ATTR2_ALLOW_LOW_LEVEL_BUFF))
-                {
-                    uint32 requiredLevel = item->GetRequiredLevel();
-                    if (!requiredLevel)
-                        requiredLevel = item->GetItemLevel(item->GetOwner());
-
-                    if (requiredLevel < m_spellInfo->BaseLevel)
-                        return SPELL_FAILED_LOWLEVEL;
-                }
+                // Classic 1.60 (vanilla, VMaNGOS Spell::CheckItems): no item level restriction. Poisons, sharpening stones, weightstones,
+                // oils and shaman imbues go on any weapon; the retail check (required level of the weapon at least the spell level, e.g.
+                // 20 for Instant Poison and Crippling Poison) refused them on every weapon below level 20 with "Target is too low level".
                 if (m_CastItem && m_spellInfo->MaxLevel > 0 && item->GetItemLevel(item->GetOwner()) > m_spellInfo->MaxLevel)
                     return SPELL_FAILED_HIGHLEVEL;
                 break;
@@ -8017,6 +8067,37 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
                     return SPELL_FAILED_CANT_BE_SALVAGED;
                 if (disenchantSkillRequired > player->GetSkillValue(SKILL_ENCHANTING))
                     return SPELL_FAILED_CANT_BE_SALVAGED_SKILL;
+                break;
+            }
+            case SPELL_EFFECT_SALVAGE_ITEM:
+            {
+                // Classic 1.60 (Forever) Stock Crate: the picked material must be one of the crate's bundles, in full
+                if (!sSpellMgr->IsClassicCrateSpell(m_spellInfo->Id))
+                    break;
+                Item* item = m_targets.GetItemTarget();
+                if (!item || item->GetOwnerGUID() != player->GetGUID())
+                    return SPELL_FAILED_BAD_TARGETS;
+                SpellMgr::ClassicCrateBundle const* bundle = sSpellMgr->GetClassicCrateBundle(m_spellInfo->Id, item->GetEntry());
+                if (!bundle)
+                    return SPELL_FAILED_BAD_TARGETS;
+                if (!player->HasItemCount(bundle->ItemId, bundle->Count))
+                {
+                    if (param1 && param2)
+                    {
+                        *param1 = bundle->ItemId;
+                        *param2 = bundle->Count;
+                    }
+                    return SPELL_FAILED_NEED_MORE_ITEMS;
+                }
+                if (!LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
+                break;
+            }
+            case SPELL_EFFECT_LOOT:
+            {
+                // nothing to give: refuse an item's cast so the item (a Waylaid Crate, a sealed writ) is not used up for nothing
+                if (m_CastItem && !LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
                 break;
             }
             case SPELL_EFFECT_PROSPECTING:
@@ -8774,7 +8855,27 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
     {
         if (!critChance)
             critChance = m_originalCaster->SpellCritChanceDone(this, nullptr, m_spellSchoolMask, m_attackType);
+        float const critDone = critChance;
         critChance = unit->SpellCritChanceTaken(m_originalCaster, this, nullptr, m_spellSchoolMask, critChance, m_attackType);
+        // A player's ability that crits at least half the time: name what gives the chance, once per spell (damage_parity 146: Sinister
+        // Strike and Backstab crit 97-100 % of landed hits while white swings crit 24 %).
+        if (critChance >= 50.0f && m_originalCaster->GetTypeId() == TYPEID_PLAYER)
+        {
+            static std::mutex certainCritMutex;
+            static std::unordered_set<uint32> certainCritLogged;
+            std::lock_guard<std::mutex> lock(certainCritMutex);
+            if (certainCritLogged.insert(m_spellInfo->Id).second)
+            {
+                std::string mods;
+                for (AuraType type : { SPELL_AURA_ADD_FLAT_MODIFIER, SPELL_AURA_ADD_PCT_MODIFIER, SPELL_AURA_ADD_FLAT_MODIFIER_BY_SPELL_LABEL, SPELL_AURA_ADD_PCT_MODIFIER_BY_SPELL_LABEL })
+                    for (AuraEffect const* eff : m_originalCaster->GetAuraEffectsByType(type))
+                        if (eff->GetMiscValue() == int32(SpellModOp::CritChance) && eff->IsAffectingSpell(m_spellInfo))
+                            mods += fmt::format(" {}({}) type {}: {}", eff->GetId(), eff->GetSpellInfo()->SpellName ? (*eff->GetSpellInfo()->SpellName)[sWorld->GetDefaultDbcLocale()] : "", int(type), eff->GetAmount());
+                TC_LOG_INFO("playerbot.v2", "[certain_crit] spell {} ({}) crit chance {:.1f}% (before the target's auras {:.1f}%, character sheet {:.1f}%, spell value {:.1f}%) spell mods:{}", m_spellInfo->Id,
+                    m_spellInfo->SpellName ? (*m_spellInfo->SpellName)[sWorld->GetDefaultDbcLocale()] : "", critChance, critDone,
+                    m_originalCaster->GetUnitCriticalChanceDone(m_attackType), m_spellValue->CriticalChance, mods.empty() ? " none" : mods);
+            }
+        }
     }
 
     targetInfo.IsCrit = roll_chance(critChance);
@@ -9720,7 +9821,7 @@ bool WorldObjectSpellLineTargetCheck::operator()(WorldObject* target) const
     if (!_position.HasInLine(target, target->GetCombatReach(), _lineWidth))
         return false;
 
-    return WorldObjectSpellTargetCheck::operator ()(target);
+    return WorldObjectSpellAreaTargetCheck::operator ()(target);
 }
 
 void SelectRandomInjuredTargets(std::list<WorldObject*>& targets, size_t maxTargets, bool prioritizePlayers, Unit const* prioritizeGroupMembersOf /*= nullptr*/)

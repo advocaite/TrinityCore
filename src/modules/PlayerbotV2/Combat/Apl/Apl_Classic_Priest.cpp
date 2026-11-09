@@ -468,6 +468,7 @@ void DoHealerSchoolNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { Sc
 ApRule const kHealerRules[] = {
     { ShouldDesperatePrayer,   DoDesperatePrayer,  "classic_heal:desperate_prayer" },
     { ShouldShieldCritical,    DoShieldCritical,   "classic_heal:shield_critical" },
+    { ClassicHeal::ShouldControlDispel, ClassicHeal::DoControlDispel, "classic_heal:dispel_control" },   // a hexed tank holds no threat
     { ShouldShieldTank,        DoShieldTank,       "classic_heal:shield_tank" },
     { ShouldRenewTank,         DoRenewTank,        "classic_heal:renew_tank" },
     { ShouldInnerFocus,        DoInnerFocus,       "classic_heal:inner_focus" },

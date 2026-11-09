@@ -1,0 +1,144 @@
+WoW Forever Bots: smarter bots with a program on your PC (bot bridge)
+=====================================================================
+
+What it is
+----------
+The bot bridge lets a program on your own PC talk for the bots, and if you want, tell them what to do. With the program
+that comes in this folder, a small language model (Ollama) answers for the bots: they chat in their own words and follow,
+wait, fight or take quests when you ask them in chat. Other people's programs (for example LLM bot setups) plug into the
+same files.
+Everything stays on your PC and it is free: the server and the program only swap files, and the language model runs on your
+own PC with Ollama. Nothing goes over the internet and nothing costs money.
+
+It is OFF by default. With it off, the bots work exactly as before.
+
+The easy way: the launcher's AI BOTS tab
+----------------------------------------
+1. Open the launcher and click AI BOTS (on the left, under Server).
+2. Pick what your PC can run: No graphics card, Low, Medium or High. The launcher suggests one from your graphics card.
+3. Tick "Bots may swear" if you want everyday bad language (never slurs).
+4. Press "Download and turn on". It downloads what is missing (Ollama, the model and a small Python from python.org, all
+   free), turns the bridge on and asks to restart a running server.
+From then on the AI program starts and stops with the server by itself; no window to keep open. The small AI BOTS box on
+the right of the launcher shows whether it is on. Its log is ai-bots\program.log in the main folder.
+To stop: AI BOTS, Turn off. "Remove models" also deletes the downloaded models and Python.
+Ollama answers one call at a time unless OLLAMA_NUM_PARALLEL says more. The launcher sets it to the tier's "answers at once"
+when it starts Ollama itself. If you installed Ollama yourself and it runs all the time, set it once (Windows: search
+"environment variables", Edit environment variables for your account, New: OLLAMA_NUM_PARALLEL = 2, or 4 for High), then
+quit Ollama from the tray and start it again.
+Everything below is for doing it by hand, or for your own program.
+
+What is in this folder (repack\bot-bridge\)
+-------------------------------------------
+  README.txt              this guide
+  bot_bridge_ollama.py    the program with Ollama: bots talk and act with a language model
+  bot_bridge_example.py   a tiny program with fixed answers: a starting point for your own program
+  models.txt              the model behind each tier of the launcher's AI BOTS tab (you can change them)
+  BOT_BRIDGE.md           the full technical guide: every file, field, action and limit
+
+What you need
+-------------
+- Python 3 from https://www.python.org (tick "Add python.exe to PATH" when you install it). Nothing else to install.
+  (The launcher's AI BOTS tab brings its own small Python in ai-bots\python; you can use that too.)
+- For the Ollama program: Ollama (https://ollama.com) and a model.
+
+Which model for my PC? (all free)
+---------------------------------
+Pick by your graphics card's video memory. The game itself needs about 3-4 GB of it, so these leave room.
+  Low     llama3.2:3b   (~2 GB download)    4-6 GB    e.g. GTX 1060 6 GB, GTX 1660, GTX 1650, RTX 2060, RTX 3050
+  Medium  llama3.1:8b   (~5 GB download)    8-12 GB   e.g. GTX 1080, RTX 2070/2080, RTX 3060 12 GB, RTX 4060 Ti, RX 6700 XT
+  High    qwen2.5:14b   (~9 GB download)    16 GB+    e.g. RTX 4070 Ti Super, RTX 4080/4090, RTX 5080/5090, RX 7900 XT/XTX
+  No graphics card  llama3.2:1b  (~1.3 GB)  runs on the processor (16 GB RAM): about 1 s per answer, fine for a few bots
+Get a model with:  ollama pull <name>   and start the program with  --model <name>  (step 2 below).
+Bigger is cleverer but slower. If answers take more than a second or two, or the game stutters, go one line down.
+Thinking models (lfm3, qwen3.5, gemma4, ...): the program asks them to answer straight away. Left to think, they spent each
+whole answer thinking in our speed test and said nothing. Add --think to let them think anyway.
+
+Model licences (all free to use for playing):
+  llama3.2, llama3.1    Llama 3.2 / 3.1 Community License (Meta)    https://www.llama.com/llama3_2/license/
+  qwen2.5:14b           Apache 2.0 (Alibaba Qwen)
+  lfm3, lfm2.5          LFM Open License (Liquid AI): free under 10 million dollars a year of revenue
+  Ollama                MIT licence;  Python  PSF licence
+
+1. Turn the bridge on
+---------------------
+1. In the launcher, go to Server and press Server settings. Notepad opens your own settings file
+   (server\worldserver.conf.d\zz-9-local.conf).
+2. Under the [worldserver] line, add:
+
+     Playerbot.Bridge.Enable = 1
+     Playerbot.Bridge.Actions.Enable = 1
+
+   Leave out the second line if bots should only talk and never do anything from a reply.
+   Add  Playerbot.Bridge.Swearing = 1  if bots may use everyday bad language (damn, ffs). Slurs and nasty stuff stay blocked.
+3. Save, then restart the server (launcher: Stop, then Start).
+The server now makes the folder server\BotBridge\.
+
+2. Start the program
+--------------------
+1. Open the folder repack\bot-bridge\ in Explorer.
+2. Click the address bar, type  cmd  and press Enter. A command window opens in this folder.
+3. Type one of these and press Enter:
+
+     python bot_bridge_ollama.py                    bots talk with Ollama (llama3.2:3b; another tier: add --model <name>)
+     python bot_bridge_example.py ..\..\server\BotBridge     fixed answers only, to try it out
+
+4. Leave the window open while you play. It shows what each bot answered and every action.
+   If Ollama isn't running, the bots get short fixed answers until it is back.
+Close the window, and within 2 minutes the bots go back to their usual replies (or to the server's own chat model,
+if Playerbot.ChatModel.Enable is on: the AI BOTS tab turns it on as the fallback).
+
+3. Try it in game
+-----------------
+Whisper a bot, or /say near one, the way you would talk to a player:
+  hi, how's it going?                    it answers in its own way, maybe with a wave
+  what can you do?                       it tells you (fight, spells, follow, ...)
+  see the wolves over there? show me     it picks a wolf and fights it with its spells
+  show me Fireball / heal me / buff me   it casts that spell, if it has it
+  follow me / wait here                  it follows / stops and waits
+  go stand by the mailbox                it walks there (things within 30 yards that have a name)
+  make a campfire                        if it knows Cooking
+  sit / dance / wave                     it does
+  what's the weather like?               it knows the weather where it is
+  can you take that quest                near a quest giver: it takes the quest
+Every bot has its own character and remembers you. Be nice and it likes you; be rude and it can tell you to get lost or
+refuse. It doesn't have to do what you ask.
+A bot that belongs to another player only obeys its owner, whatever you say to it.
+Not yet: walking to another town or city, taking gear off. It will tell you it can't.
+
+What bots can do from a reply
+-----------------------------
+follow, stay, resume, attack, stop attacking, flee, walk somewhere close, cast a spell (damage on a mob, heal, buff,
+resurrect, campfire), take, hand in, drop or share a quest, unstuck, sit, stand, mount, dismount, emote (wave, bow, dance and
+more).
+They can never: run commands, teleport or summon, trade, give away items or gold, mail, use the auction house, change guilds
+or groups, duel, or attack players.
+
+Safety
+------
+- Your own bots only listen when YOU asked. Nobody else's chat can move them.
+- In dungeons, raids and battlegrounds, bots only follow, stay or emote. Their normal play stays in charge there.
+- In a fight, only fight and move orders work.
+- The server checks every action and has rate limits.
+
+Other AI programs (optional)
+----------------------------
+The program speaks the common "OpenAI-style" API, so instead of Ollama you can point it at another program on your PC or
+network (LM Studio, Open WebUI, ...):  python bot_bridge_ollama.py --url http://ADDRESS/v1 --model NAME
+Ollama on your own PC is free and is all you need.
+
+Your own program
+----------------
+- The server writes one JSON line per event to server\BotBridge\events-YYYYMMDD-HH00.jsonl: chat_in (someone talked to a
+  bot), stuck, quest_fail, spell_fail, death_loop, start/stop, action_result.
+- Your program adds one JSON line per answer to server\BotBridge\replies.jsonl, for example:
+     {"reply_to":1042,"say":"Sure, right behind you.","do":"follow"}
+- Touch replies.jsonl (or write {"ping":1}) about every 30 seconds, so the server knows your program is running.
+- server\BotBridge\status.json says every 10 seconds that the server is up.
+- The easy way: copy bot_bridge_example.py and replace its answer() with your own code.
+Everything else is in BOT_BRIDGE.md.
+
+To turn it off
+--------------
+With the launcher: AI BOTS, Turn off. By hand: close the program window; to switch the bridge off for good, set
+Playerbot.Bridge.Enable = 0 in zz-9-local.conf (or delete the lines) and restart the server.

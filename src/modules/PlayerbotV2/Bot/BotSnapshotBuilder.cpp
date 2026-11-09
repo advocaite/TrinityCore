@@ -17,6 +17,8 @@
 #include "../Diagnostics/DamageParity.h"
 #include "../Util/ConfigReader.h"     // ConfigReader full type — Services::Config() use below
 #include "../Fleet/BotGuildMgr.h"
+#include "../Fleet/BotAccountMgr.h"   // is_pool_account: a player's own alt (players_own_character)
+#include "WorldSession.h"
 #include "../Fleet/CraftOrderBoard.h"
 #include "Battleground/BgTeamCoordinator.h"
 #include "Battleground/BgAvPlan.h"
@@ -64,6 +66,9 @@
 #include "BattlegroundPackets.h"
 #include "Vehicle.h"
 #include "MotionMaster.h"
+#include "ChaseMovementGenerator.h"   // GetNoPathStreak: the bot's chase cannot path to its target
+#include "Bot/CcDeny.h"
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 #include "MovementDefines.h"
 #include "DBCEnums.h"
 #include "DB2Stores.h"
@@ -2070,6 +2075,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         snap->instance_ctx.is_in_dungeon  = m->IsDungeon();
         snap->instance_ctx.is_in_raid     = m->IsRaid();
         snap->instance_ctx.map_difficulty = m->GetDifficultyID();
+        InstanceMap const* im = m->ToInstanceMap();
+        snap->instance_ctx.max_players    = im ? im->GetMaxPlayers() : 0;
     }
 
     // ---- Combat state ----
@@ -2139,6 +2146,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     snap->vitals.is_silenced = p->HasAuraType(SPELL_AURA_MOD_SILENCE);
     snap->vitals.is_pvp       = p->IsPvP();
     snap->vitals.is_ffa_pvp   = p->IsFFAPvP();
+    snap->vitals.pvp_wanted   = p->HasPlayerFlag(PLAYER_FLAGS_IN_PVP);
     snap->vitals.is_sanctuary = p->IsInSanctuary();
     snap->death.has_resurrect_request = p->IsResurrectRequested();
     snap->social_events.has_summon_pending    = p->HasSummonPending();
@@ -2367,6 +2375,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // stranger (PC run 2026-10-05, Testwar).
     if (Services::Initialized())
     {
+        if (WorldSession const* sess = p->GetSession())
+            snap->players_own_character = !Services::Accounts().is_pool_account(sess->GetAccountId());
         if (uint64 const owner_low = Services::Owners().OwnerCharacter(snap->bot_id))
         {
             ObjectGuid owner_guid = ObjectGuid::Create<HighGuid::Player>(owner_low);
@@ -2382,6 +2392,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         snap->tactic_save_mana = bot_ai->tactic_save_mana();
         snap->owner_picks = bot_ai->owner_picks();
         snap->aoe_denied = bot_ai->aoe_denied();
+        snap->heal_only = bot_ai->heal_only();
     }
     snap->social_events.has_duel_request = p->duel && p->duel->State == DUEL_STATE_CHALLENGED &&
                                   p->duel->Initiator != p;
@@ -2650,7 +2661,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 const Difficulty diff = p->GetMap() ? p->GetMap()->GetDifficultyID() : DIFFICULTY_NONE;
                 for (auto const& [spell_id, ps] : p->GetSpellMap())
                 {
-                    if (!ps.active || ps.disabled) continue;
+                    if (ps.state == PLAYERSPELL_REMOVED || !ps.active || ps.disabled) continue;
                     RecipeMeta const* meta = FindRecipeMeta(spell_id);
                     if (!meta) continue;
                     // Skip recipes that can no longer grant a skill point — the
@@ -2783,7 +2794,14 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // on InvalidTarget. Better to surface no victim and let the InCombat
     // dispatch retarget via highest_threat_attacker.
     if (Unit* victim = p->GetVictim(); victim && victim->IsAlive())
+    {
         snap->combat.victim = victim->GetGUID();
+        snap->combat.victim_pos_known = true;
+        snap->combat.victim_x = victim->GetPositionX();
+        snap->combat.victim_y = victim->GetPositionY();
+        snap->combat.victim_z = victim->GetPositionZ();
+        snap->combat.victim_reach = victim->GetCombatReach();
+    }
     if (ObjectGuid t = p->GetTarget(); !t.IsEmpty())
     {
         snap->combat.current_target = t;
@@ -3347,7 +3365,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             {
                 Player const* m = itr.GetSource();
                 if (!m || m == p) continue;
-                members.push_back({ m->GetGUID(), !(m->GetSession() && m->GetSession()->IsBot()) });
+                members.push_back({ m->GetGUID(), Scenario::PlaysAsHuman(m) });
             }
             ObjectGuid const controller = GroupControl::ResolveController(g->GetLeaderGUID(), members);
             if (!controller.IsEmpty())
@@ -3365,7 +3383,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         {
             snap->holding_position = bot_ai->holding_position(snap->published_at_ms);
             auto const stance = bot_ai->owner_stance();
-            snap->no_tag_stance = stance == BotAI::OwnerStance::Passive ||
+            snap->no_fight = stance == BotAI::OwnerStance::NoFight;
+            snap->no_tag_stance = bot_ai->owner_passive() ||
                                   (stance == BotAI::OwnerStance::Auto && (snap->owner_in_group || snap->led_by_player));
         }
     }
@@ -3382,8 +3401,17 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         }
         else
             cc_account = Services::Owners().GetOwner(snap->bot_id).account_id;
-        if (cc_account)
+        // A grouped bot in a dungeon or raid that nobody commands (a scenario squad, a bot-led group) keeps the owner default: Fear off in
+        // dungeons and raids (Karrz 10-28). It had no deny at all: smlibrary_loksey 0.1.28j, the hunter cast Scare Beast on a Tracking
+        // Hound 18 times in 41 s, none held, and the tank died to the hound (21 casts and the same death in smlibrary_loksey36 0.1.28i).
+        if (cc_account || (!snap->group.group_guid.IsEmpty() && snap->instance_ctx.is_in_dungeon))
             snap->cc_deny = Services::Owners().CcDenied(cc_account, snap->identity.cls);
+        // A scenario squad told "yes fear" (ScenarioDef::yes_fear): Fear and Scare Beast allowed, as after an owner's order.
+        if (!cc_account && ::Playerbot::Scenario::HasYesFear(snap->bot_id))
+            snap->cc_deny = uint16(snap->cc_deny & ~uint16(::Playerbot::CcDeny::Fear));
+        // The same account's "ignore target" list (OwnerRegistry::FightIgnored): applied to the combat lists at the end of Build.
+        if (cc_account)
+            snap->fight_ignore = Services::Owners().FightIgnored(cc_account, GameTime::GetGameTimeMS());
     }
 
     // ---- Spellbook (sorted, binary-searchable in BotSnapshotView::knows_spell) ----
@@ -3409,9 +3437,15 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // expensive part, so the perf win is preserved. The 30s timer still
         // backstops the rare same-count swap (learn A, unlearn B → identical
         // active count) the count check alone cannot see.
+        // RemoveSpell(spell) keeps a saved spell in the map, active and not
+        // disabled, as PLAYERSPELL_REMOVED until the next character save, and
+        // HasSpell reads it as unknown: skip it here too (rfc_oggleflint RC2:
+        // the level 14 priest kept "knowing" Heal 2054 after the scenario
+        // unlearned it, and every top-up heal for two minutes failed
+        // API_NOT_KNOWN).
         size_t ks_active = 0;
         for (auto const& [spell_id, ps] : p->GetSpellMap())
-            if (ps.active && !ps.disabled) ++ks_active;
+            if (ps.state != PLAYERSPELL_REMOVED && ps.active && !ps.disabled) ++ks_active;
         constexpr uint32 kKnownSpellsCacheIntervalMs = 30000u;
         const bool ks_throttled = ks_ai &&
             ks_ai->last_known_spells_scan_ms() != 0 &&
@@ -3427,7 +3461,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             snap->spellbook.known_spells.reserve(ks_active);
             for (auto const& [spell_id, ps] : p->GetSpellMap())
             {
-                if (!ps.active || ps.disabled) continue;
+                if (ps.state == PLAYERSPELL_REMOVED || !ps.active || ps.disabled) continue;
                 snap->spellbook.known_spells.push_back(spell_id);
             }
             std::sort(snap->spellbook.known_spells.begin(), snap->spellbook.known_spells.end());
@@ -3895,6 +3929,12 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     snap->combat.group_tank = ObjectGuid::Empty;
     snap->combat.big_raid = false;
     snap->combat.raid_group = false;
+    snap->combat.chase_nopath_target = ObjectGuid::Empty;
+    if (p->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
+        if (auto const* chase = dynamic_cast<ChaseMovementGenerator const*>(p->GetMotionMaster()->GetCurrentMovementGenerator()))
+            if (chase->GetNoPathStreak() >= 2)
+                if (Unit const* ct = chase->GetTarget())
+                    snap->combat.chase_nopath_target = ct->GetGUID();
     if (Group const* tg = p->GetGroup())
     {
         snap->combat.big_raid = tg->GetMembersCount() > 15;
@@ -4702,6 +4742,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 {
                     MovementGeneratorType const mt = c->GetMotionMaster()->GetCurrentMovementGeneratorType();
                     u.is_fleeing = mt == FLEEING_MOTION_TYPE || mt == TIMED_FLEEING_MOTION_TYPE || mt == ASSISTANCE_MOTION_TYPE;
+                    u.seeks_help = mt == ASSISTANCE_MOTION_TYPE;
                 }
                 // Uninteractible (NOT_SELECTABLE): unkillable, unacquirable hazard
                 // stalkers. Engage/pull rules skip these; the in-combat advance
@@ -6292,6 +6333,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 // creature for grinding — level scaling makes them all give XP.
                 // IsValidAttackTarget + non-combat-pet checks below still apply.
                 if (!grind_starved && !quest_target_entries.count(c->GetEntry())) { ++skip_not_target; continue; }
+                // A critter is no grind target (no XP; the main enemy scan leaves them out): admitted here as one, the Black
+                // Rats of Shadowfang Keep read as a pack to pull and the tank opened on them over and over (SFK 2026-10-29).
+                if (c->IsCritter() && !quest_target_entries.count(c->GetEntry())) { ++skip_not_target; continue; }
                 if (already_in_enemies.count(c->GetGUID()))          { ++skip_already_in; continue; }
                 // IsValidAttackTarget covers immune / faction-friendly /
                 // visibility — true for "neutral but attackable" creatures
@@ -8160,8 +8204,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // Hazard classification for TRAP-type GOs (bonfires, pyres,
             // lava grates). We mark a trap as a hazard when its trap
             // spell is hostile (SpellInfo::IsPositive() == false). The
-            // hazard_radius copies trap.radius/2 to mirror TC's legacy
-            // diameter quirk in GameObject.cpp:1466. idle:flee_hazard
+            // hazard_radius is the radius the core fires the trap at (see
+            // below). idle:flee_hazard
             // uses both fields to step the bot 5y past the radius so it
             // stops standing inside a bonfire and dying.
             else if (n.go_type == GAMEOBJECT_TYPE_TRAP)
@@ -8175,8 +8219,13 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                         {
                             if (!si->IsPositive())
                             {
+                                // The core halves the radius only for an owned trap (GameObject::Update, since 2026-10-16); a
+                                // world trap fires at the full radius. Halving every trap left bots 6-11 y from Majordomo's
+                                // Intense Heat pit (20533, radius 10) thinking they stood clear: 17 of the 43 deaths in
+                                // release-0130 mc_majordomo were that pit.
                                 n.is_hazard     = true;
-                                n.hazard_radius = tmpl->trap.radius / 2.0f;
+                                n.hazard_radius = go->GetOwnerGUID().IsEmpty() ? float(tmpl->trap.radius)
+                                                                               : tmpl->trap.radius / 2.0f;
                             }
                         }
                     }
@@ -10665,7 +10714,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             uint32 best_qty     = 0;     // shortfall units
             for (auto const& [recipe_spell, ps] : p->GetSpellMap())
             {
-                if (!ps.active || ps.disabled) continue;
+                if (ps.state == PLAYERSPELL_REMOVED || !ps.active || ps.disabled) continue;
                 RecipeMeta const* meta = FindRecipeMeta(recipe_spell);
                 if (!meta) continue;
                 const uint16 cur_skill = const_cast<Player*>(p)->GetSkillValue(meta->skill_line_id);
@@ -10712,6 +10761,52 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 snap->craft_orders.want_quantity       = best_qty == 0 ? 1u : best_qty;
                 snap->craft_orders.want_payment_copper = payment;
             }
+        }
+    }
+
+    // ---- The owner's full Passive and Ignore target (BotSnapshot::no_fight / fight_ignore) ----
+    // Last, once every combat list is built: a mob the bot must leave alone is not in its attackers or nearby enemies, so no target pick,
+    // retaliation, group-fight pick or chase sees it. The full Passive leaves no enemy at all. The emitter drops any attack or harmful
+    // spell that still names one (BotIntentEmitter::fight_denied), and State_InCombat calls the bot and its pet off (NoFightTick).
+    if (snap->no_fight || !snap->fight_ignore.empty())
+    {
+        auto& c = snap->combat;
+        if (snap->no_fight)
+        {
+            c.attackers.clear();
+            c.nearby_enemies.clear();
+            c.fightable_attackers = 0;
+            c.current_target_hostile = false;
+        }
+        else
+        {
+            auto const ignored = [snap](ObjectGuid g)
+            { return !g.IsEmpty() && std::find(snap->fight_ignore.begin(), snap->fight_ignore.end(), g) != snap->fight_ignore.end(); };
+            float bx = 0.f, by = 0.f;
+            if (p) { bx = p->GetPositionX(); by = p->GetPositionY(); }
+            auto const note_near = [&](NearbyUnit const& u)
+            {
+                if (ignored(u.guid) && std::hypot(u.x - bx, u.y - by) <= BotSnapshot::kFightIgnoreAoeYd)
+                    snap->fight_ignore_near = true;
+            };
+            for (NearbyUnit const& u : c.attackers)      note_near(u);
+            for (NearbyUnit const& u : c.nearby_enemies) note_near(u);
+            size_t const before = c.attackers.size();
+            c.attackers.erase(std::remove_if(c.attackers.begin(), c.attackers.end(), [&](NearbyUnit const& u) { return ignored(u.guid); }),
+                              c.attackers.end());
+            if (c.attackers.size() != before)
+            {
+                uint16 n = 0;
+                for (NearbyUnit const& u : c.attackers)
+                    if (u.hp > 0 && !u.is_pacified)
+                        ++n;
+                c.fightable_attackers = std::min<uint16>(c.fightable_attackers, n);
+            }
+            c.nearby_enemies.erase(std::remove_if(c.nearby_enemies.begin(), c.nearby_enemies.end(),
+                                                  [&](NearbyUnit const& u) { return ignored(u.guid); }),
+                                   c.nearby_enemies.end());
+            if (ignored(c.current_target))
+                c.current_target_hostile = false;
         }
     }
 

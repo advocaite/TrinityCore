@@ -5,6 +5,7 @@
 #include "BotChatReactor.h"
 #include "BotChatModel.h"
 #include "BotConversation.h"
+#include "GuildWhisperInvite.h"
 #include "../LfgBotFill.h"
 
 #include "BotAI.h"
@@ -888,7 +889,7 @@ void BotChatReactor::React(Player* sender, Group* group, std::string const& msg)
 // bot cooling down doesn't leave the line unanswered); then SecondReplyChance percent of the time a second bot chimes in a
 // few seconds after the first. Returns how many bots were asked.
 static uint32 AskOneOrTwo(std::vector<std::pair<Player*, BotAI*>> pool, Player* sender, BotChatModel::Channel channel,
-                          std::string const& msg)
+                          std::string const& msg, std::vector<Player*>* asked_bots = nullptr)
 {
     auto const& cfg = Services::Config().chat_model();
     Trinity::Containers::RandomShuffle(pool.begin(), pool.end());
@@ -898,6 +899,8 @@ static uint32 AskOneOrTwo(std::vector<std::pair<Player*, BotAI*>> pool, Player* 
         uint32 const delay = asked == 0 ? 0u : urand(2500, 6000);
         if (!BotChatModel::Ask(bot, sender, MakeConvContext(bot, ai, sender), channel, msg, delay))
             continue;
+        if (asked_bots)
+            asked_bots->push_back(bot);
         if (++asked >= 2 || urand(0, 99) >= cfg.second_reply_chance)
             break;
     }
@@ -916,9 +919,19 @@ void BotChatReactor::ReactPartyModel(Player* sender, Group* group, std::string c
     // reaches the speaker the same way.
     bool const subgroup_only = !raid_chat && group->isRaidGroup();
     BotChatModel::Channel const channel = raid_chat ? BotChatModel::Channel::Raid : BotChatModel::Channel::Party;
-    struct Candidate { Player* bot; BotAI* ai; bool addressed; };
+    struct Candidate { Player* bot; BotAI* ai; bool addressed; bool named; };
     std::vector<Candidate> candidates;
     BotRegistry& reg = Services::Registry();
+    // A line counts as said to a bot when it names the bot, when the bot is the only one who heard it (a duo: "how are you?" to
+    // the one priest in an arena pair), or when the bot talked with the speaker in the last TalkWindowMs (the answer to its own
+    // question). Without that, a quiet bot dropped the follow-ups of a talk it had just started: "hi" got "how's it going?",
+    // then "good you?" and "how are you ?" got nothing (Karrz, 2026-11-08).
+    static constexpr uint32 kTalkWindowMs = 90000;
+    static std::unordered_map<uint64, uint32> s_party_talk;   // (bot << 32 | speaker) -> when the bot was last asked; world thread
+    uint32 const now_ms = GameTime::GetGameTimeMS();
+    uint32 const sender_low = sender->GetGUID().GetCounter();
+    auto const talk_key = [sender_low](Player const* bot) { return (uint64(bot->GetGUID().GetCounter()) << 32) | uint64(sender_low); };
+    std::vector<std::pair<Player*, BotAI*>> heard;
     for (GroupReference const& itr : group->GetMembers())
     {
         Player* member = itr.GetSource();
@@ -930,20 +943,38 @@ void BotChatReactor::ReactPartyModel(Player* sender, Group* group, std::string c
         if (!reg.has(mid)) continue;
         BotAI* ai = reg.ai(mid);
         if (!ai) continue;
+        heard.emplace_back(member, ai);
+    }
+    for (auto const& [member, ai] : heard)
+    {
         const std::string first = FirstNameLower(member->GetName());
-        const bool addr = first.size() >= 3 && ContainsWord(norm, first.c_str());
-        // A bot named in the line answers whatever its verbosity; a quiet bot speaks up unprompted only QuietChance of the time.
+        const bool named = first.size() >= 3 && ContainsWord(norm, first.c_str());
+        auto const talk = s_party_talk.find(talk_key(member));
+        const bool talking = talk != s_party_talk.end() && now_ms - talk->second < kTalkWindowMs;
+        const bool addr = named || talking || heard.size() == 1;
+        // A bot the line is said to answers whatever its verbosity; a quiet bot speaks up unprompted only QuietChance of the time.
         if (!addr && ai->personality().verbosity <= Verbosity::Terse &&
-            urand(0, 99) >= Services::Config().chat_model().quiet_chance) continue;
-        candidates.push_back({member, ai, addr});
+            urand(0, 99) >= Services::Config().chat_model().quiet_chance)
+        {
+            TC_LOG_INFO("playerbot.v2", "[conv] party <- {} \"{}\": {} is quiet, stays out (QuietChance {}%)", sender->GetName(), msg,
+                        member->GetName(), Services::Config().chat_model().quiet_chance);
+            continue;
+        }
+        candidates.push_back({member, ai, addr, named});
     }
     if (candidates.empty()) return;
+    if (s_party_talk.size() > 4096)
+        s_party_talk.clear();
 
     // A bot named in the line answers (the first one named). Otherwise one bot answers PartyChance of the lines (maybe with a
     // second chiming in), and not again in this group for GroupCooldownMs.
+    // A bot named in the line wins over one that is only still in a talk with the speaker.
     Candidate const* chosen = nullptr;
     for (auto const& c : candidates)
-        if (c.addressed) { chosen = &c; break; }
+        if (c.named) { chosen = &c; break; }
+    if (!chosen)
+        for (auto const& c : candidates)
+            if (c.addressed) { chosen = &c; break; }
     if (!chosen)
     {
         auto const& cfg = Services::Config().chat_model();
@@ -954,7 +985,6 @@ void BotChatReactor::ReactPartyModel(Player* sender, Group* group, std::string c
             return;
         }
         static std::unordered_map<uint64, uint32> s_group_last;   // world thread only
-        const uint32 now_ms = GameTime::GetGameTimeMS();
         const uint64 gkey = group->GetGUID().GetCounter();
         if (auto it = s_group_last.find(gkey); it != s_group_last.end() && now_ms - it->second < cfg.group_cooldown_ms)
         {
@@ -967,13 +997,22 @@ void BotChatReactor::ReactPartyModel(Player* sender, Group* group, std::string c
         std::vector<std::pair<Player*, BotAI*>> pool;
         for (auto const& c : candidates)
             pool.emplace_back(c.bot, c.ai);
-        if (AskOneOrTwo(std::move(pool), sender, channel, msg))
+        std::vector<Player*> asked;
+        if (AskOneOrTwo(std::move(pool), sender, channel, msg, &asked))
+        {
             s_group_last[gkey] = now_ms ? now_ms : 1u;
+            for (Player* b : asked)
+                s_party_talk[talk_key(b)] = now_ms;
+        }
         else
             TC_LOG_INFO("playerbot.v2", "[conv] party <- {} \"{}\": no bot took it (cooldown / per-minute cap / queue)", sender->GetName(), msg);
         return;
     }
-    BotChatModel::Ask(chosen->bot, sender, MakeConvContext(chosen->bot, chosen->ai, sender), channel, msg);
+    if (BotChatModel::Ask(chosen->bot, sender, MakeConvContext(chosen->bot, chosen->ai, sender), channel, msg))
+        s_party_talk[talk_key(chosen->bot)] = now_ms;
+    else
+        TC_LOG_INFO("playerbot.v2", "[conv] party <- {} \"{}\": {} did not take it (cooldown / per-minute cap / queue)", sender->GetName(),
+                    msg, chosen->bot->GetName());
 }
 
 // Whisper social reactor. Real players reply when strangers whisper "hi"
@@ -1239,6 +1278,9 @@ void BotChatReactor::ReactWhisper(Player* sender, Player* bot, std::string const
     }
     TC_LOG_INFO("playerbot.v2", "[conv] {} <- {} whisper \"{}\": {} intent={} repeat={} -> \"{}\"", bot->GetName(), sender->GetName(), msg,
                 source, V2::ConvIntentName(V2::ConvClassify(V2::ConvNormalize(msg))), repeat, reply_str);
+    // The bot just talked about its guild ("<X> for me, are you looking for one?"): a "yes" in the next minutes gets the invite.
+    if (bot->GetGuildId() != 0 && sender->GetGuildId() == 0 && V2::ConvClassify(V2::ConvNormalize(msg)) == V2::ConvIntent::Guild)
+        V2::GuildWhisperInvite::NoteOffer(mid, sender->GetGUID().GetCounter());
     Intent it{};
     it.bot_id = mid;
     it.body   = ChatIntent{WhisperIntent{sender->GetName(), reply_str}};

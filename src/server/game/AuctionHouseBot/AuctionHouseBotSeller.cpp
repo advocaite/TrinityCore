@@ -30,6 +30,7 @@
 #include "SpellMgr.h"
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <sstream>
 
 AuctionBotSeller::AuctionBotSeller()
@@ -373,6 +374,8 @@ bool AuctionBotSeller::Initialize()
         }
 
         _itemPool[prototype->GetQuality()][prototype->GetClass()].push_back(itemId);
+        if (craftedItems.count(itemId))
+            _craftedStock.push_back(itemId);
         ++itemsAdded;
     }
 
@@ -386,6 +389,8 @@ bool AuctionBotSeller::Initialize()
     }
 
     TC_LOG_DEBUG("ahbot", "AuctionHouseBot seller will use {} items to fill auction house (according your config choices)", itemsAdded);
+    if (uint32 minStock = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_CRAFTED_MIN_STOCK))
+        TC_LOG_INFO("ahbot", "AHBot: {} crafted items are kept listed at least {} times each", _craftedStock.size(), minStock);
 
     LoadConfig();
 
@@ -874,6 +879,89 @@ void AuctionBotSeller::SetItemsAmountForQuality(AuctionQuality quality, uint32 v
         LoadItemsQuantity(_houseConfig[i]);
 }
 
+// Creates one listing of itemId in auctionHouse (stack size, random bonus list, price and duration from config).
+bool AuctionBotSeller::PostAuction(SellerConfiguration& config, AuctionHouseObject* auctionHouse, uint32 itemId, CharacterDatabaseTransaction trans)
+{
+    if (!itemId)
+    {
+        TC_LOG_DEBUG("ahbot", "AHBot: Item entry 0 auction creating attempt.");
+        return false;
+    }
+
+    ItemTemplate const* prototype = sObjectMgr->GetItemTemplate(itemId);
+    if (!prototype)
+    {
+        TC_LOG_DEBUG("ahbot", "AHBot: Unknown item {} auction creating attempt.", itemId);
+        return false;
+    }
+
+    uint32 stackCount = GetStackSizeForItem(prototype, config);
+
+    Item* item = Item::CreateItem(itemId, stackCount, ItemContext::NONE);
+    if (!item)
+    {
+        TC_LOG_ERROR("ahbot", "AHBot: Item::CreateItem() returned NULL for item {} (stack: {})", itemId, stackCount);
+        return false;
+    }
+
+    // Update the just created item so that if it needs random properties it has them.
+    // Ex:  Notched Shortsword of Stamina will only generate as a Notched Shortsword without this.
+    item->SetItemRandomBonusList(GenerateItemRandomBonusListId(itemId));
+
+    uint32 buyoutPrice;
+    uint32 bidPrice = 0;
+
+    // Price of items are set here
+    SetPricesOfItem(prototype, config, buyoutPrice, bidPrice, stackCount);
+
+    AuctionPosting auction;
+    auction.Id = sObjectMgr->GenerateAuctionID();
+    auction.Items.push_back(item);
+    auction.Owner = sAuctionBotConfig->GetRandChar();
+    if (!auction.IsCommodity())
+        auction.MinBid = bidPrice;
+
+    // SetPricesOfItem prices the whole stack, a stackable listing stores the price per item
+    auction.BuyoutOrUnitPrice = auction.IsCommodity() ? std::max<uint32>(buyoutPrice / std::max<uint32>(stackCount, 1), 1) : buyoutPrice;
+    auction.StartTime = GameTime::GetSystemTime();
+    auction.EndTime = auction.StartTime + Hours(urand(config.GetMinTime(), config.GetMaxTime()));
+
+    // save the item like a player listing does, otherwise the next start finds no item and deletes the auction
+    item->SaveToDB(trans);
+    auctionHouse->AddAuction(trans, std::move(auction));
+    return true;
+}
+
+// AuctionHouseBot.Items.Crafted.MinStock: the random fill only adds items when listings run out, and a few wands among
+// hundreds of green weapons can then stay away for days. Every crafted item of the pool is kept listed this many times.
+void AuctionBotSeller::AddCraftedStock(SellerConfiguration& config, AuctionHouseObject* auctionHouse, CharacterDatabaseTransaction trans, uint32& budget, uint32& count)
+{
+    uint32 const minStock = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_CRAFTED_MIN_STOCK);
+    if (!minStock || _craftedStock.empty())
+        return;
+
+    std::unordered_map<uint32, uint32> listed;
+    for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
+    {
+        AuctionPosting const& posting = itr->second;
+        if ((posting.Owner.IsEmpty() || sAuctionBotConfig->IsBotChar(posting.Owner)) && !posting.Items.empty())
+            ++listed[posting.Items[0]->GetEntry()];
+    }
+
+    // a random start, so a small budget does not always go to the same items first
+    std::size_t const start = urand(0, uint32(_craftedStock.size() - 1));
+    for (std::size_t i = 0; i < _craftedStock.size() && budget > 0; ++i)
+    {
+        uint32 const itemId = _craftedStock[(start + i) % _craftedStock.size()];
+        for (uint32 have = listed[itemId]; have < minStock && budget > 0; ++have)
+        {
+            --budget;
+            if (PostAuction(config, auctionHouse, itemId, trans))
+                ++count;
+        }
+    }
+}
+
 // Add new auction to one of the factions.
 // Faction and setting associated is defined passed argument ( config )
 void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
@@ -894,10 +982,13 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
 
     ItemsToSellArray itemsToSell;
     AllItemsArray allItems = {};
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    AddCraftedStock(config, auctionHouse, trans, items, count);
+
     // Main loop
     // getRandomArray will give what categories of items should be added (return true if there is at least 1 items missed)
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    while (GetItemsToSell(config, itemsToSell, allItems) && items > 0)
+    while (items > 0 && GetItemsToSell(config, itemsToSell, allItems))
     {
         --items;
 
@@ -908,71 +999,8 @@ void AuctionBotSeller::AddNewAuctions(SellerConfiguration& config)
         uint32 itemId = Trinity::Containers::SelectRandomContainerElement(_itemPool[sellItem.Color][sellItem.Itemclass]);
         ++allItems[sellItem.Color][sellItem.Itemclass]; // Helper table to avoid rescan from DB in this loop. (has we add item in random orders)
 
-        if (!itemId)
-        {
-            TC_LOG_DEBUG("ahbot", "AHBot: Item entry 0 auction creating attempt.");
-            continue;
-        }
-
-        ItemTemplate const* prototype = sObjectMgr->GetItemTemplate(itemId);
-        if (!prototype)
-        {
-            TC_LOG_DEBUG("ahbot", "AHBot: Unknown item {} auction creating attempt.", itemId);
-            continue;
-        }
-
-        uint32 stackCount = GetStackSizeForItem(prototype, config);
-
-        Item* item = Item::CreateItem(itemId, stackCount, ItemContext::NONE);
-        if (!item)
-        {
-            TC_LOG_ERROR("ahbot", "AHBot: Item::CreateItem() returned NULL for item {} (stack: {})", itemId, stackCount);
-            continue;
-        }
-
-        // Update the just created item so that if it needs random properties it has them.
-        // Ex:  Notched Shortsword of Stamina will only generate as a Notched Shortsword without this.
-        item->SetItemRandomBonusList(GenerateItemRandomBonusListId(itemId));
-
-        uint32 buyoutPrice;
-        uint32 bidPrice = 0;
-
-        // Price of items are set here
-        SetPricesOfItem(prototype, config, buyoutPrice, bidPrice, stackCount);
-
-        // Deposit time
-        uint32 etime = urand(1, 3);
-        switch (etime)
-        {
-            case 1:
-                etime = DAY / 2;
-                break;
-            case 3:
-                etime = 2 *DAY;
-                break;
-            case 2:
-            default:
-                etime = DAY;
-                break;
-        }
-
-        AuctionPosting auction;
-        auction.Id = sObjectMgr->GenerateAuctionID();
-        auction.Items.push_back(item);
-        auction.Owner = sAuctionBotConfig->GetRandChar();
-        if (!auction.IsCommodity())
-            auction.MinBid = bidPrice;
-
-        // SetPricesOfItem prices the whole stack, a stackable listing stores the price per item
-        auction.BuyoutOrUnitPrice = auction.IsCommodity() ? std::max<uint32>(buyoutPrice / std::max<uint32>(stackCount, 1), 1) : buyoutPrice;
-        auction.StartTime = GameTime::GetSystemTime();
-        auction.EndTime = auction.StartTime + Hours(urand(config.GetMinTime(), config.GetMaxTime()));
-
-        // save the item like a player listing does, otherwise the next start finds no item and deletes the auction
-        item->SaveToDB(trans);
-        auctionHouse->AddAuction(trans, std::move(auction));
-
-        ++count;
+        if (PostAuction(config, auctionHouse, itemId, trans))
+            ++count;
     }
     CharacterDatabase.CommitTransaction(trans);
 
@@ -985,7 +1013,8 @@ bool AuctionBotSeller::Update(AuctionHouseType houseType)
     if (sAuctionBotConfig->GetConfigItemAmountRatio(houseType) > 0)
     {
         TC_LOG_DEBUG("ahbot", "AHBot: {} selling ...", AuctionBotConfig::GetHouseTypeName(houseType));
-        if (SetStat(_houseConfig[houseType]))
+        // the crafted minimum stock is checked even when the house is otherwise full
+        if (SetStat(_houseConfig[houseType]) || (sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_CRAFTED_MIN_STOCK) && !_craftedStock.empty()))
             AddNewAuctions(_houseConfig[houseType]);
         return true;
     }

@@ -74,7 +74,7 @@ inline Word Parse(std::uint8_t cls, std::string_view text)
 }
 
 // The name a player knows a Classic spec by ("Fury", "Holy"); nullptr for an id that is not a Classic class's spec. The 70532
-// client data has no ChrSpecialization names, so the DB2 lookup answered "spec 72" (chris 2026-10-25).
+// client data has no ChrSpecialization names, so the DB2 lookup answered "spec 72" (Karrz 2026-10-25).
 inline char const* Label(std::uint32_t spec)
 {
     switch (spec)

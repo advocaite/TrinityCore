@@ -324,6 +324,9 @@ struct TC_GAME_API Loot
     void NotifyItemRemoved(uint8 lootListId, Map const* map);
     void NotifyMoneyRemoved(Map const* map);
     void OnLootOpened(Map* map, Player* looter);
+    // Test-night loot trail (logger playerbot.v2, INFO): what a corpse holds, who won a roll, who received each item and how.
+    void LogTable(Map* map) const;
+    void LogGiven(Map* map, char const* receiver, LootItem const& item, char const* how) const;
     void AddLooter(ObjectGuid GUID) { PlayersLooting.insert(GUID); }
     void RemoveLooter(ObjectGuid GUID) { PlayersLooting.erase(GUID); }
 

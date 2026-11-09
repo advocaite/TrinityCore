@@ -20,11 +20,13 @@
 
 #include "ScriptMgr.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ScriptedCreature.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "ThreatManager.h"
 #include "World.h"
 #include "classic_molten_core.h"
 #include "classic_script_text.h"
@@ -97,8 +99,32 @@ struct classic_mob_firewalker : public ScriptedAI
         {
             if (m_uiNbBlossom > 0)
             {
-                if (Unit* pUnit = SelectTarget(SelectTargetMethod::Random, 0))
-                    DoCast(pUnit, SPELL_MC_FIREBLOSSOM);
+                // The whole raid is on the threat list (zone combat), so a plain random pick often chose someone out of range or behind a
+                // pillar: the cast failed and that blossom was lost. Pick only targets the blossom can reach.
+                SpellInfo const* blossomInfo = sSpellMgr->GetSpellInfo(SPELL_MC_FIREBLOSSOM, me->GetMap()->GetDifficultyID());
+                float const blossomRange = blossomInfo ? blossomInfo->GetMaxRange(false, me) : 0.0f;
+                auto const canReach = [this, blossomRange](Unit* target)
+                {
+                    return (blossomRange <= 0.0f || me->IsWithinDistInMap(target, blossomRange)) && me->IsWithinLOSInMap(target);
+                };
+                if (Unit* pUnit = SelectTarget(SelectTargetMethod::Random, 0, canReach))
+                {
+                    SpellCastResult const result = DoCast(pUnit, SPELL_MC_FIREBLOSSOM);
+                    // Off by default; Logger.scripts.classic.firewalker=3,Console Server shows every blossom and the targets it chose from.
+                    if (Log::instance()->ShouldLog("scripts.classic.firewalker", LOG_LEVEL_INFO))
+                    {
+                        uint32 reachable = 0;
+                        uint32 total = 0;
+                        for (ThreatReference const* ref : me->GetThreatManager().GetUnsortedThreatList())
+                        {
+                            ++total;
+                            if (canReach(ref->GetVictim()))
+                                ++reachable;
+                        }
+                        TC_LOG_INFO("scripts.classic.firewalker", "Firewalker {}: Fire Blossom on {} at {:.1f} yd (range {:.1f}), result {}, {} of {} on the threat list in range and sight",
+                            me->GetGUID().ToString(), pUnit->GetName(), me->GetDistance(pUnit), blossomRange, uint32(result), reachable, total);
+                    }
+                }
 
                 m_uiFireBlossomPreparing_Timer = 1000;
                 m_uiNbBlossom = m_uiNbBlossom - 1;

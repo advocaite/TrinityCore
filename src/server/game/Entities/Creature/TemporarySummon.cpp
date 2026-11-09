@@ -247,7 +247,28 @@ void TempSummon::InitStats(WorldObject* summoner, Milliseconds duration)
             if (minLevel == 0 && maxLevel == 0 && (IsGuardian() || IsTotem() || m_Properties->Control == SUMMON_CATEGORY_PET))
                 level = std::max<uint8>(unitSummoner->GetLevel(), 1);
 
+            // Classic 1.60 (vanilla): a creature's summoned pet, guardian or totem has the caster's level (plus the spell's offset), not the fixed
+            // vanilla level of its creature (VMaNGOS Spell::EffectSummonPet / EffectSummonGuardian): Twilight Shadowmages (26) summoned level 47 voidwalkers
+            bool classicCasterLevel = false;
+            if (unitSummoner->IsCreature() && !unitSummoner->IsCharmedOwnedByPlayerOrPlayer() && sObjectMgr->GetCreatureClassicLevel(GetEntry()))
+            {
+                if (int8 const* offset = sObjectMgr->GetSpellClassicSummonLevelOffset(m_unitData->CreatedBySpell))
+                {
+                    int32 casterLevel = int32(unitSummoner->GetLevel()) + *offset;
+                    if (casterLevel > 0)
+                    {
+                        level = uint8(std::min<int32>(casterLevel, STRONG_MAX_LEVEL));
+                        classicCasterLevel = true;
+                    }
+                }
+            }
+
             ApplyLevelScaling(unitSummoner->m_unitData->ContentTuningID, unitSummoner->m_unitData->ScalingLevelDelta);
+            if (classicCasterLevel)
+            {
+                SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::ScalingLevelMin), level);
+                SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::ScalingLevelMax), level);
+            }
             SetLevel(level);
             if (!IsGuardian())
             {

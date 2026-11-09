@@ -1292,6 +1292,7 @@ class TC_GAME_API WorldSession
         void HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
         void HandleCharUndeleteEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
         void HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& charDelete);
+        void DeleteCharacter(ObjectGuid guid);
         void HandleCharCreateOpcode(WorldPackets::Character::CreateCharacter& charCreate);
         void HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin& playerLogin);
 
@@ -1392,6 +1393,7 @@ class TC_GAME_API WorldSession
 
         void HandleSetSelectionOpcode(WorldPackets::Misc::SetSelection& packet);
         void HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateChange& packet);
+        void UpdateCampfireRest(uint8 standState);   // UnitStandStateType
         void HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet);
 
         // Social
@@ -2004,6 +2006,15 @@ class TC_GAME_API WorldSession
         // Classic 1.60: SMSG_REGIONWIDE_CHARACTER_MAIL_DATA waits until the character list is shown (HandleCharEnum)
         std::unique_ptr<WorldPacket> _classicCharacterMailData;
         uint32 _classicCharacterMailDataTimer = 0;
+
+        // Classic 1.60: a character deleted while it is still in the world as this account's bot (HandleCharDeleteOpcode)
+        ObjectGuid _pendingCharDelete;
+        uint32 _pendingCharDeleteTimer = 0;
+
+        // Classic 1.60: a login to a character still in the world as this account's bot (HandlePlayerLoginOpcode); the character
+        // is m_playerLoading
+        bool _pendingLoginAfterBot = false;
+        uint32 _pendingLoginAfterBotTimer = 0;
         AsyncCallbackProcessor<TransactionCallback> _transactionCallbacks;
         AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;
 

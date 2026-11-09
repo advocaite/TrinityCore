@@ -38,6 +38,7 @@
 #include "MovementTypedefs.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PathGenerator.h"
 #include "PhasingHandler.h"
 #include "Random.h"
 #include "ScriptActions.h"
@@ -2712,6 +2713,38 @@ void SmartScript::ProcessAction(SmartScriptHolder& e, Unit* unit, uint32 var0, u
                 mTimedActionWaitEvent = std::move(waitEvent);
             break;
         }
+        case SMART_ACTION_MOVE_AWAY_FROM_TARGET:
+        {
+            // VMaNGOS Creature::MoveAwayFromTarget / MotionMaster::MoveDistance: run to the point the given distance from the
+            // target on the line through us, only if the target sees that point, it is no more than 10 yards up and there is a
+            // real path to it
+            if (!me || me->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_CONFUSED | UNIT_STATE_LOST_CONTROL) || me->GetTransport())
+                break;
+
+            if (e.action.moveAwayFromTarget.minManaPct && me->GetPowerPct(POWER_MANA) < float(e.action.moveAwayFromTarget.minManaPct))
+                break;
+
+            for (WorldObject* target : targets)
+            {
+                Unit* unitTarget = target->ToUnit();
+                if (!unitTarget)
+                    continue;
+
+                float x, y, z;
+                unitTarget->GetNearPoint(me, x, y, z, float(e.action.moveAwayFromTarget.distance), unitTarget->GetAbsoluteAngle(me));
+                if (z > me->GetPositionZ() + 10.0f || !unitTarget->IsWithinLOS(x, y, z) || me->GetExactDistSq(x, y, z) == 0.0f)
+                    break;
+
+                PathGenerator path(me);
+                path.CalculatePath(x, y, z);
+                if ((path.GetPathType() & PATHFIND_NOPATH) || ((path.GetPathType() & PATHFIND_SHORTCUT) && !(path.GetPathType() & PATHFIND_NORMAL)))
+                    break;
+
+                me->GetMotionMaster()->MovePoint(0, x, y, z);
+                break;
+            }
+            break;
+        }
         default:
             TC_LOG_ERROR("sql.sql", "SmartScript::ProcessAction: Entry {} SourceType {}, Event {}, Unhandled Action type {}", e.entryOrGuid, e.GetScriptType(), e.event_id, e.GetActionType());
             break;
@@ -2845,7 +2878,8 @@ void SmartScript::GetTargets(ObjectVector& targets, SmartScriptHolder const& e, 
             if (me)
             {
                 if (Unit* u = me->AI()->SelectTarget(SelectTargetMethod::MaxDistance, 0, FarthestTargetSelector(me, float(e.target.farthest.maxDist), e.target.farthest.playerOnly != 0, e.target.farthest.isInLos != 0)))
-                    targets.push_back(u);
+                    if (!e.target.farthest.minDist || me->GetDistance(u) >= float(e.target.farthest.minDist))
+                        targets.push_back(u);
             }
             break;
         case SMART_TARGET_ACTION_INVOKER:
@@ -3250,6 +3284,18 @@ void SmartScript::ProcessEvent(SmartScriptHolder& e, Unit* unit, uint32 var0, ui
                         return;
 
             ProcessTimedAction(e, e.event.targetCasting.repeatMin, e.event.targetCasting.repeatMax, me->GetVictim());
+            break;
+        }
+        case SMART_EVENT_VICTIM_ROOTED:
+        {
+            if (!me || !me->IsEngaged())
+                return;
+
+            Unit* victim = me->GetVictim();
+            if (!victim || !victim->HasUnitState(UNIT_STATE_ROOT))
+                return;
+
+            ProcessTimedAction(e, e.event.victimRooted.repeatMin, e.event.victimRooted.repeatMax, victim);
             break;
         }
         case SMART_EVENT_FRIENDLY_IS_CC:
@@ -3827,6 +3873,7 @@ void SmartScript::UpdateTimer(SmartScriptHolder& e, uint32 const diff)
             case SMART_EVENT_MANA_PCT:
             case SMART_EVENT_RANGE:
             case SMART_EVENT_VICTIM_CASTING:
+            case SMART_EVENT_VICTIM_ROOTED:
             case SMART_EVENT_FRIENDLY_IS_CC:
             case SMART_EVENT_FRIENDLY_MISSING_BUFF:
             case SMART_EVENT_HAS_AURA:

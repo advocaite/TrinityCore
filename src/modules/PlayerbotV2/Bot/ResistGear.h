@@ -26,6 +26,21 @@ constexpr bool ResistSwapSlot(std::uint8_t slot, bool tank)
     }
 }
 
+// Blackwing Lair (map 469): Shadow Flame 22539 of Ebonroc, Flamegor, Firemaw and Nefarian puts its 22682 burn on everyone it hits who
+// lacks aura 22683, the Onyxia Scale Cloak's (SpellEffects.cpp), and a tank in front of a drake dies of it. Every vanilla raider wore
+// the cloak there: a grouped level 60 companion wears one while it is in the instance (BotPopulationManager::SwapFightCloak,
+// Playerbot.Raid.OnyxiaCloak), and the resistance swap and the regear leave its back slot alone meanwhile.
+constexpr std::uint32_t kOnyxiaScaleCloak = 15138;
+constexpr bool FightCloakMap(std::uint32_t map_id)
+{
+    return map_id == 469;
+}
+// The worn back piece stays: the bot is in Blackwing Lair and wears the cloak.
+constexpr bool KeepFightCloak(std::uint32_t map_id, std::uint32_t worn_back_entry)
+{
+    return FightCloakMap(map_id) && worn_back_entry == kOnyxiaScaleCloak;
+}
+
 // Maps the gear swap leaves alone: Molten Core and Onyxia's Lair tactics are frozen (their potion rows stay, no new behaviour).
 constexpr bool ResistSwapMap(std::uint32_t map_id)
 {

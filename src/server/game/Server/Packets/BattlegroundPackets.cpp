@@ -169,8 +169,9 @@ void BattlemasterJoin::Read()
 
 void BattlemasterJoinArena::Read()
 {
+    // Classic 1.60 (70707): one byte, the team size index, and no roles. Reading Roles too threw on every join and the
+    // packet was dropped (dev realm 2026-11-01: "Attempted to get value with size: 1 ... (pos: 5 size: 5)", 4 of them opcode)
     _worldPacket >> TeamSizeIndex;
-    _worldPacket >> Roles;
 }
 
 ByteBuffer& operator<<(ByteBuffer& data, BattlefieldStatusHeader const& header)

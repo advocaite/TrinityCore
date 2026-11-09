@@ -900,6 +900,8 @@ void InstanceScript::SendEncounterUnit(EncounterFrameType type, Unit const* unit
 
 void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 maxInCombatResCount /*= 0*/, uint32 inCombatResChargeRecovery /*= 0*/, uint32 nextCombatResChargeTime /*= 0*/)
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_START sent: map={} instance={} players={} in_progress=1 res={}/{}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size(), inCombatResCount, maxInCombatResCount);
     WorldPackets::Instance::InstanceEncounterStart encounterStartMessage;
     encounterStartMessage.InCombatResCount = inCombatResCount;
     encounterStartMessage.MaxInCombatResCount = maxInCombatResCount;
@@ -911,6 +913,8 @@ void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 
 
 void InstanceScript::SendEncounterEnd()
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_END sent: map={} instance={} players={}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size());
     WorldPackets::Instance::InstanceEncounterEnd encounterEndMessage;
     instance->SendToPlayers(encounterEndMessage.Write());
 }

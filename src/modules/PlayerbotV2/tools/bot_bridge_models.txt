@@ -1,0 +1,13 @@
+# The models behind the launcher's AI BOTS tab (in the repack: repack\bot-bridge\models.txt). All free, all from Ollama.
+#   <tier> = <Ollama model> | <download GB> | <graphics card memory GB it needs, 0 = none> | <answers at once>
+# "Answers at once" is both the AI program's --workers and Ollama's OLLAMA_NUM_PARALLEL (the launcher sets it when it starts
+# Ollama). Each one keeps its own context in the card's memory, so small cards keep 2.
+# A tier missing here keeps the launcher's own default. Change a line, then press "Apply the change" in the tab.
+# Picked from the speed tests of 2026-11-08: valid answers every time, typical answer well under 1.5 s.
+cpu  = llama3.2:1b  | 1.3 | 0  | 1
+# low = llama3.2:3b  | 2.0 | 4  | 2   (before lfm3 passed with thinking off, 2026-11-08)
+med  = llama3.1:8b  | 4.9 | 8  | 2
+high = qwen2.5:14b  | 9.0 | 16 | 4
+# Candidates still being tested (thinking models, measured again with thinking off):
+low  = lfm3:1.7b   | 1.7 | 4  | 2
+# med = lfm2.5:8b   | 5.0 | 8  | 2

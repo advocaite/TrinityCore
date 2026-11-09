@@ -1492,6 +1492,48 @@ class spell_dru_item_t6_trinket : public AuraScript
     }
 };
 
+// Classic 1.60 (Forever) Lacerate: 1328617, 1328616, 414644, 1235826, 1235827
+// "making them bleed for $o1 damage over $d plus $s2% weapon damage per existing application of Lacerate on the target". Effect 0 is
+// the bleed; effect 1 is a dummy that carries the weapon damage percent, so without this script the cast hit for nothing.
+class spell_dru_lacerate_classic : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    // Before this cast's own application: the stacks of the caster's Lacerate (any rank) already on the target.
+    void CountApplications(SpellMissInfo missInfo)
+    {
+        _applications = 0;
+        Unit* target = GetHitUnit();
+        if (missInfo != SPELL_MISS_NONE || !target)
+            return;
+        for (uint32 rank : { 1328617u, 1328616u, 414644u, 1235826u, 1235827u })
+            if (Aura const* aura = target->GetAura(rank, GetCaster()->GetGUID()))
+                _applications += aura->GetStackAmount();
+    }
+
+    void HandleWeaponDamage(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (!_applications || !caster)
+            return;
+        uint32 const weaponDamage = caster->CalculateDamage(BASE_ATTACK, false, true);
+        int32 const bonus = int32(CalculatePct(float(weaponDamage), GetEffectValue() * float(_applications)));
+        if (bonus > 0)
+            SetHitDamage(GetHitDamage() + bonus);
+    }
+
+    void Register() override
+    {
+        BeforeHit += BeforeSpellHitFn(spell_dru_lacerate_classic::CountApplications);
+        OnEffectHitTarget += SpellEffectFn(spell_dru_lacerate_classic::HandleWeaponDamage, EFFECT_1, SPELL_EFFECT_DUMMY);
+    }
+
+    uint32 _applications = 0;
+};
+
 // 33763 - Lifebloom
 class spell_dru_lifebloom : public AuraScript
 {
@@ -3153,6 +3195,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_inner_peace);
     RegisterSpellScript(spell_dru_innervate);
     RegisterSpellScript(spell_dru_item_t6_trinket);
+    RegisterSpellScript(spell_dru_lacerate_classic);
     RegisterSpellScript(spell_dru_lifebloom);
     RegisterAreaTriggerAI(at_dru_lunar_beam);
     RegisterSpellScript(spell_dru_lunar_inspiration);

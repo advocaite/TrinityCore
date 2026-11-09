@@ -22,6 +22,7 @@
 #include "Bot/ClassicUpkeep.h"
 #include "Bot/AlwaysBuffs.h"
 #include "Bot/DrinkSayRule.h"
+#include "Bot/RecoverRules.h"   // Classic::LedMaySitDown
 #include "Bot/States/MaintainHelpers.h"   // States::DungeonLootRoll
 #include "SharedDefines.h"
 #include "RaceMask.h"        // RACE_UNDEAD_PLAYER
@@ -177,7 +178,7 @@ bool AlwaysBuffGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
     if (ai.action_recently_tried(BotAI::ActionKind::AlwaysBuff, kAlwaysBuffLockKey, GameTime::GetGameTimeMS()))
         return false;
     uint8 const mask = AlwaysMask(s, g);
-    if ((mask & kAlwaysMaskRepair) && (s.lowest_equipped_durability_pct() < 100 || int64(s.gold()) < int64(kAlwaysGoldFloor) * 10000   /* gold() is copper */))
+    if ((mask & kAlwaysMaskRepair) && !s.raw().players_own_character && (s.lowest_equipped_durability_pct() < 100 || int64(s.gold()) < int64(kAlwaysGoldFloor) * 10000   /* gold() is copper */))
         return true;
     if (s.level() < kAlwaysBuffMinLevel)
         return false;   // below the raiding levels nothing of the buffs is put on or taken off
@@ -305,6 +306,28 @@ int32 OocDrinkStart(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
     return Classic::OocDrinkStartManaPct(s, &g, kOocDrinkBelowManaPct);
 }
 
+// A player's bots (grouped, led by him) rest only when they need it and until full (Classic::LedMaySitDown); every other bot keeps the
+// personality's food mark and the pull-ready drink marks.
+bool LedRest(BotSnapshotView const& s)
+{
+    return s.in_group() && s.is_led_by_player();
+}
+
+Classic::RecoveryPick OocRecoveryPick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    int32 hp = GetIdleConsumeThresholds(ai).food_floor;
+    int32 mana = OocDrinkStart(s, ai, g, now_ms);
+    bool const led = LedRest(s);
+    if (led)
+    {
+        hp = std::min<int32>(hp, Classic::kLedEatBelowHpPct);
+        // The raid's wait for a boss pull under the owner's Hold is a drink to full on purpose (OocDrinkStart): it stays.
+        if (mana != Classic::kHeldRaidHealerManaPct)
+            mana = std::min<int32>(mana, Classic::kLedDrinkBelowManaPct);
+    }
+    return Classic::PickRecovery(s, hp, mana, led);
+}
+
 bool OocEatFoodGate(BotSnapshotView const& s, BotAI& ai,
                     GroupSnapshotView const& g, uint32 now_ms)
 {
@@ -329,9 +352,17 @@ bool OocEatFoodGate(BotSnapshotView const& s, BotAI& ai,
                 return false;
         }
     }
-    Classic::RecoveryPick const pick = Classic::PickRecovery(s, GetIdleConsumeThresholds(ai).food_floor, OocDrinkStart(s, ai, g, now_ms));
+    Classic::RecoveryPick const pick = OocRecoveryPick(s, ai, g, now_ms);
     if (pick.item)
-        return !s.raw().movement.is_moving;
+    {
+        if (s.raw().movement.is_moving)
+            return false;
+        // Not while the group walks on, nor straight back down after the follow got it up.
+        if (LedRest(s) && !Classic::LedMaySitDown({ Classic::IsEating(s) || Classic::IsDrinking(s), ai.since_rest_broken_ms(now_ms),
+                                                     ai.since_anchor_moved_ms(now_ms) }))
+            return false;
+        return true;
+    }
     return pick.hold;
 }
 
@@ -339,7 +370,7 @@ bool OocEatFoodFire(BotSnapshotView const& s, BotAI& ai,
                     GroupSnapshotView const& g,
                     BotIntentEmitter& emit, uint32 now_ms)
 {
-    Classic::RecoveryPick const pick = Classic::PickRecovery(s, GetIdleConsumeThresholds(ai).food_floor, OocDrinkStart(s, ai, g, now_ms));
+    Classic::RecoveryPick const pick = OocRecoveryPick(s, ai, g, now_ms);
     if (pick.item)
     {
         emit.emit(UseItemByEntryIntent{pick.item, s.raw().guid});
@@ -512,8 +543,9 @@ bool LootRollFire(BotSnapshotView const& s, BotAI& ai,
 // ---------- idle:equip_upgrade ----------
 bool EquipUpgradeGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32 now_ms)
 {
-    // Raid resistance gear on (idle:classic_resist_gear): the own pieces score higher and would go straight back on.
-    if (ai.resist_gear_school() != 0)
+    // Raid resistance gear on (idle:classic_resist_gear) or the Onyxia Scale Cloak of Blackwing Lair (idle:classic_onyxia_cloak): the own
+    // pieces score higher and would go straight back on.
+    if (ai.resist_gear_school() != 0 || ai.fight_cloak())
         return false;
     if (s.in_combat() || s.is_casting())
     {
@@ -539,7 +571,9 @@ bool EquipUpgradeGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
     // FULLY yield: there is NO bag-full carve-out because equipping does not free
     // bag slots (API::equip_item swaps the replaced item back into the bag); the
     // real full-bag blocker is idle:vendor_sell_trash, which is quest-aware.
-    if (s.has_actionable_quest())
+    // A bot in a player's group runs no quest rules (IdleRuleRegistry::tick skips them), so its quest list must not hold this
+    // rule back: with it, a grouped bot never wore a piece it was traded (Gremloc 11-08).
+    if (s.has_actionable_quest() && !s.is_led_by_player())
     {
         if (ai.pending_equip_upgrade_at_ms() != 0)
             ai.set_pending_equip_upgrade_at_ms(0);
@@ -579,6 +613,8 @@ bool EquipUpgradeFire(BotSnapshotView const& s, BotAI& ai,
         if (it.quality == 0) continue;
         if (ai.equip_recently_tried(it.entry, equip_now_ms)) continue;
         EquippedItem const& cur = s.equipped(it.equip_slot);
+        // A piece a player chose for the bot (trade or "equip <item>") stays on.
+        if (ai.worn_is_kept(it.equip_slot, cur.entry)) continue;
         const float score_new = ScoreItem(it.stats, it.item_level, weights, dps_w);
         const float score_cur = (cur.entry != 0)
             ? ScoreItem(cur.stats, cur.item_level, weights, dps_w)

@@ -275,6 +275,8 @@ struct PerformEmoteIntent { uint32 emote_id; ObjectGuid target; };
 struct FaceTargetIntent { ObjectGuid target; bool combat = false; };
 struct VendorBuyByEntryIntent { ObjectGuid npc; uint32 item_entry; uint32 count; };
 struct TogglePvpIntent {};
+// Set the explicit PvP flag on or off (as the client's PvP button; API::set_pvp): the world PvP flag rule (Fleet/WorldPvp.h).
+struct SetPvpIntent { bool on = false; };
 struct AddFriendIntent    { std::string name; std::string note; };
 struct MailSendMoneyIntent { std::string recipient; uint64 copper; std::string subject; std::string body; };
 // Mail an item attachment. count=0 means whole stack; copper rides along on
@@ -534,6 +536,9 @@ namespace EconomyOp {
     // Raid preparation: wear the vanilla resistance pieces of `school` (a SpellSchools value) in place of the bot's own, or put its own
     // back (school 0). BotPopulationManager::SwapResistGear; gated by Playerbot.Raid.ResistGear.
     struct ResistGear { uint8 school; };
+    // Raid preparation: wear the Onyxia Scale Cloak in Blackwing Lair (on), or put the bot's own cloak back (off).
+    // BotPopulationManager::SwapFightCloak; gated by Playerbot.Raid.OnyxiaCloak.
+    struct FightCloak { bool on; };
 }
 
 struct EconomyIntent
@@ -549,7 +554,8 @@ struct EconomyIntent
         EconomyOp::CraftClaim,
         EconomyOp::RestockClassSupplies,
         EconomyOp::StockRaidConsumable,
-        EconomyOp::ResistGear
+        EconomyOp::ResistGear,
+        EconomyOp::FightCloak
     > op;
 };
 
@@ -660,7 +666,7 @@ using IntentBody = std::variant<
     ToggleAfkIntent, ToggleDndIntent,
     SetDungeonDifficultyIntent, SetRaidDifficultyIntent,
     PerformEmoteIntent, FaceTargetIntent,
-    TogglePvpIntent,
+    TogglePvpIntent, SetPvpIntent,
     AddFriendIntent, RemoveFriendIntent, AddIgnoreIntent, RemoveIgnoreIntent,
     CalendarRsvpAllIntent,
     GuildBankDepositMoneyIntent, GuildBankWithdrawMoneyIntent,
@@ -711,7 +717,7 @@ inline size_t IntentKind(Intent const& i) { return i.body.index(); }
 // wedge read as "Dismount | ServerRefused" — diagnosed as the wrong bug on
 // 2026-06-10). The static_asserts force this list to be updated whenever an
 // alternative is added to / removed from IntentBody.
-static_assert(std::variant_size_v<IntentBody> == 100,
+static_assert(std::variant_size_v<IntentBody> == 101,
               "IntentBody changed — update IntentKindName() below to match.");
 inline char const* IntentKindName(size_t kind)
 {
@@ -739,7 +745,7 @@ inline char const* IntentKindName(size_t kind)
         "ToggleAfk", "ToggleDnd",
         "SetDungeonDifficulty", "SetRaidDifficulty",
         "PerformEmote", "FaceTarget",
-        "TogglePvp",
+        "TogglePvp", "SetPvp",
         "AddFriend", "RemoveFriend", "AddIgnore", "RemoveIgnore",
         "CalendarRsvpAll",
         "GuildBankDepositMoney", "GuildBankWithdrawMoney",

@@ -440,7 +440,7 @@ void Creature::RemoveCorpse(bool setSpawnTime, bool destroyForNearbyPlayers)
         setDeathState(DEAD);
         RemoveAllAuras();
         m_loot = nullptr;
-        uint32 respawnDelay = m_respawnDelay;
+        uint32 respawnDelay = GetClassicRespawnDelay();
         if (CreatureAI* ai = AI())
             ai->CorpseRemoved(respawnDelay);
 
@@ -480,7 +480,7 @@ void Creature::RemoveCorpse(bool setSpawnTime, bool destroyForNearbyPlayers)
         // will be ignored if the correct place added a respawn timer
         if (setSpawnTime)
         {
-            uint32 respawnDelay = m_respawnDelay;
+            uint32 respawnDelay = GetClassicRespawnDelay();
             m_respawnTime = std::max<time_t>(GameTime::GetGameTime() + respawnDelay, m_respawnTime);
 
             SaveRespawnTime();
@@ -1657,7 +1657,21 @@ void Creature::UpdateLevelDependantStats()
         ClassicCreatureClassLevelStats const* classicBase = classicStats ? sObjectMgr->GetCreatureClassicClassLevelStats(level, cInfo->unit_class) : nullptr;
         if (classicBase)
         {
-            uint32 health = std::max(1u, uint32(std::round(GetHealthMod(classification) * classicBase->Health * classicStats->HealthMultiplier)));
+            // Classic.ForeverCreatureHealth: the curve fit to sniffed official Forever creatures instead of the VMaNGOS one
+            uint32 const baseHealth = sWorld->getBoolConfig(CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH) && classicBase->HealthForever
+                ? classicBase->HealthForever : classicBase->Health;
+            // Classic.CreatureHealth.*: Forever gave higher level creatures more health (Blizzard notes of 2 November 2026, no numbers):
+            // nothing at RaiseFromLevel and below, then a straight rise to RaiseAt60Pct more at level 60. Raids only with .Raids = 1.
+            float highLevelMod = 1.0f;
+            uint32 const raiseFrom = sWorld->getIntConfig(CONFIG_CLASSIC_CREATURE_HEALTH_RAISE_FROM_LEVEL);
+            uint32 const raiseAt60 = sWorld->getIntConfig(CONFIG_CLASSIC_CREATURE_HEALTH_RAISE_AT_60_PCT);
+            if (raiseAt60 && level > raiseFrom && raiseFrom < 60)
+            {
+                Map const* map = FindMap();
+                if (!map || !map->IsRaid() || sWorld->getBoolConfig(CONFIG_CLASSIC_CREATURE_HEALTH_RAIDS))
+                    highLevelMod += float(raiseAt60) / 100.0f * float(std::min<uint32>(level, 60) - raiseFrom) / float(60 - raiseFrom);
+            }
+            uint32 health = std::max(1u, uint32(std::round(GetHealthMod(classification) * baseHealth * classicStats->HealthMultiplier * highLevelMod)));
             SetCreateHealth(health);
             SetMaxHealth(health);
             SetHealth(health);
@@ -2291,7 +2305,7 @@ void Creature::setDeathState(DeathState s)
     {
         m_corpseRemoveTime = GameTime::GetGameTime() + m_corpseDelay;
 
-        uint32 respawnDelay = m_respawnDelay;
+        uint32 respawnDelay = GetClassicRespawnDelay();
         if (uint32 scalingMode = sWorld->getIntConfig(CONFIG_RESPAWN_DYNAMICMODE))
             GetMap()->ApplyDynamicModeRespawnScaling(this, m_spawnId, respawnDelay, scalingMode);
 
@@ -2505,7 +2519,7 @@ void Creature::ForcedDespawn(uint32 timeMSToDespawn, Seconds forceRespawnTimer)
             SaveRespawnTime(forceRespawnTimer.count());
         else
         {
-            uint32 respawnDelay = m_respawnDelay;
+            uint32 respawnDelay = GetClassicRespawnDelay();
             if (uint32 scalingMode = sWorld->getIntConfig(CONFIG_RESPAWN_DYNAMICMODE))
                 GetMap()->ApplyDynamicModeRespawnScaling(this, m_spawnId, respawnDelay, scalingMode);
             m_respawnTime = GameTime::GetGameTime() + respawnDelay;
@@ -2575,6 +2589,41 @@ bool Creature::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInf
         return true;
 
     return Unit::IsImmunedToSpellEffect(spellInfo, spellEffectInfo, caster, requireImmunityPurgesEffectAttribute);
+}
+
+// Classic 1.60 (WoW Forever, Blizzard notes of 2 November 2026): starting zones respawn fastest, and respawns slow down as the
+// zones go up in level. No numbers were given, so the creature's level picks a percent of its normal respawn time
+// (Classic.Respawn.Level1to10Pct and the next ones; 100 = unchanged). Only open world spawns: dungeons, raids, battlegrounds,
+// summons, bosses and rares keep their own timers. Never shorter than 30 seconds.
+uint32 Creature::GetClassicRespawnDelay() const
+{
+    uint32 const delay = m_respawnDelay;
+    if (!delay || !m_spawnId || IsSummon() || IsPet() || IsDungeonBoss() || isWorldBoss())
+        return delay;
+
+    Map const* map = FindMap();
+    if (!map || map->Instanceable())
+        return delay;
+
+    if (HasClassification(CreatureClassifications::Rare) || HasClassification(CreatureClassifications::RareElite))
+        return delay;
+
+    uint8 const level = GetLevel();
+    uint32 pct;
+    if (level <= 10)
+        pct = sWorld->getIntConfig(CONFIG_CLASSIC_RESPAWN_LEVEL_1_10_PCT);
+    else if (level <= 20)
+        pct = sWorld->getIntConfig(CONFIG_CLASSIC_RESPAWN_LEVEL_11_20_PCT);
+    else if (level <= 30)
+        pct = sWorld->getIntConfig(CONFIG_CLASSIC_RESPAWN_LEVEL_21_30_PCT);
+    else
+        pct = sWorld->getIntConfig(CONFIG_CLASSIC_RESPAWN_LEVEL_31_60_PCT);
+
+    if (pct == 100)
+        return delay;
+
+    uint32 const scaled = uint32((uint64(delay) * pct + 50) / 100);
+    return std::max(scaled, std::min(delay, 30u));
 }
 
 bool Creature::IsElite() const
@@ -3164,7 +3213,7 @@ void Creature::AllLootRemovedFromCorpse()
     else
         m_corpseRemoveTime = now + uint32(m_corpseDelay * decayRate);
 
-    m_respawnTime = std::max<time_t>(m_corpseRemoveTime + m_respawnDelay, m_respawnTime);
+    m_respawnTime = std::max<time_t>(m_corpseRemoveTime + GetClassicRespawnDelay(), m_respawnTime);
 }
 
 void Creature::SetInteractionAllowedWhileHostile(bool interactionAllowed)

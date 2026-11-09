@@ -35,5 +35,29 @@ bool LfgBotGroupCanTake(Player* member, Player* applicant);
 Player* LfgBotGroupMemberFor(Player* applicant, uint32 map);
 // Creates one companion for the owner (shared with `.bot add`).
 bool AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg);
+// Fills the leader's group up to `size` now with level-matched companions (`.bot lfg` and the dungeon finder). `gap` is what was
+// missing; returns the bots started, `report` says why any could not be.
+uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report);
+
+// The bot dungeon finder (DungeonFinder.cpp), `.bot dungeon`: pick a dungeon (or any for your level), the missing roles are filled
+// with your companions and the group is put inside the dungeon's door; `leave` brings you back to where you queued. World thread.
+bool DungeonFinderQueue(Player* leader, std::string const& what, Playerbot::Role ownRole, std::string& msg);
+bool DungeonFinderLeave(Player* player, std::string& msg);
+bool DungeonFinderCancel(Player* player, std::string& msg);
+std::string DungeonFinderList(Player* player);
+// Where the player stands with the dungeon finder, for the add-on's Group finder tab: phase is "idle", "forming" (queued, bots
+// joining), "entering", "leaving" or "inside" (in a dungeon, not on the way). canLeave = `.bot dungeon leave` knows a way out.
+struct DungeonFinderState
+{
+    std::string phase = "idle";
+    std::string name;
+    uint32 waitedSec = 0;
+    uint32 formSec = 0;
+    uint32 members = 0;
+    uint32 size = 0;
+    bool canLeave = false;
+};
+DungeonFinderState DungeonFinderStatus(Player* player);
+void DungeonFinderTick(uint32 nowMs);
 
 } // namespace Playerbot::V2

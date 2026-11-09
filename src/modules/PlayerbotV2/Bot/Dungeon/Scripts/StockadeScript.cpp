@@ -7,10 +7,37 @@
 //   src/server/scripts/EasternKingdoms/TheStockade/boss_*.cpp
 
 #include "../DungeonScript.h"
+#include "../../ClassTables.h"
 
 namespace Playerbot {
 
 namespace {
+
+// The Stockade as Classic 1.60 has it: the Cata roster above has no spawns there, so the tank walked the Cata route and stepped
+// into the void at (166.5,71.6) (RC10 stockade_targorr: stalled 120 s at (151.6,60.1), "NO TARGET ... script_bosses=3"). One spawn
+// row per boss on map 34 in the live world DB (2026-10-30). The instance script keeps no state for these bosses, so a killed one
+// is passed by the owed-boss waiver at its spot. Order: Targorr in the main hall, the south wing, then the north wing.
+DungeonAdvice StockadeClassicAdvice()
+{
+    DungeonAdvice a;
+    a.bosses = {
+        1696,   // Targorr the Dread (main hall)
+        1666,   // Kam Deepfury (south wing)
+        1717,   // Hamhock (south wing)
+        1716,   // Bazil Thredd (south wing, end)
+        1720,   // Bruegal Ironknuckle (north wing, rare)
+        1663,   // Dextren Ward (north wing, end)
+    };
+    a.progression_waypoints = {
+        { 159.582f,    1.253f, -25.606f },   // Targorr the Dread
+        { 142.644f,  -71.854f, -34.856f },   // Kam Deepfury
+        { 105.523f, -105.795f, -35.106f },   // Hamhock
+        {  94.483f, -125.829f, -33.940f },   // Bazil Thredd
+        { 160.051f,   45.709f, -34.773f },   // Bruegal Ironknuckle
+        { 166.789f,  134.787f, -33.940f },   // Dextren Ward
+    };
+    return a;
+}
 
 class StockadeScript final : public DungeonScript
 {
@@ -20,6 +47,8 @@ public:
 
     DungeonAdvice get_advice(BotSnapshotView const& /*s*/) const override
     {
+        if (IsVanillaRealm())
+            return StockadeClassicAdvice();
         DungeonAdvice a;
         a.mandatory_interrupt_spells = {
             // Hogger

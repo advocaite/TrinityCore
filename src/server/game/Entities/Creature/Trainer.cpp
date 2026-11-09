@@ -17,11 +17,13 @@
 
 #include "Trainer.h"
 #include "BattlePetMgr.h"
+#include "Chat.h"
 #include "ConditionMgr.h"
 #include "Creature.h"
 #include "DB2Stores.h"
 #include "Log.h"
 #include "NPCPackets.h"
+#include "Pet.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -30,6 +32,63 @@
 
 namespace Trainer
 {
+    // Classic 1.60 pet trainers teach the hunter's pet (Pet::GetTrainerTaughtPetSpell): such a spell is known, and meets a
+    // ReqAbility, when the current pet knows its pet spell or a higher rank of it.
+    static Pet* GetTrainablePet(Player const* player)
+    {
+        Pet* pet = player->GetPet();
+        return pet && pet->getPetType() == HUNTER_PET && pet->IsAlive() ? pet : nullptr;
+    }
+
+    static bool HasTrainerAbility(Player const* player, uint32 spellId)
+    {
+        if (uint32 petSpell = Pet::GetTrainerTaughtPetSpell(spellId))
+        {
+            Pet const* pet = GetTrainablePet(player);
+            return pet && pet->KnowsSpellOrHigherRank(petSpell);
+        }
+        return player->HasSpell(spellId);
+    }
+
+    // A pet trainer refusal used to be silent: the client offers every rank whose level the hunter has (it cannot see the pet's
+    // level or spells), and TRAINER_BUY_FAILED shows nothing, so "Learn" did nothing. Say why, and log it for bug bundles.
+    static void ExplainPetTrainerRefusal(Player* player, ::Trainer::Spell const* trainerSpell, uint32 petSpell)
+    {
+        bool const ru = player->GetSession()->GetSessionDbLocaleIndex() == LOCALE_ruRU;
+        Pet const* pet = GetTrainablePet(player);
+        std::string reason;
+        std::string text;
+        if (!pet)
+        {
+            reason = "no live hunter pet";
+            text = ru ? "Сначала призовите (или воскресите) своего питомца." : "Summon (or revive) your pet first.";
+        }
+        else if (pet->KnowsSpellOrHigherRank(petSpell))
+        {
+            reason = "pet knows it or a higher rank";
+            text = ru ? "Ваш питомец уже знает эту способность." : "Your pet already knows this ability.";
+        }
+        else if (std::any_of(trainerSpell->ReqAbility.begin(), trainerSpell->ReqAbility.end(),
+                     [player](int32 req) { return req && !HasTrainerAbility(player, req); }))
+        {
+            reason = "pet lacks the lower rank";
+            text = ru ? "Сначала питомец должен изучить предыдущий ранг." : "Your pet must learn the previous rank first.";
+        }
+        else if (player->GetLevel() < trainerSpell->ReqLevel || pet->GetLevel() < trainerSpell->ReqLevel)
+        {
+            reason = Trinity::StringFormat("needs level {} (hunter {}, pet {})", trainerSpell->ReqLevel, player->GetLevel(), pet->GetLevel());
+            text = ru ? Trinity::StringFormat("Ваш питомец должен быть {}-го уровня.", trainerSpell->ReqLevel)
+                      : Trinity::StringFormat("Your pet must be level {}.", trainerSpell->ReqLevel);
+        }
+        else
+            reason = "other";
+
+        TC_LOG_INFO("server.trainer", "Pet trainer refused spell {} (pet spell {}) for {} ({}): {}", trainerSpell->SpellId, petSpell,
+            player->GetName(), player->GetGUID().ToString(), reason);
+        if (!text.empty())
+            ChatHandler(player->GetSession()).SendSysMessage(text);
+    }
+
     bool Spell::IsCastable() const
     {
         return sSpellMgr->AssertSpellInfo(SpellId, DIFFICULTY_NONE)->HasEffect(SPELL_EFFECT_LEARN_SPELL);
@@ -61,6 +120,10 @@ namespace Trainer
                 continue;
             }
 
+            // the client marks a rank as learned only when the hunter knows it, so a rank the pet already has would stay "available"
+            if (Pet::GetTrainerTaughtPetSpell(trainerSpell.SpellId) && GetSpellState(player, &trainerSpell) == SpellState::Known)
+                continue;
+
             trainerList.Spells.emplace_back();
             WorldPackets::NPC::TrainerListSpell& trainerListSpell = trainerList.Spells.back();
             trainerListSpell.SpellID = trainerSpell.SpellId;
@@ -68,6 +131,9 @@ namespace Trainer
             trainerListSpell.ReqSkillLine = trainerSpell.ReqSkillLine;
             trainerListSpell.ReqSkillRank = trainerSpell.ReqSkillRank;
             std::copy(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(), trainerListSpell.ReqAbility.begin());
+            for (int32& reqAbility : trainerListSpell.ReqAbility)
+                if (reqAbility && Pet::GetTrainerTaughtPetSpell(reqAbility) && HasTrainerAbility(player, reqAbility))
+                    reqAbility = 0;
             trainerListSpell.Usable = AsUnderlyingType(GetSpellState(player, &trainerSpell));
             trainerListSpell.ReqLevel = trainerSpell.ReqLevel;
         }
@@ -80,6 +146,9 @@ namespace Trainer
         Spell const* trainerSpell = GetSpell(spellId);
         if (!trainerSpell || !CanTeachSpell(player, trainerSpell))
         {
+            if (trainerSpell)
+                if (uint32 petSpell = Pet::GetTrainerTaughtPetSpell(trainerSpell->SpellId))
+                    ExplainPetTrainerRefusal(player, trainerSpell, petSpell);
             SendTeachFailure(npc, player, spellId, FailReason::Unavailable);
             return;
         }
@@ -117,6 +186,8 @@ namespace Trainer
         if (trainerSpell->IsCastable())
         {
             player->CastSpell(player, trainerSpell->SpellId, true);
+            if (Pet::GetTrainerTaughtPetSpell(trainerSpell->SpellId))
+                SendSpells(npc, player, player->GetSession()->GetSessionDbLocaleIndex());
         }
         else
         {
@@ -217,7 +288,7 @@ namespace Trainer
                     if (player->HasSpell(trainerSpell.SpellId))                              ++tally->known;
                     else if (!player->IsSpellFitByClassAndRace(trainerSpell.SpellId))        ++tally->class_race;
                     else if (std::any_of(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(),
-                                [player](int32 req) { return req && !player->HasSpell(req); })) ++tally->ability;
+                                [player](int32 req) { return req && !HasTrainerAbility(player, req); })) ++tally->ability;
                     else if (player->GetLevel() < trainerSpell.ReqLevel)                      ++tally->level;
                     else if (GetSpellState(player, &trainerSpell) == SpellState::Known)       ++tally->known;
                     else                                                                      ++tally->other;
@@ -254,7 +325,7 @@ namespace Trainer
                 player->GetBaseSkillValue(trainerSpell->ReqSkillLine), line && line->CategoryID == SKILL_CATEGORY_CLASS ? "class line" : "other line");
         }
         for (int32 req : trainerSpell->ReqAbility)
-            if (req && !player->HasSpell(req))
+            if (req && !HasTrainerAbility(player, req))
                 return Trinity::StringFormat("needs spell {} first", req);
         if (player->GetLevel() < trainerSpell->ReqLevel)
             return Trinity::StringFormat("needs level {}", trainerSpell->ReqLevel);
@@ -303,6 +374,35 @@ namespace Trainer
     {
         if (player->HasSpell(trainerSpell->SpellId))
             return SpellState::Known;
+
+        if (uint32 petSpell = Pet::GetTrainerTaughtPetSpell(trainerSpell->SpellId))
+        {
+            if (!player->IsSpellFitByClassAndRace(trainerSpell->SpellId))
+                return SpellState::Unavailable;
+
+            Pet const* pet = GetTrainablePet(player);
+            if (!pet)
+                return SpellState::Unavailable;
+
+            if (pet->KnowsSpellOrHigherRank(petSpell))
+                return SpellState::Known;
+
+            for (int32 reqAbility : trainerSpell->ReqAbility)
+                if (reqAbility && !HasTrainerAbility(player, reqAbility))
+                    return SpellState::Unavailable;
+
+            // the pet learns it at the trainer's level, like the hunter would
+            if (player->GetLevel() < trainerSpell->ReqLevel || pet->GetLevel() < trainerSpell->ReqLevel)
+                return SpellState::Unavailable;
+
+            return SpellState::Available;
+        }
+
+        // A class trainer teaches its own class only. A spell of a shared skill line passes the class check for other classes too:
+        // Dual Wield (674) is fit for a shaman by the client's data, so a shaman learned it at the warrior trainer (Azeldof, 2026-11-01).
+        // A trainer without class spells (weapon masters, professions) has every class in its mask.
+        if (!(GetClassMask() & player->GetClassMask()))
+            return SpellState::Unavailable;
 
         // check race/class requirement
         if (!player->IsSpellFitByClassAndRace(trainerSpell->SpellId))

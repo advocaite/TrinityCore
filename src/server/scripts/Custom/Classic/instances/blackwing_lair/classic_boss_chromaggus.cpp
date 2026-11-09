@@ -25,7 +25,9 @@
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Log.h"
 #include "ScriptedCreature.h"
+#include "SmartEnum.h"
 #include "SpellInfo.h"
 #include "classic_blackwing_lair.h"
 #include "classic_script_text.h"
@@ -217,6 +219,20 @@ struct classic_boss_chromaggus : public ScriptedAI
             m_pInstance->SetData(CLASSIC_BWL_TYPE_CHROMAGGUS, DONE);
     }
 
+    // Scenario bwl_chromaggus 2026-10-31 reset twice ("the boss is evading", at 80% and at 100% health) with nothing in the log to
+    // say why: every evade now writes its reason, where he stands against his home, and what he still has on his threat list.
+    void EnterEvadeMode(EvadeReason why) override
+    {
+        Unit* victim = me->GetVictim();
+        TC_LOG_INFO("classic.bwl.chromaggus", "Chromaggus evades ({}) at {:.0f}% health, at {:.1f},{:.1f},{:.1f}, home {:.1f},{:.1f},{:.1f}, "
+            "in combat {}, threat list {}, victim {}, engaged once {}, motion {}",
+            EnumUtils::ToConstant(why), me->GetHealthPct(), me->GetPositionX(), me->GetPositionY(), me->GetPositionZ(),
+            me->GetHomePosition().GetPositionX(), me->GetHomePosition().GetPositionY(), me->GetHomePosition().GetPositionZ(),
+            me->IsInCombat(), me->GetThreatManager().GetThreatListSize(), victim ? victim->GetName() : "none", m_bEngagedOnce,
+            uint32(me->GetMotionMaster()->GetCurrentMovementGeneratorType()));
+        ScriptedAI::EnterEvadeMode(why);
+    }
+
     void JustReachedHome() override
     {
         if (m_pInstance)
@@ -227,6 +243,9 @@ struct classic_boss_chromaggus : public ScriptedAI
     {
         if (uiType != POINT_MOTION_TYPE)
             return;
+
+        TC_LOG_INFO("classic.bwl.chromaggus", "Chromaggus reached walk point {} at {:.1f},{:.1f},{:.1f}, in combat {}", uiPointId,
+            me->GetPositionX(), me->GetPositionY(), me->GetPositionZ(), me->IsInCombat());
 
         switch (uiPointId)
         {

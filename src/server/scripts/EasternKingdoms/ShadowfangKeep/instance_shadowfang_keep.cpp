@@ -21,6 +21,7 @@
 #include "GameObject.h"
 #include "InstanceScript.h"
 #include "Unit.h"
+#include <set>
 
 static constexpr ObjectData creatureData[] =
 {
@@ -66,9 +67,28 @@ public:
         // Open a progression door tracked via ObjectData. HandleGameObject
         // tolerates a null GO (falls back to the guid, here Empty = no-op),
         // so this is safe even before the GO has spawned.
+        // A door's grid can be unloaded when its boss dies (Springvale and Fenrus die far from their gates), and then there is no
+        // GameObject to open: the gate came up closed and stayed closed (Discord 2026-11-05, Sorcerer's Gate after Fenrus). The
+        // instance remembers which doors are open and opens each one again when its GameObject is created.
         void OpenDoor(uint32 type)
         {
+            _openDoors.insert(type);
             if (GameObject* go = GetGameObject(type))
+                HandleGameObject(ObjectGuid::Empty, /*open=*/true, go);
+        }
+
+        void OnGameObjectCreate(GameObject* go) override
+        {
+            InstanceScript::OnGameObjectCreate(go);
+            uint32 type = 0;
+            switch (go->GetEntry())
+            {
+                case GO_COURTYARD_DOOR: type = DATA_COURTYARD_DOOR; break;
+                case GO_SORCERERS_DOOR: type = DATA_SORCERER_GATE;  break;
+                case GO_ARUGALS_LAIR:   type = DATA_ARUGAL_DOOR;    break;
+                default: return;
+            }
+            if (_openDoors.contains(type))
                 HandleGameObject(ObjectGuid::Empty, /*open=*/true, go);
         }
 
@@ -118,9 +138,19 @@ public:
                 case NPC_LORD_GODFREY:
                     SetBossState(BOSS_LORD_GODFREY, DONE);
                     break;
+                // Classic bosses (no Walden in this keep, so the lair door never opened)
+                case NPC_FENRUS_THE_DEVOURER:
+                    OpenDoor(DATA_SORCERER_GATE);
+                    break;
+                case NPC_WOLF_MASTER_NANDOS:
+                    OpenDoor(DATA_ARUGAL_DOOR);
+                    break;
                 default: break;
             }
         }
+
+    private:
+        std::set<uint32> _openDoors;
     };
 
     InstanceScript* GetInstanceScript(InstanceMap* map) const override

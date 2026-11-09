@@ -53,12 +53,13 @@ Rules worth knowing:
 
 ## 2. Getting bots: add, call, save, dismiss
 
-The `.bot` commands for your own bots work for every account, no GM needed; each one only touches bots owned by your account. `.bot world`, `.bot bgstress`, `.bot bgsoak` and `.bot itemstats` need GM (level 3). The addon buttons run the same commands.
+The `.bot` commands for your own bots work for every account, no GM needed; each one only touches bots owned by your account. `.bot world`, `.bot population`, `.bot bgstress`, `.bot bgsoak` and `.bot itemstats` need GM (level 3). The addon buttons run the same commands.
 
 | Command | What it does |
 |---|---|
 | `.bot add <class> [tank\|healer\|dps] [race] [male\|female]` | Creates a companion bound to you, levels it to you, teaches spells, sets role/talents/gear, brings it over and groups it. The role is kept across relog and `.bot call`. |
 | `.bot lfg [tank\|healer\|dps]` | Fills the missing tank / healer / damage places of your group (1 tank, 1 healer, 3 damage) with level-matched companions, now. The word is your own role. The Group Finder does the same on its own: post a dungeon listing and, if nobody joins within `Playerbot.Lfg.BotFillSeconds` (default 180), the missing roles are filled. |
+| `.bot dungeon [list \| <name\|any> [tank\|healer\|dps] \| leave \| cancel]` | Dungeon finder. `.bot dungeon any` (a random 5-player dungeon for your level) or `.bot dungeon <word>` (`rfc`, `vc`/`dm` Deadmines, `smgy`, `smlib`, `dme`, `strat`, `ubrs`...; `.bot dungeon list` shows them): the missing tank / healer / damage places are filled with your companions at your level, and once the group is complete (at most 90 s) you are put inside the dungeon's door and your bots are brought after you. Real players in your group get a summon. `.bot dungeon leave` takes you back to where you queued, bots follow; `cancel` stops a queue still forming. Only the group leader queues. `Playerbot.Lfg.Finder.Enable` turns it off. |
 | `.bot call <name\|all>` | Brings back a companion (logs it in, joins your group). `all` = your saved roster plus every bot in your group. |
 | `.bot summon <name\|all\|saved>` | Every player, own bots only: `.bot summon all` brings only the bots that are in your group right now (it never logs anyone in), `.bot summon saved` your saved roster plus the grouped bots (logging them in), `.bot summon <name>` one of your companions. Any other name: "You can only summon your own bots". The GM `.summon` (other players) is unchanged and stays GM-only. |
 | `.bot save <name\|all>` | Puts a companion (or every bot with you) on your roster. |
@@ -68,6 +69,7 @@ The `.bot` commands for your own bots work for every account, no GM needed; each
 | `.bot list` | Your companions, online or not (`saved` marks roster ones). |
 | `.bot regear <name\|all>` | Re-rolls the equipment of online companions so they do not all wear the same pieces. Better pieces they wear stay; replaced ones go to the bags. |
 | `.bot world` | Status of the world-bot spawner (Playerbot.World.*), console too. |
+| `.bot population [off\|low\|medium\|high\|file]` | How many world bots the realm has, GM only, until the next restart (the launcher's Bots setting, `Bots.Size`, decides at every start; the add-on has no World bots tab since 0.6.13). Applies right away (a step down logs the world bots out first). It wins over `Bots.Size` and `Playerbot.World.Enable` until then; `file` hands back to the config files. No word: what it is now. Console too. |
 
 Group size is capped by the map you stand in, see [Instance rules](#8-instance-rules). In a group that is full,
 `.bot add` and `.bot call` tell you why instead of silently failing.
@@ -115,10 +117,13 @@ from the bot.
 | `follow` | yes | yes | `follow` -> `Raveni: following at 5 yards`. Follow holds: while it stands, bots only defend and do not advance or pull until you say attack, pull or resume. `follow <name>`, `follow tank`, `follow healer`, `follow leader`, `follow stop` also work by whisper. |
 | `stay` / `halt` | yes | yes (`stay`) | `stay` -> `Raveni: staying here`. |
 | `hold` | yes | yes | Like stay but may fight what attacks it. `Hold: holding position.` |
-| `defensive` | yes | yes | Same as hold: `Raveni: defensive, holding here and fighting only what attacks`. |
-| `aggressive` | yes | yes | Back to autonomous: `Raveni: aggressive, engaging enemies on my own`. |
+| `defensive` | yes | yes | The start stance (the panel's Defensive): starts nothing, fights what you pull or what attacks the group, joins the group's fight. `Raveni: defensive, defending only until you say attack or pull`. |
+| `aggressive` | yes | yes | Also attacks anything hostile within about 10 yards of you: `Raveni: aggressive, attacking anything hostile within 10 yards of you`. |
+| `passive` | yes | yes | The panel's Passive: attacks nothing at all, not to defend itself or you, not on the group's fight, not on attack or pull, until `defensive` or `aggressive`. Heals, buffs and other friendly spells go on; its pet goes passive and follows. `Raveni: passive, I attack nothing (I still heal and buff) until you say defensive or aggressive`. |
+| `ignore target` / `ignore clear` | yes | yes | Your selected mob goes on (or, again on it, off) the list of mobs none of your bots attack, even when it attacks you or them (a beast you tame); the other mobs are fought as usual, and no area spell goes out while it is within 30 yards of the bot. `ignore clear` empties the list. Answered once as a system line. Memory only, up to 8 mobs, each forgotten after 30 minutes. |
+| `place <shape> [tight\|normal\|wide] [here\|target\|cursor] [who...]` / `place follow [who...]` | yes | yes | The ForeverBots Positions tab. The chosen bots stand in a shape and stay there: `close`, `circle`, `arc`, `spread` (far apart, about 10 yards on a normal gap), `line`, `column`, `spear`, `arrow`. `here` (the default) puts the shape in front of you (never on your own spot) and points it the way you face; `target` puts it round or in front of your target, facing you (not a member of your own group); `cursor` waits up to 30 s for you to point at the ground: the add-on's At cursor button (green ground circle, a world marker) or a ping (G key / ping wheel), and centres the shape there, facing away from you. Circle and arc go round the spot. Who: bot names, `all`, `tanks`, `healers`, `melee`, `ranged`, `dps`, `group1`..`group8` or a class; none = all your bots in the group. Tanks take the front, healers the back. After every fight they walk back to their own spot, until `place follow` (or Follow) lets them follow again. Answered once as a system line; the add-on does not wait for a reply. |
 | `resume` | yes | yes | Autonomous again; `Resume: autonomous.` |
-| `passive` / `stop` / `disengage` | yes | `passive`, `disengage` | Stop attacking: `Raveni: stopped`. |
+| `stop` / `disengage` | yes | `disengage` | Stop attacking: `Raveni: stopped`. |
 | `come` | yes | yes | Teleports the bot to you and follows. `Raveni: coming to you`. |
 | `summon` | yes | yes | Like `come`, with the summoning refusals: not while the bot is dead or in combat, not while you are in combat, not into a battleground, not into or out of an instance you are not both in. Answer on refusal: `Raveni: can't be summoned, I am in combat`. |
 | `flee` / `retreat` | yes | `flee` | Break off and run to you: `Raveni: fleeing to you`. |
@@ -141,6 +146,7 @@ from the bot.
 | `pull rti` | yes | yes | Opens on the mob carrying the bot's own rti symbol (Ike3Commands). |
 | `max dps` / `save mana` / `normal` | yes | no | Burn mode (cooldowns on every fight), healers keep to efficient heals, clear both. Ike3Commands. |
 | `focus <name\|clear>`, `target <entry>`, `mark <icon>`, `interrupt`, `cc` | yes | no | Finer combat control. |
+| `focus heal <name>, <name>` / `focus heal me` / `focus heal off` | yes | no | A healer heals only those group members and itself until `focus heal off` (relog clears it). Bare `focus heal` says who it is on. |
 | `aoe on\|off` (bare `aoe` toggles), `aoe_all on\|off` | yes | no | Off: the bot casts no spell that hits more than one enemy (area and cone spells, damaging ground areas such as Blizzard or Consecration, chained spells such as Chain Lightning, Multi-Shot or Cleave, Magma and Fire Nova Totem) until on. `aoe_all` sets every bot of the group. Memory only; `clearprefs` turns it on again. |
 
 ### Questions and housekeeping (OwnerCommands)
@@ -182,6 +188,13 @@ All of these are group-allowed (party/raid chat) and whisperable.
   ones it crowd-controls (skull never), `rti none`, `rti ?` reports, `rti raid` prints the roster and marks.
 - **Main tank**: `set main tank <name>` or `main tank <name>` (no name = your target) sets the raid frame's Main Tank
   flag. Raid groups only. With a main tank set, only that tank pulls.
+- **The group's fight** (your bots, outside raid boss fights): once you or a member near you is in combat, every bot fights,
+  with no order needed. Damage dealers take your `attack` / `focus` / skull target, the dungeon's priority add, the tank's target,
+  your target, then the nearest mob on a member; tanks first take any mob off a non-tank; healers heal; a bot that cannot reach or
+  see its target moves until it can. A `stop`, `flee`, `follow`, `stay` or `pull back` from the last 10 s (or given during the fight)
+  still wins, and so does the `passive` stance (it fights nothing). Defensive, Stay, follow, formation and leashes are out-of-combat only: a bot left on an older Stay fights, then walks
+  back to its spot. Raid tactics (threat holds, the ranged spots behind the tank) are for 20 and 40-player raids; a UBRS 10-man
+  plays as a dungeon. The log names why a bot stood idle in a fight (`[group_idle]`).
 - **Marks need an order** (`MarksNeedOrder`, default on): putting an icon on a mob never starts a fight by itself.
   Bots engage after `attack`, `pull`, `pull back`, `pull rti` or `focus`.
 - **Crowd control on and off, per class**: `@warlock no fear`, `@mages no sheep`, then `@warlock yes fear`, `@mage yes sheep` to
@@ -192,8 +205,9 @@ All of these are group-allowed (party/raid chat) and whisperable.
   Psychic Scream, Intimidating Shout, Scare Beast, Turn Undead), `sheep` / `poly`, `banish`, `shackle`, `sap`, `sleep` (Hibernate,
   Wyvern Sting), `trap` (Freezing Trap), `charm` / `seduce` (Seduction, Enslave Demon, Mind Control), `cc` (all of them). Stuns,
   roots, snares and interrupts are not crowd control here and stay in the rotations. A denied spell is skipped and the bot goes on
-  with its next spell; marked crowd control picks another spell or no bot for that mob. Memory only: a server restart allows
-  everything again. The panel's CC icon (`crowdcontrol on|off`) stays the switch for marked crowd control alone.
+  with its next spell; marked crowd control picks another spell or no bot for that mob. Fear is off until you allow it
+  (`yes fear`, `@warlock yes fear` or `on cc`): a feared mob runs into the next pack. Memory only: a server restart goes back to
+  everything allowed but fear. The panel's CC icon (`crowdcontrol on|off`) stays the switch for marked crowd control alone.
 - **The bot's own picks (whisper)**: `prefer blessing might|wisdom|kings|salvation|light|sanctuary`, `prefer aura
   devotion|retribution|concentration|shadow|frost|fire|sanctity`, `prefer earth stoneskin|strength|tremor|earthbind|stoneclaw`,
   `prefer fire searing|nova|magma|flametongue|frost`, `prefer water mana|healing|poison|disease|fire`, `prefer air
@@ -208,6 +222,8 @@ All of these are group-allowed (party/raid chat) and whisperable.
   Sap) until `stealth on`. Memory only: a relog or restart clears them.
 - **Warlock summon and soulstone**: `ritual <name>` casts Ritual of Summoning on that member of the group; two more members click
   the portal (`use summoning` in party chat sends bots). `soulstone <name>` stones that member (bare `soulstone`: your target, else you).
+- **Mage portals**: `portal <city>` opens a portal, `teleport <city>` takes the mage there. The six capitals are found by spell id, so the
+  English names (`ironforge`, `if`, `storm`, `thunder bluff`, `tb`...) and the Russian ones work whatever language the server's spell names are in.
 - **Pull back vs fall back**: `pull back` is one tank pulling a mob home to the rally point. `fall back` (also
   `fallback`, `back`) is the whole raid dropping its target and running to the rally point to re-form, see
   [Raid orders](#7-raid-orders).
@@ -293,10 +309,18 @@ World bots are ambient characters with no owner (`Playerbot.World.Enable = 1` sp
   25 yards (60 s per bot, 8 s global, 1-4 s delay). `WorldBotSayReply`, log `[say_reply]`. A bot waves back at
   `hi`/`hello` within 12 yards (`SocialEmotes`).
 - **Whispers**: bots answer a whisper from any player (`BotWhisperable`). Only the owner's orders are obeyed.
+- **Guild invite by whisper**: any player can whisper a bot "invite me to your guild", "can I join your guild", "ginv",
+  "пригласи в гильдию", "можно в гильдию" and gets a normal guild invite (whatever `Guilds.InvitePlayers` says). The
+  whispered bot invites when it is the guild master or an officer, else an online officer bot of its guild does. Only
+  bot-run guilds; the player must be guildless and of the same faction. A short "yes" / "inv" / "да" works for 3 minutes
+  after the bot talked about its guild to that player, and for 30 minutes after its "/w <name> for invite" Trade line.
+  When no invite can go out the bot says why. `Bot/GuildWhisperInvite.cpp`, log `[guild_whisper]`.
 - **Politeness** (`PoliteWorldBots`): a trade request is cancelled with "sorry, nothing to trade"; a group
   invite is declined with a short whisper unless the bot is free to group; a duel from a stranger is accepted about
   one time in three when the levels are within 5 and nothing is fighting, otherwise declined with a whisper.
   Invites: `Playerbot.Interact.AutoAcceptInvites` (`none`, `friends_or_higher`, `guild_or_higher`, `anyone`).
+- **No invites to passers-by** (`InvitePassingPlayers` 0): a world bot never sends a group invite to a real player who
+  walks past; it only invites other bots. A player invites the bot himself (or whispers `invite` to it). 1 = the old way (invites players within 30 yards).
 - Companion banter (`PartyBanter`): a short lowercase line now and then on ready check, wipe, rez, death, boss
   kill; never in a group over 15 or with `Playerbot.Chatter.Enabled = 0`.
 - Hostile-faction world bots can be placed near you (`Playerbot.World.FriendlyPct` and the per-zone `*FriendlyPct` keys, all 100 = none by default); lower them to
@@ -344,7 +368,7 @@ Defaults are those of `conf/playerbot.conf.dist`. Behaviour switches are read wh
 `WarriorStanceDance`, `PurgeDuty`, `RangedSlow`, `SoloFlee`, `DruidHealForm`, `PullDiscipline`. Gear:
 `Playerbot.Gear.MaxTier` (1), `Playerbot.Gear.RaidIlvlCap` (0).
 
-**Social and world (default)**: `BotWhisperable` 1, `WorldBotSayReply` 1, `PoliteWorldBots` 1, `PartyBanter` 1,
+**Social and world (default)**: `BotWhisperable` 1, `WorldBotSayReply` 1, `PoliteWorldBots` 1, `InvitePassingPlayers` 0, `PartyBanter` 1,
 `SocialEmotes` 1, `Fidget` 1, `Playerbot.Chatter.Enabled` 1, `Playerbot.Interact.AutoAcceptInvites` friends_or_higher,
 `Playerbot.Interact.AutoLeaderHandover` 1, `Playerbot.World.Enable` 0 (`MaxBots` 100, `BotsPerPlayer` 25,
 `ActivityRadius` 300, `FriendlyPct` 100), `Playerbot.Population.TotalTarget` 0.
@@ -387,8 +411,8 @@ The module logs nothing unless `Logger.playerbot.v2=3` is set. Grep the server l
   bot walks over and you repeat the order. There is no standing "go and sell, then come back" order; the bots'
   own vendor upkeep (idle vendor visit, bag-full recovery) still runs when they are not in a group.
 - `loot all` is held in memory per bot and resets on relog.
-- `aggressive` / `defensive` / `passive` map onto the existing manual modes (resume, hold, stop); there is no
-  separate attack-stance engine.
+- `defensive` / `aggressive` / `passive` are the three owner stances (BotAI::OwnerStance Passive / Aggressive / NoFight); there
+  is no separate attack-stance engine.
 - Quest words depend on `Bot/Quest/QuestOrders.h` (section 10).
 - Right-click unit-menu entry of the addon and the whisper `!` prefix are **(unverified)**.
 

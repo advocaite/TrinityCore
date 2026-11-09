@@ -28,4 +28,7 @@ class WorldObject;
 // comes from world.classic_broadcast_text_type (imported from VMaNGOS broadcast_text.chat_type).
 void ClassicScriptText(uint32 broadcastTextId, WorldObject* source, Unit* target = nullptr);
 
+// VMaNGOS DoScriptText(textId, source, target, CHAT_TYPE_ZONE_EMOTE): the script overrides the text's own chat type.
+void ClassicScriptZoneEmote(uint32 broadcastTextId, WorldObject* source, Unit* target = nullptr);
+
 #endif

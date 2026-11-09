@@ -27,6 +27,7 @@
 #include <string>
 
 #include "AreaCap.h"
+#include "BotSize.h"
 #include "GateDuels.h"
 #include "Gathering.h"
 #include "MovingBubble.h"
@@ -59,6 +60,15 @@ public:
     WorldLoadFacts Load() const;
     // A bot this spawner placed (or is placing) in the world. The battleground filler never drafts these.
     bool IsPlaced(uint64 guid_low) const { return placed_.contains(guid_low) || pending_.contains(guid_low); }
+
+    // The world bot choice of the ForeverBots panel (Fleet/BotSize.h PopLevel), set by a GM in game (.bot population, add-on POP_REQ).
+    // It applies on the next world tick, is saved in the characters database and read back at the next start. nullopt = the files
+    // decide (Bots.* lines, Playerbot.World.Enable).
+    void SetPopulation(std::optional<PopLevel> level);
+    std::optional<PopLevel> Population() const { return pop_level_; }
+    // One plain line for the panel and the command: the choice, what it gives, and whether bots are still logging out.
+    std::string PopulationLine() const;
+    bool PopulationDraining() const { return drain_until_ms_ != 0; }
 
 private:
     struct Config
@@ -112,6 +122,15 @@ private:
         MovingRule moving;
         uint32 moving_spawn_factor = 2;    // x spawn rate while he moves
         float  moving_despawn_behind = 450.0f;   // bots this far behind a moving player log out (out of sight); 0 = only DespawnRadius
+        // Plain bot numbers (Bots.* lines, Fleet/BotSize.h). plain = at least one Bots.* line is set: max_bots, pool_max, city_bots,
+        // zone_bots (= zone_hi) and bots_per_player then come from them, each zone rolls its number in [zone_lo, zone_hi], the cap
+        // is shared evenly over the occupied places, and a place nobody is in for leave_zone_ms loses its bots fast. day_rhythm is off
+        // unless Bots.DayRhythm = 1 (the numbers are flat).
+        bool   plain            = false;
+        uint32 zone_lo          = 0;
+        uint32 zone_hi          = 0;
+        uint32 leave_zone_ms    = 20000;   // Bots.LeaveZoneSec: a zone without a player for this long logs its bots out (0 = old rule only)
+        std::string plain_summary;         // for the start line
     };
 
     struct Anchor
@@ -172,6 +191,8 @@ private:
     void DriveCrowd(uint32 now_ms, std::vector<Anchor> const& anchors);
     void DriveGateDuels(uint32 now_ms, std::vector<Anchor> const& anchors);   // pairs of bots duelling outside a capital gate (GateDuels.h)
     void DriveGatherings(uint32 now_ms, std::vector<Anchor> const& anchors);  // bots at a campfire and in a group outside the gate, talking (Gathering.h)
+    void FormStreetChats(uint32 now_ms, std::vector<Anchor> const& anchors);  // and small chats inside the cities where a player walks
+    bool GatherFree(BotId id, Player* p, uint32 now_ms) const;                // a world bot free to join a gathering or a chat now
     // Level range of the bots around this anchor: its zone's, lifted to MinLevel, except on Zephras Isle (Fleet/SkyborneIsle.h).
     void WindowFor(Anchor const& a, uint8& lo, uint8& hi) const;
     bool PlaceNear(Player* bot, Player* anchor);
@@ -181,6 +202,20 @@ private:
     std::unordered_map<uint32, uint32> AwakeByZone(Anchor const& a) const;
     uint32 SpawnRateFor(Anchor const& a) const;
     uint32 TargetFor(Anchor const& a) const;   // bubble size for this anchor: city_bots / zone_bots / bots_per_player
+    // Plain bot numbers: each occupied place's number for this tick (rolled zone number, even share of the cap) and how many
+    // players are in it; a place's roll and when it last had a player.
+    void PlanPlaces(uint32 now_ms, std::vector<Anchor> const& anchors, std::vector<Anchor> const& keep_anchors);
+    uint32 PlaceWantFor(Anchor const& a);
+    std::unordered_map<uint64, uint32> place_target_, place_players_, zone_roll_, place_seen_ms_;
+    std::string plain_logged_;
+    std::optional<PopLevel> pop_level_;       // the panel's choice (SetPopulation); loaded once from the database
+    bool   pop_loaded_ = false;
+    bool   pop_changed_ = false;              // SetPopulation since the last LoadConfig: the config is read again at once
+    bool   drain_requested_ = false;          // SetPopulation stepped down: the next tick starts the drain
+    uint32 drain_until_ms_ = 0;               // a step down / Off: every world bot not busy logs out until then (or none is left)
+    uint32 drain_started_ms_ = 0;
+    void LoadPopulationOnce();
+    void DriveDrain(uint32 now_ms, std::vector<Anchor> const& anchors);
 
     struct Ghost { Anchor a; uint32 until_ms; };   // where a player was before an instance / far jump: keeps its bots for a grace
     std::vector<Ghost> ghosts_;
@@ -275,8 +310,9 @@ private:
     // (learnt from the first fire a bot lights: 0 = not yet, UINT32_MAX = the spell gave none).
     struct GatherRing
     {
-        uint32 city = 0, ring = 0, since_ms = 0, until_ms = 0;
+        uint32 city = 0, ring = 0, since_ms = 0, until_ms = 0;   // ring: 0 campfire, 1 standing, Gathering::kStreetRing+ a street chat
         bool   sit = false;
+        std::string place;            // a street chat: where it stands ("the bank")
         float  cx = 0, cy = 0, cz = 0;
         std::vector<uint64> members;
         ObjectGuid fire;
@@ -295,6 +331,8 @@ private:
     uint32 last_gather_ms_ = 0;
     uint32 gather_form_ms_[6] = {};
     uint32 gather_why_ms_[6] = {};
+    uint32 street_form_ms_[6] = {};
+    uint32 street_seq_ = 0;
     uint32 campfire_entry_ = 0;
     uint64 gather_seq_ = 0;
     std::unordered_map<uint64, uint32> leaving_;   // bot guid low -> module ms when it was sent walking away

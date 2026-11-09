@@ -1,4 +1,5 @@
 #include "LfgBotFill.h"
+#include "Api/BotLanguage.h"
 
 #include "Chat.h"
 #include "Common.h"
@@ -22,6 +23,7 @@
 #include "Fleet/OwnerRegistry.h"
 #include "GroupFinderListings.h"
 #include "Services.h"
+#include "Session/BotSessionMgr.h"
 #include "Util/ConfigReader.h"
 
 #include <algorithm>
@@ -125,13 +127,15 @@ namespace
 
     uint8 RoleMaskOf(Player const* leader, ObjectGuid guid, uint8 cls, uint8 leaderRole)
     {
+        // a role the member's class cannot play is not counted: a rogue leader who picked Tank still needs a tank
         if (Group const* group = leader->GetGroup())
         {
-            if (uint8 const r = group->GetLfgRoles(guid) & (kLfgRoleTank | kLfgRoleHealer | kLfgRoleDamage))
+            if (uint8 const r = LfgRoleForClass(cls, group->GetLfgRoles(guid)))
                 return r;
         }
-        if (guid == leader->GetGUID() && leaderRole)
-            return leaderRole;
+        if (guid == leader->GetGUID())
+            if (uint8 const r = LfgRoleForClass(cls, leaderRole))
+                return r;
         return DefaultRoleForClass(cls);
     }
 
@@ -170,7 +174,7 @@ namespace
     void Tell(Player* player, std::string const& text)
     {
         if (player && player->GetSession())
-            ChatHandler(player->GetSession()).SendSysMessage(text.c_str());
+            Playerbot::BotLanguage::LocalizedHandler(player->GetSession()).SendSysMessage(text.c_str());
     }
 
     uint8 PickDpsClass()
@@ -179,7 +183,47 @@ namespace
         return classes[urand(0, std::size(classes) - 1)];
     }
 
-    // Adds the missing roles as the owner's companions. Returns how many were started.
+    // The group is at its party size and still lacks a tank or healer: a bot dealing damage (never a real player, never the leader)
+    // leaves to make room, as a dismissed companion does. False when the group has no such bot.
+    bool DropDamageBot(Player* leader, std::string& report)
+    {
+        Group* group = leader->GetGroup();
+        if (!group)
+            return false;
+        // a bot the owner has not saved on their roster goes first
+        Player* leave = nullptr;
+        bool leaveSaved = true;
+        for (GroupReference const& ref : group->GetMembers())
+        {
+            Player* member = ref.GetSource();
+            if (!member || member == leader || !member->GetSession() || !member->GetSession()->IsBot())
+                continue;
+            if (RoleMaskOf(leader, member->GetGUID(), member->GetClass(), 0) & (kLfgRoleTank | kLfgRoleHealer))
+                continue;
+            bool const saved = Playerbot::Services::Owners().GetOwner(member->GetGUID().GetCounter()).saved;
+            if (!leave || (leaveSaved && !saved))
+            {
+                leave = member;
+                leaveSaved = saved;
+            }
+        }
+        if (!leave)
+            return false;
+        ObjectGuid const guid = leave->GetGUID();
+        std::string const name = leave->GetName();
+        bool const companion = Playerbot::Services::Owners().GetOwner(guid.GetCounter()).account_id == leader->GetSession()->GetAccountId();
+        if (!group->RemoveMember(guid, GROUP_REMOVEMETHOD_LEAVE))
+            return false;
+        // the leader's companion is dismissed (logged out, as `.bot dismiss`); a world bot goes back to its own life
+        if (companion)
+            Playerbot::Services::SessionMgr().LogoutBot(guid);
+        TC_LOG_INFO("playerbot.v2", "[lfg] {}: {} (damage) left the full group to make room for a tank or healer", leader->GetName(), name);
+        report += " " + name + " left to make room.";
+        return true;
+    }
+
+    // Adds the missing roles as the owner's companions. Returns how many were started. A tank or healer missing from a group that is
+    // already at its party size takes the place of a damage dealer bot.
     uint32 FillGap(Player* leader, LfgRoleGap gap, uint32 size, std::string& report)
     {
         uint32 started = 0;
@@ -187,6 +231,14 @@ namespace
         {
             for (uint8 i = 0; i < count; ++i)
             {
+                if (Group const* group = leader->GetGroup(); group && group->GetMembersCount() >= size)
+                {
+                    if (role == Playerbot::Role::Dps || !DropDamageBot(leader, report))
+                    {
+                        report += " The group is full.";
+                        return;
+                    }
+                }
                 // A group of more than 5 is a raid: the first companion makes the group, the next ones need it converted before they
                 // are invited. The open-world companion cap does not apply here, the dungeon's own limit does (inside an instance).
                 if (size > MAX_GROUP_SIZE)
@@ -389,15 +441,22 @@ bool LfgFillNow(Player* leader, Playerbot::Role ownRole, std::string& msg)
         size = itr->second;
     if (Group const* group = leader->GetGroup(); group && group->isRaidGroup())
         size = std::max<uint32>(size, 10);
-    LfgRoleGap const gap = GapOf(leader, ownRole, size);
+    LfgRoleGap gap;
+    std::string report;
+    uint32 const started = LfgFillToSize(leader, ownRole, size, gap, report);
     if (!gap.Total())
     { msg = "Your group is already full: " + std::to_string(size) + " players."; return true; }
-    std::string report;
-    uint32 const started = FillGap(leader, gap, size, report);
     TC_LOG_INFO("playerbot.v2", "[lfg] {}: .bot lfg, party of {}, missing {} -> {} bot(s) started.{}", leader->GetName(), size, GapText(gap), started, report);
     msg = std::to_string(started) + " bot(s) are joining (" + GapText(gap) + " missing)." + report;
     g_pending.erase(leader->GetGUID().GetCounter());
     return true;
+}
+
+uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report)
+{
+    gap = GapOf(leader, ownRole, size);
+    g_lastSize[leader->GetGUID().GetCounter()] = size;
+    return gap.Total() ? FillGap(leader, gap, size, report) : 0;
 }
 
 namespace

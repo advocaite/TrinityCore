@@ -10,6 +10,7 @@
 #include "../Util/ConfigReader.h"
 #include "../Fleet/BotGuildCharter.h"
 #include "../Fleet/BotGuildMgr.h"
+#include "GuildWhisperInvite.h"
 #include "../Fleet/BotPopulationManager.h"   // SwapResistGear
 #include "../Fleet/CraftOrderBoard.h"
 #include "../Fleet/JunkQuestResolver.h"
@@ -316,6 +317,7 @@ struct IntentVisitor
     // VendorBuyByEntry / VendorBuy / VendorSell / VendorSellTrash / RepairAll /
     // VendorBuyByCategory bundled into VendorIntent.
     Result operator()(TogglePvpIntent const&)              { return api.toggle_pvp(); }
+    Result operator()(SetPvpIntent const& i)               { return api.set_pvp(i.on); }
     Result operator()(AddFriendIntent const& i)            { return api.add_friend(i.name, i.note); }
     Result operator()(RemoveFriendIntent const& i)         { return api.remove_friend(i.friend_guid); }
     Result operator()(AddIgnoreIntent const& i)            { return api.add_ignore(i.name); }
@@ -564,6 +566,13 @@ struct IntentVisitor
                 Services::Population().SwapResistGear(bot, op.school);
                 return Result::Ok;
             }
+            else if constexpr (std::is_same_v<T, EconomyOp::FightCloak>)
+            {
+                Player* bot = api.player();
+                if (!bot || (op.on && !Services::Config().raid_onyxia_cloak())) return Result::ServerRefused;
+                Services::Population().SwapFightCloak(bot, op.on);
+                return Result::Ok;
+            }
             else                                                      return Result::Other;
         }, ei.op);
     }
@@ -633,6 +642,8 @@ struct IntentVisitor
                 if (!target) return Result::InvalidTarget;
                 uint64 gid = 0;
                 const auto r = V2::BotRecruitToGuild(bot, target, gid);
+                if (r == V2::RecruitResult::Invited)
+                    return Result::Ok;                  // a real player: invite sent, he is not a member yet
                 if (r != V2::RecruitResult::Ok)
                     return Result::ServerRefused;
                 // Stamp join-date for hygiene.
@@ -657,6 +668,8 @@ struct IntentVisitor
                     "<{}> recruiting all levels, friendly social guild — /w {} for invite",
                     g->GetName(), bot->GetName());
                 ch->Say(bot->GetGUID(), msg, /*lang*/ 0 /*LANG_UNIVERSAL — channel system overrides per-channel*/);
+                // "/w <name> for invite": a whispered "inv" / "invite pls" to this bot now gets the guild invite.
+                V2::GuildWhisperInvite::NoteOffer(bot->GetGUID().GetCounter(), 0);
                 return Result::Ok;
             }
             else
@@ -940,7 +953,7 @@ size_t V2::Module::DrainIntents()
                     if (BotAI* botai = reg.ai(id))
                     {
                         if (r == Result::OutOfRange)
-                            botai->note_cast_out_of_range();
+                            botai->note_cast_out_of_range(GameTime::GetGameTimeMS());
                         else if (r == Result::Ok)
                             botai->reset_cast_oor();
                     }

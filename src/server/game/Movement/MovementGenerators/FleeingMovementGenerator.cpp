@@ -16,6 +16,7 @@
  */
 
 #include "FleeingMovementGenerator.h"
+#include "ClassicFleeAngle.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "MoveSpline.h"
@@ -23,8 +24,8 @@
 #include "ObjectAccessor.h"
 #include "PathGenerator.h"
 
-#define MIN_QUIET_DISTANCE 28.0f
-#define MAX_QUIET_DISTANCE 43.0f
+#define MIN_QUIET_DISTANCE ClassicFleeAngle::MinQuietDistance
+#define MAX_QUIET_DISTANCE ClassicFleeAngle::MaxQuietDistance
 
 FleeingMovementGenerator::FleeingMovementGenerator(ObjectGuid fleeTargetGUID,
     Scripting::v2::ActionResultSetter<MovementStopReason>&& scriptResult /*= {}*/) : _fleeTargetGUID(fleeTargetGUID), _timer(0)
@@ -178,24 +179,18 @@ void FleeingMovementGenerator::GetPoint(Unit* owner, Position& position) const
         casterAngle = frand(0.0f, 2.0f * float(M_PI));
     }
 
-    float distance, angle;
+    float distance;
     if (casterDistance < MIN_QUIET_DISTANCE)
-    {
         distance = frand(0.4f, 1.3f) * (MIN_QUIET_DISTANCE - casterDistance);
-        angle = casterAngle + frand(-float(M_PI) / 8.0f, float(M_PI) / 8.0f);
-    }
     else if (casterDistance > MAX_QUIET_DISTANCE)
-    {
         distance = frand(0.4f, 1.0f) * (MAX_QUIET_DISTANCE - MIN_QUIET_DISTANCE);
-        angle = -casterAngle + frand(-float(M_PI) / 4.0f, float(M_PI) / 4.0f);
-    }
     else // we are inside quiet range
-    {
         distance = frand(0.6f, 1.2f) * (MAX_QUIET_DISTANCE - MIN_QUIET_DISTANCE);
-        angle = frand(0.0f, 2.0f * float(M_PI));
-    }
 
-    owner->MovePositionToFirstCollision(position, distance, angle);
+    // Classic 1.60: casterAngle is a world angle (attacker -> unit); the step is chosen in world terms (away when near, back toward
+    // the attacker when far) and handed over relative to the unit's facing, which is what MovePositionToFirstCollision expects.
+    float const worldAngle = ClassicFleeAngle::StepWorldAngle(casterDistance, casterAngle, frand(-1.0f, 1.0f), frand(0.0f, 2.0f * float(M_PI)));
+    owner->MovePositionToFirstCollision(position, distance, ClassicFleeAngle::ToFacingRelative(worldAngle, owner->GetOrientation()));
 }
 
 //---- TimedFleeingMovementGenerator

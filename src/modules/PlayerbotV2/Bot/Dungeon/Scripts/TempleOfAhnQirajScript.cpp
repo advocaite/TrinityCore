@@ -93,20 +93,17 @@ public:
             26139,  // Ground Rupture
         };
         // Boss progression — entries from TC's temple_of_ahnqiraj.h.
-        // C'Thun has two phases (Eye 15589 / Body 15727) — listing both.
+        // The raid rules (Raid/RaidEncounterData_AQ40.cpp) replace this list (ApplyRaidAdvice); it stays in step with them: one entry
+        // per encounter, index for index with the waypoints below (the trio and the twins are one encounter each; Ouro has no
+        // static spawn; the Classic data spawns C'Thun 15727, not the Eye 15589).
         a.bosses = {
             15263,  // Prophet Skeram
-            15544,  // Vem (Bug Trio)
-            15511,  // Lord Kri (Bug Trio)
-            15543,  // Princess Yauj (Bug Trio)
+            15544,  // Vem (Bug Trio, with Kri and Yauj)
             15516,  // Battleguard Sartura
             15510,  // Fankriss the Unyielding
             15299,  // Viscidus
             15509,  // Princess Huhuran
-            15275,  // Emperor Vek'nilash
-            15276,  // Emperor Vek'lor
-            15517,  // Ouro
-            15589,  // The Eye of C'Thun
+            15275,  // Emperor Vek'nilash (Twin Emperors, with Vek'lor)
             15727,  // C'Thun (final body phase)
         };
         // Progression waypoints — boss spawn positions from
@@ -120,8 +117,7 @@ public:
             { -8085.4f, 1196.7f,  -92.0f },   // Fankriss the Unyielding
             { -7992.4f,  908.2f,  -52.6f },   // Viscidus
             { -8515.8f, 1693.7f,  -90.5f },   // Princess Huhuran
-            { -9023.7f, 1176.2f, -104.2f },   // Emperor Vek'nilash
-            { -8868.3f, 1206.0f, -104.2f },   // Emperor Vek'lor
+            { -9023.7f, 1176.2f, -104.2f },   // Twin Emperors (Vek'nilash)
             { -8578.8f, 1986.2f,  100.3f },   // C'Thun (Eye + final body phase)
         };
         // Kill order and boss list from the raid rules (Bot/Raid); the raid brain owns the mechanics here.

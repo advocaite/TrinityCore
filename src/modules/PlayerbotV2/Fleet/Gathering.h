@@ -4,6 +4,10 @@
 // reads. The driver is WorldBotSpawner::DriveGatherings (it uses the gate GateDuels found); the rule is idle:gathering
 // (Bot/States/Rules/AmbientRules.cpp). With Playerbot.ChatModel on, the lines come from the chat model instead of the scripts
 // (BotChatModel::AskSay). Tested in tests/game/ClassicGathering.cpp.
+//
+// Street chats (Playerbot.World.Gathering.CityChats): inside a capital, where a real player walks, two to four world bots stand
+// together by the bank, the auction house, the inn, a shop or a mailbox, turned to each other, and talk face to face in /say with
+// a gesture on each line. Same driver, same talk; their ring numbers start at kStreetRing.
 #pragma once
 
 #include <algorithm>
@@ -12,6 +16,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -60,6 +65,74 @@ inline void SplitRings(std::size_t want, std::size_t& fire, std::size_t& stand)
     stand = std::min(stand, kMaxRing);
     if (fire < kMinRing) fire = 0;
 }
+
+// ---- Street chats -------------------------------------------------------------------------------------------------------------------
+
+constexpr std::uint32_t kStreetRing      = 100u;      // ring numbers from here on are street chats inside a city
+constexpr std::size_t   kStreetMin       = 2;         // two people make a chat
+constexpr std::size_t   kStreetMax       = 4;
+constexpr float         kStreetRadius    = 1.6f;      // closer than the gate's standing group: a few people talking
+constexpr float         kStreetFromNpc   = 7.0f;      // the chat stands this far from the bank / auctioneer / mailbox, toward the player
+constexpr float         kStreetApart     = 18.0f;     // two chats are at least this far apart
+constexpr std::uint32_t kStreetStayMinMs = 180000u;   // a chat lasts 3 to 6 minutes, then they go about their business
+constexpr std::uint32_t kStreetStayMaxMs = 360000u;
+
+inline bool IsStreet(std::uint32_t ring) { return ring >= kStreetRing; }
+
+// Where a chat by an NPC at (nx, ny) stands: kStreetFromNpc yards from it toward the player at (px, py) (so it is in the walkway he
+// uses, not behind the counter), or along +x when he stands on the NPC.
+inline Pt StreetCenter(float nx, float ny, float px, float py)
+{
+    float dx = px - nx, dy = py - ny;
+    float const d = std::sqrt(dx * dx + dy * dy);
+    if (d < 1.0f) { dx = 1.0f; dy = 0.0f; }
+    else { dx /= d; dy /= d; }
+    float const r = std::min(kStreetFromNpc, std::max(d - 2.0f, 3.0f));
+    return { nx + dx * r, ny + dy * r };
+}
+
+// The gesture that goes with a line said face to face: a question, a laugh, a yes or a no, an exclamation, or plain talking.
+constexpr std::uint16_t kGestureTalk = 1, kGestureQuestion = 6, kGestureLaugh = 11, kGestureExclaim = 5, kGestureYes = 273,
+                        kGestureNo = 274, kGesturePoint = 25;
+inline std::uint16_t GestureFor(std::string const& line)
+{
+    std::string l;
+    for (char c : line) l += char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    std::string const padded = " " + l + " ";
+    auto has = [&](char const* w)
+    {
+        std::string const word = std::string(" ") + w;
+        for (std::size_t at = padded.find(word); at != std::string::npos; at = padded.find(word, at + 1))
+        {
+            char const after = padded[at + word.size()];
+            if (!(after >= 'a' && after <= 'z'))
+                return true;
+        }
+        return false;
+    };
+    if (has("lol") || has("haha") || has("hah") || has("lmao") || has("rofl") || has("hehe") || l.find("haha") != std::string::npos)
+        return kGestureLaugh;
+    if (!l.empty() && l.find('?') != std::string::npos)
+        return kGestureQuestion;
+    if (has("no") || has("nah") || has("nope") || has("never"))
+        return kGestureNo;
+    if (has("yes") || has("yeah") || has("yep") || has("sure") || has("aye") || has("agreed") || has("true") || has("exactly"))
+        return kGestureYes;
+    if (has("look") || has("over there") || has("that one") || has("see that"))
+        return kGesturePoint;
+    if (l.find('!') != std::string::npos)
+        return kGestureExclaim;
+    return kGestureTalk;
+}
+
+// Topics for a chat in the city.
+inline char const* const kStreetTopics[] = {
+    "auction house prices", "what you are saving gold for", "a mount someone just bought", "where to level next",
+    "a dungeon group for tonight", "the bank being too small", "which profession pays", "the city guards",
+    "a rare drop someone almost got", "joining a guild", "the enemy faction raiding a town", "an annoying quest with a bad drop rate",
+    "the inn's food and ale", "which class is the most fun", "a duel someone just lost", "what you did today",
+};
+constexpr std::size_t kStreetTopicCount = sizeof(kStreetTopics) / sizeof(kStreetTopics[0]);
 
 // ---- Talk -------------------------------------------------------------------------------------------------------------------------
 // A script is a short exchange between two or three people. A line names its speaker (0, 1, 2: the first, second, third talker of the
@@ -170,13 +243,24 @@ inline std::vector<Script> const& Scripts()
     return s;
 }
 
-// The scripts a ring of `talkers` people on this side can say.
-inline std::vector<std::size_t> ScriptsFor(bool alliance, std::size_t talkers)
+// A script with lines that only make sense outside the gate, around a fire or under the sky.
+inline bool OutdoorScript(Script const& s)
+{
+    static constexpr char const* kOutdoor[] = { "fire", "stew", "stars", "out here", "road", "the view", "sit, rest" };
+    for (Line const& ln : s.lines)
+        for (char const* w : kOutdoor)
+            if (std::string_view(ln.text).find(w) != std::string_view::npos)
+                return true;
+    return false;
+}
+
+// The scripts a ring of `talkers` people on this side can say; `street`: none of the ones about the fire or the open road.
+inline std::vector<std::size_t> ScriptsFor(bool alliance, std::size_t talkers, bool street = false)
 {
     std::vector<std::size_t> out;
     auto const& all = Scripts();
     for (std::size_t i = 0; i < all.size(); ++i)
-        if (all[i].talkers <= talkers && (all[i].faction == 0 || all[i].faction == (alliance ? 1u : 2u)))
+        if (all[i].talkers <= talkers && (all[i].faction == 0 || all[i].faction == (alliance ? 1u : 2u)) && !(street && OutdoorScript(all[i])))
             out.push_back(i);
     return out;
 }

@@ -848,9 +848,9 @@ struct classic_boss_thaddius : public ScriptedAI
             RemoveDebuffsFromPlayer(pPlayer);
             pPlayer->CastSpell(pPlayer, SPELL_POSITIVE_CHARGE_APPLY, true);
         }
-        // TODO(classic): VMaNGOS source bug kept as-is: this loop starts at 0 (not firstHalf), so it removes the
-        // positive charge again and every player ends up with the negative charge.
-        for (size_t i = 0; i < playerVec.size(); i++)
+        // The second half gets the negative charge. (VMaNGOS starts this loop at 0, which strips the positive charge again and
+        // leaves every player negative; vanilla splits the raid in two.)
+        for (size_t i = firstHalf; i < playerVec.size(); i++)
         {
             Player* pPlayer = playerVec[i];
             RemoveDebuffsFromPlayer(pPlayer);

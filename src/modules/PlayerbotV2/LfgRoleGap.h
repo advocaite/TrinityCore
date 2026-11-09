@@ -4,6 +4,7 @@
 
 #include "Define.h"
 
+#include <algorithm>
 #include <span>
 
 namespace Playerbot::V2
@@ -54,28 +55,83 @@ inline uint32 LfgJoinedFillSeconds(uint32 configuredSeconds)
     return configuredSeconds < 60 ? configuredSeconds : 60;
 }
 
-// The places a group of `size` (default a 5-man party) still lacks after the real members have taken theirs. `memberRoles`
-// holds one role mask per real member (0 = unknown: counts as damage). A member takes the first of tank, healer, damage
-// from their mask whose place is still free, else any free place; members past the group size take none.
-inline LfgRoleGap ComputeLfgRoleGap(std::span<uint8 const> memberRoles, uint32 size = kLfgMinPartySize)
+// How the places of a group of `size` are taken and what it still needs. `gap` is what the bots must bring; `dropDamage` is how many
+// damage dealers past the damage places must leave so the tank and healer places can be filled (a full group of ten without a tank
+// gives up a damage dealer for one).
+struct LfgSeatPlan
 {
-    LfgRoleGap gap = LfgRoleMix(size);
+    LfgRoleGap gap{};
+    uint8 dropDamage = 0;
+};
+
+// `memberRoles` holds one role mask per member (0 = unknown: counts as damage). A member takes the first of tank, healer, damage
+// from their mask whose place is still free; a tank or healer whose own places are taken can deal damage in a free damage place.
+// A damage dealer never takes a tank or healer place: three healers and seven damage dealers in a ten-man group still lack a tank
+// (Blackrock Spire, 2026-11-08: the seventh damage dealer took the tank place and the fill thought the group was complete). The
+// tank and healer places come before the damage places: when the group has no room left for them, damage dealers past the damage
+// places are to make room (dropDamage), and the damage places get only the room that is left. A place no room can be made for is
+// not asked for.
+inline LfgSeatPlan PlanLfgSeats(std::span<uint8 const> memberRoles, uint32 size = kLfgMinPartySize)
+{
+    LfgSeatPlan plan;
+    LfgRoleGap& gap = plan.gap;
+    gap = LfgRoleMix(size);
     uint32 const places = uint32(gap.Total());
-    uint32 seated = 0;
+    uint32 surplusDamage = 0;
     for (uint8 mask : memberRoles)
     {
-        if (++seated > places)
-            break;
         if (!mask)
             mask = kLfgRoleDamage;
         if ((mask & kLfgRoleTank) && gap.tank)          --gap.tank;
         else if ((mask & kLfgRoleHealer) && gap.healer) --gap.healer;
-        else if ((mask & kLfgRoleDamage) && gap.dps)    --gap.dps;
         else if (gap.dps)                               --gap.dps;
-        else if (gap.healer)                            --gap.healer;
-        else if (gap.tank)                              --gap.tank;
+        else if (!(mask & (kLfgRoleTank | kLfgRoleHealer)))
+            ++surplusDamage;
     }
-    return gap;
+    uint32 const members = uint32(memberRoles.size());
+    uint32 const freePlaces = places > members ? places - members : 0;
+    uint32 const needed = uint32(gap.tank) + gap.healer;
+    if (needed > freePlaces)
+    {
+        plan.dropDamage = uint8(std::min<uint32>(needed - freePlaces, surplusDamage));
+        gap.dps = 0;
+        // no more room can be made (the extra members are real players, or tanks and healers): the tank comes before a healer
+        uint32 room = freePlaces + plan.dropDamage;
+        uint32 const tank = std::min<uint32>(gap.tank, room);
+        room -= tank;
+        gap.tank = uint8(tank);
+        gap.healer = uint8(std::min<uint32>(gap.healer, room));
+    }
+    else
+        gap.dps = uint8(std::min<uint32>(gap.dps, freePlaces - needed));
+    return plan;
+}
+
+// The role bits a class can play (class ids as the game numbers them: 1 warrior, 2 paladin, 3 hunter, 4 rogue, 5 priest, 6 death
+// knight, 7 shaman, 8 mage, 9 warlock, 10 monk, 11 druid, 12 demon hunter, 13 evoker). Every class can deal damage.
+inline uint8 LfgClassRoles(uint8 cls)
+{
+    switch (cls)
+    {
+        case 1: case 6: case 12:  return kLfgRoleTank | kLfgRoleDamage;
+        case 2: case 10: case 11: return kLfgRoleTank | kLfgRoleHealer | kLfgRoleDamage;
+        case 5: case 7: case 13:  return kLfgRoleHealer | kLfgRoleDamage;
+        default:                  return kLfgRoleDamage;
+    }
+}
+
+// A member's role mask with the roles their class cannot play taken out (0 when none is left: the caller then uses the class's own
+// role). A rogue who picked Tank in the finder is not a tank: Scarlet Monastery, 2026-11-08, the rogue leader counted as the tank and
+// the bots brought a healer and three damage dealers, no tank.
+inline uint8 LfgRoleForClass(uint8 cls, uint8 mask)
+{
+    return uint8(mask & (kLfgRoleTank | kLfgRoleHealer | kLfgRoleDamage) & LfgClassRoles(cls));
+}
+
+// The places a group of `size` (default a 5-man party) still lacks after its members have taken theirs (PlanLfgSeats).
+inline LfgRoleGap ComputeLfgRoleGap(std::span<uint8 const> memberRoles, uint32 size = kLfgMinPartySize)
+{
+    return PlanLfgSeats(memberRoles, size).gap;
 }
 
 // What a pending Group Finder listing does at a check. `msLeft` is the time left of the wait (<= 0 when it is over),

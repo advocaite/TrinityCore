@@ -578,8 +578,22 @@ struct classic_go_sapphiron_birth : public GameObjectAI
 
     explicit classic_go_sapphiron_birth(GameObject* go) : GameObjectAI(go), m_pInstance(GetClassicNaxxInstance(go)) { }
 
-    // VMaNGOS GameObjectAI::OnUse(Unit*); TC calls OnGossipHello from GameObject::Use (trap trigger) for players
+    // VMaNGOS GameObjectAI::OnUse(Unit*). The birth is a trap with no spell (radius 80, one charge): GameObject::Update triggers it by
+    // its loot state (GO_READY -> GO_ACTIVATED with the player found in reach) and never calls Use, so OnGossipHello alone never ran and
+    // Sapphiron was never summoned (he has no creature row; upstream go_sapphiron_birth answers the same hook).
+    void OnLootStateChanged(uint32 state, Unit* unit) override
+    {
+        if (state == GO_ACTIVATED && unit)
+            if (Player* player = unit->ToPlayer())
+                Birth(player);
+    }
+
     bool OnGossipHello(Player* user) override
+    {
+        return Birth(user);
+    }
+
+    bool Birth(Player* user)
     {
         if (!user || !user->IsAlive() || user->IsGameMaster())
             return false;

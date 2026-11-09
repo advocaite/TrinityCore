@@ -104,15 +104,16 @@ public:
             23462,  // Fire Nova
         };
         // Boss progression — entries from TC's blackrock_spire.h.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             9196,   // Highlord Omokk
             9236,   // Shadow Hunter Vosh'gajin
             9237,   // War Master Voone
             10596,  // Mother Smolderweb
-            10584,  // Urok Doomhowl
             9736,   // Quartermaster Zigris
             10220,  // Halycon
-            10268,  // Gizrul the Slavener
             9568,   // Overlord Wyrmthalak (final)
             9816,   // Pyroguard Emberseer (intro / event)
         };

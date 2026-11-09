@@ -42,6 +42,13 @@ inline bool LeaveMob(BotSnapshotView const& s, NearbyUnit const& u)
     return c != WorkAreas::Claim::None;
 }
 
+// Leave an elite or rare to the players: a bot of the world does not open on one (a quest boss with a long respawn was gone before the
+// player who needed it arrived). It still fights one that attacks it, and a player's own bots fight beside him as before.
+inline bool LeaveElite(BotSnapshotView const& s, NearbyUnit const& u)
+{
+    return u.is_elite_or_rare && Applies(s);
+}
+
 // A grind spot a real player is standing in: pick another.
 inline bool SpotTaken(BotSnapshotView const& s, float x, float y)
 {

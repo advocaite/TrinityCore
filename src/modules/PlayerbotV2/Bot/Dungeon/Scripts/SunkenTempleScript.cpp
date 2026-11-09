@@ -60,13 +60,15 @@ public:
         // ST is a 2-tier troll dungeon; the dragonkin tier (5719-5722)
         // is fought sequentially before Jammal'an at the bottom and
         // Hakkar/Eranikus at the apex.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             5719,   // Morphaz (Green Dragonkin)
             5720,   // Weaver
             5721,   // Dreamscythe
             5722,   // Hazzas
             5710,   // Jammal'an the Prophet
-            8443,   // Avatar of Hakkar
             5709,   // Shade of Eranikus (final)
         };
         // Progression waypoints — boss spawn positions from world.creature

@@ -11,6 +11,15 @@ constexpr int32_t kDrinkSayBelowManaPct = 80;
 // Quiet time per bot between two lines (ms). The drink aura of one item lasts about 20-30 s, a full recovery several items.
 constexpr uint32_t kDrinkSayQuietMs = 60000;
 
+// Once per rest (the owner, 2026-10-29: Gun and Elentinari said "drinking" over and over at Thorium Point): a drink within this long of
+// the bot last eating or drinking belongs to the same rest (the next item of a long drink, or a sit again after a step) and says nothing.
+constexpr uint32_t kDrinkSayRestGapMs = 30000;
+
+constexpr bool SameRest(uint32_t since_resting_ms)
+{
+    return since_resting_ms < kDrinkSayRestGapMs;
+}
+
 // `player_led`: the bot is in a group with a player who leads it. `mana_user`: it has a mana pool.
 constexpr bool ShouldSayDrinking(bool player_led, bool mana_user, int32_t mana_pct, bool said_recently)
 {

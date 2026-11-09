@@ -25,11 +25,17 @@ namespace Playerbot::Raid {
         r.interruptFirst.push_back(26071);
         r.interruptFirst.push_back(26143);
 
+        // One entry per encounter, in the order of the clear and index for index with the script's progression waypoints: the
+        // owed boss is bosses[encounters done] and is steered to by the waypoint at that index. The bug trio and the twins are one
+        // encounter each (temple_of_ahnqiraj.h DATA_BUG_TRIO / DATA_TWIN_EMPERORS), so Vem stands for the trio and Vek'nilash for
+        // the twins; Ouro has no static spawn (raised from his mound) and no waypoint. With all twelve listed, the waypoints
+        // answered the wrong boss from the third on. Kri, Yauj, Vek'lor and Ouro are boss rank, so RaidBrain still reads them as
+        // bosses (detail::IsBoss).
         r.bosses = { 15263,                 // The Prophet Skeram
-                     15543, 15511, 15544,   // Bug trio: Yauj, Kri, Vem
+                     15544,                 // Bug trio (Vem, with Kri and Yauj)
                      15516, 15510, 15299,   // Sartura, Fankriss, Viscidus
-                     15509, 15275, 15276,   // Huhuran, Twin Emperors (Vek'nilash, Vek'lor)
-                     15517, 15727 };        // Ouro, C'Thun
+                     15509, 15275,          // Huhuran, Twin Emperors (Vek'nilash, with Vek'lor)
+                     15727 };               // C'Thun
 
         // ---------------------------------------------------------------------------------------------------------------
         // TRASH

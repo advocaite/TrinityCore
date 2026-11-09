@@ -52,7 +52,8 @@ public:
     static bool SayOn();
 
     // World thread (from DeliverReplies): once chat is on, and again when the model, host or port changes, sends a one-token
-    // request so Ollama loads the model before the first player line instead of during it.
+    // request so Ollama loads the model before the first player line instead of during it. Not while the bot bridge is set to
+    // answer chat (Playerbot.Bridge.Enable and .Chat): its program brings its own model.
     static void WarmUp();
 
     // World thread, from Module::OnWorldUpdate.

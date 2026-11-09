@@ -362,6 +362,10 @@ class TC_GAME_API Spell
         void EffectChargeDest();
         void EffectProspecting();
         void EffectMilling();
+        void EffectSalvageItem();
+        void EffectLoot();
+        void StockClassicCrate();
+        void StoreClassicSpellLoot(Player* player, uint32 lootId);
         void EffectRenamePet();
         void EffectSendTaxi();
         void EffectKnockBack();

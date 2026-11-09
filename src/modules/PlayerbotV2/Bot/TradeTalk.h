@@ -17,14 +17,35 @@ inline bool Has(std::string const& hay, char const* needle)
     return pad_h.find(pad_n) != std::string::npos;
 }
 
-// "what do you have", "what are you selling", "show me your wares", "trade list", "anything for sale".
-inline bool IsInventoryQuestion(std::string const& norm)
+// Russian letters in lower case, and ё as е, so "Что продаёшь" matches "что продаешь" (the line is UTF-8; only ASCII is lowered
+// before it gets here).
+inline std::string FoldRussian(std::string const& in)
 {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i)
+    {
+        unsigned char const c = static_cast<unsigned char>(in[i]);
+        unsigned char const n = i + 1 < in.size() ? static_cast<unsigned char>(in[i + 1]) : 0;
+        if (c == 0xD0 && n >= 0x90 && n <= 0x9F)        { out += char(0xD0); out += char(n + 0x20); ++i; }   // А-П -> а-п
+        else if (c == 0xD0 && n >= 0xA0 && n <= 0xAF)   { out += char(0xD1); out += char(n - 0x20); ++i; }   // Р-Я -> р-я
+        else if ((c == 0xD0 && n == 0x81) || (c == 0xD1 && n == 0x91)) { out += char(0xD0); out += char(0xB5); ++i; }   // Ё ё -> е
+        else out += char(c);
+    }
+    return out;
+}
+
+// "what do you have", "what are you selling", "show me your wares", "trade list", "anything for sale", and the same in Russian.
+inline bool IsInventoryQuestion(std::string const& line)
+{
+    std::string const norm = FoldRussian(line);
     static constexpr char const* kPhrases[] = {
         "what do you have", "what have you got", "what you got", "what do you got", "what ya got", "what do you sell", "what are you selling",
         "what you selling", "what can i buy", "anything for sale", "got anything for sale", "anything to sell", "what is for sale",
         "whats for sale", "what's for sale", "show me your wares", "your wares", "trade list", "your goods", "what are you selling",
         "what is in your bags", "whats in your bags", "what do you carry", "show me what you have", "list your items", "for sale",
+        "что у тебя есть", "что продаешь", "что ты продаешь", "что продаете", "что вы продаете", "что продается",
+        "на продажу", "что можно купить", "что купить", "покажи товар", "покажи товары", "список товаров", "что в сумках",
     };
     for (char const* p : kPhrases)
         if (Has(norm, p)) return true;
@@ -40,10 +61,11 @@ struct Order
 };
 
 // "buy 2", "buy #2", "i'll take 2", "i want 2", "buy linen cloth", "ill take the linen cloth".
-inline Order ParseOrder(std::string const& norm)
+inline Order ParseOrder(std::string const& line)
 {
+    std::string const norm = FoldRussian(line);
     Order o;
-    static constexpr char const* kVerbs[] = { "buy", "take", "want", "purchase" };
+    static constexpr char const* kVerbs[] = { "buy", "take", "want", "purchase", "куплю", "купить", "покупаю", "беру", "возьму" };
     size_t pos = std::string::npos;
     size_t vlen = 0;
     for (char const* v : kVerbs)
@@ -55,9 +77,10 @@ inline Order ParseOrder(std::string const& norm)
         if (p != std::string::npos && (pos == std::string::npos || p < pos)) { pos = p; vlen = needle.size(); }
     }
     if (pos == std::string::npos) return o;
-    o.buy_verb = norm.compare(pos, 3, "buy") == 0 || norm.compare(pos, 8, "purchase") == 0;
+    o.buy_verb = norm.compare(pos, 3, "buy") == 0 || norm.compare(pos, 8, "purchase") == 0 ||
+                 norm.compare(pos, std::string("куп").size(), "куп") == 0;
     std::string rest = norm.substr(pos + vlen);
-    for (char const* filler : { "the ", "a ", "an ", "number ", "no ", "item ", "that ", "me " })
+    for (char const* filler : { "the ", "a ", "an ", "number ", "no ", "item ", "that ", "me ", "номер ", "\xE2\x84\x96 " })
     {
         std::string f(filler);
         if (rest.compare(0, f.size(), f) == 0) rest.erase(0, f.size());

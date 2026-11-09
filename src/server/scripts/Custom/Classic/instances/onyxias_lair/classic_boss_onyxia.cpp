@@ -22,6 +22,7 @@
 
 #include "ScriptMgr.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
 #include "MapReference.h"
 #include "MotionMaster.h"
@@ -130,6 +131,7 @@ struct classic_boss_onyxia : public ScriptedAI
     uint32 m_uiMovementTimer = 0;
     uint32 m_uiDeepBreathTimer = 0;
     bool   m_bDeepBreathIsCasting = false;
+    bool   m_bBreathFlight = false;          // flying the Deep Breath pass to the opposite waypoint
     uint32 m_uiMovePoint = 7;
 
     ClassicOnyxMove const* m_pPointData = nullptr;
@@ -145,6 +147,7 @@ struct classic_boss_onyxia : public ScriptedAI
     uint32 m_uiAggroRadiusTimer = 0;
     uint32 m_uiLeashCheckTimer = 0;
     uint32 m_uiSummonCheckTimer = 0;
+    uint32 m_uiPhaseDiagTimer = 0;
 
     InstanceScript* m_pInstance;
 
@@ -167,6 +170,7 @@ struct classic_boss_onyxia : public ScriptedAI
         m_pPointData           = GetMoveData();
         m_uiDeepBreathTimer    = 0;
         m_bDeepBreathIsCasting = false;
+        m_bBreathFlight        = false;
 
         m_uiSummonWhelpsTimer  = 5000;
         m_uiWhelpTimer         = 1000;
@@ -442,7 +446,10 @@ struct classic_boss_onyxia : public ScriptedAI
             {
                 me->SetSpeedRate(MOVE_RUN, ONYXIA_BREATH_SPEED);
                 if (m_pPointData)
+                {
                     me->GetMotionMaster()->MovePoint(m_pPointData->uiLocId, m_pPointData->fX, m_pPointData->fY, m_pPointData->fZ, false);
+                    m_bBreathFlight = true;
+                }
                 // heat up egg pit during Deep Breath
                 me->CastSpell(me, SPELL_ONY_HEATED_GROUND_EAST, true);
                 me->CastSpell(me, SPELL_ONY_HEATED_GROUND_WEST, true);
@@ -521,9 +528,16 @@ struct classic_boss_onyxia : public ScriptedAI
             ClassicScriptText(EMOTE_ONY_BREATH, me);
 
             m_bDeepBreathIsCasting = true;
-            m_uiDeepBreathTimer = 5000;
+            // The breath spell has a 5 s cast (SpellAudit: 17086 cast 5000 ms): the wait before she flies is that cast, and its damage lands
+            // when it completes. Cast as a plain triggered spell (instant) it hit the raid at once, before anyone could see the warning
+            // (onyxia_full n24: 19 and 11 raiders dead in the second she began the wait, every time). She holds still for the cast and the
+            // flight starts just after it.
+            m_uiDeepBreathTimer = 5500;
+            me->GetMotionMaster()->Clear();
+            me->GetMotionMaster()->MoveIdle();
+            me->StopMoving();
             if (m_pPointData)
-                me->CastSpell(me, m_pPointData->uiSpellId, true);
+                me->CastSpell(me, m_pPointData->uiSpellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_CAST_TIME | TRIGGERED_CAST_DIRECTLY))));
             // face destination and clear target
             m_pPointData = GetMoveData();
             if (m_pPointData)
@@ -667,9 +681,14 @@ struct classic_boss_onyxia : public ScriptedAI
         if (uiType != POINT_MOTION_TYPE)
             return;
 
+        if (m_uiPhase == ONY_PHASE_TWO)
+            TC_LOG_INFO("scripts.classic", "Onyxia reached point {} at {:.1f}% (waypoint {}, breath flight {})", uiPointId, me->GetHealthPct(),
+                m_pPointData ? int32(m_pPointData->uiLocId) : -1, m_bBreathFlight);
+
         // restore Onyxia's target after movement in Phase 2
         if (m_pPointData && uiPointId == m_pPointData->uiLocId)
         {
+            m_bBreathFlight = false;
             if (Unit* pVictim = me->GetVictim())
                 me->SetTarget(pVictim->GetGUID());
         }
@@ -720,9 +739,27 @@ struct classic_boss_onyxia : public ScriptedAI
 
         SummonPlayerIfOutOfReach(uiDiff);
 
-        /** Switch to P3 */
-        if (me->GetHealthPct() < 40.0f && m_uiPhase == ONY_PHASE_TWO && !IsSplineMoving() && !m_bDeepBreathIsCasting)
+        // What holds the landing back below 40 percent, every 2 s (scripts.classic; onyxia_full 245 still landed at about 28 percent).
+        if (m_uiPhase == ONY_PHASE_TWO && me->GetHealthPct() < 40.0f)
         {
+            if (m_uiPhaseDiagTimer <= uiDiff)
+            {
+                m_uiPhaseDiagTimer = 2000;
+                TC_LOG_INFO("scripts.classic", "Onyxia phase 2 at {:.1f}%: breath cast {}, breath flight {}, spline moving {}, generator {}, move point {}, movement timer {} ms, pos {:.1f},{:.1f},{:.1f}",
+                    me->GetHealthPct(), m_bDeepBreathIsCasting, m_bBreathFlight, IsSplineMoving(), uint32(me->GetMotionMaster()->GetCurrentMovementGeneratorType()),
+                    m_uiMovePoint, m_uiMovementTimer, me->GetPositionX(), me->GetPositionY(), me->GetPositionZ());
+            }
+            else
+                m_uiPhaseDiagTimer -= uiDiff;
+        }
+
+        /** Switch to P3 */
+        // Only a Deep Breath (its cast and the pass after it) holds the landing back; an ordinary flight between two waypoints is replaced by
+        // the landing flight. Waiting for her to stop moving at all let her fly on and breathe again for a minute below 40 percent: in phase 2
+        // she is flying or casting most of the time, and the gap between two moves is often too short or none.
+        if (me->GetHealthPct() < 40.0f && m_uiPhase == ONY_PHASE_TWO && !m_bDeepBreathIsCasting && !m_bBreathFlight)
+        {
+            TC_LOG_INFO("scripts.classic", "Onyxia lands for phase 3 at {:.1f}% (spline moving {})", me->GetHealthPct(), IsSplineMoving());
             m_uiPhase = ONY_PHASE_THREE;
             m_bTransition = true;
             PhaseTransition(0, true);

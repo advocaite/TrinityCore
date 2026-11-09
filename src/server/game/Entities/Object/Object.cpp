@@ -19,6 +19,7 @@
 #include "BattlefieldMgr.h"
 #include "CellImpl.h"
 #include "CinematicMgr.h"
+#include "ClassicLegacyPerks.h"
 #include "CombatLogPackets.h"
 #include "Corpse.h"
 #include "CreatureGroups.h"
@@ -1800,6 +1801,11 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
                 1230552, 1230587, 1283701, 1294877 };
             if (std::ranges::find(CampBenefitSpells, spellInfo->Id) != std::end(CampBenefitSpells))
                 if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(1225502, EFFECT_1))
+                    AddPct(duration, pct);
+
+            // Conquering Hero 1225506: "Beneficial effects you gain from celebrating the defeat of bosses gain $s1% increased duration."
+            if (ClassicLegacyPerks::IsBossCelebrationBuff(spellInfo->Id))
+                if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(ClassicLegacyPerks::CONQUERING_HERO, EFFECT_0))
                     AddPct(duration, pct);
         }
 

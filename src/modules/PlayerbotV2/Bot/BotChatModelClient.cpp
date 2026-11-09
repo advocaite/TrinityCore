@@ -34,6 +34,13 @@ std::string BuildRequestBody(Settings const& s, std::vector<Message> const& mess
     w.Key("model");      w.String(s.model.c_str(), rapidjson::SizeType(s.model.size()));
     w.Key("stream");     w.Bool(false);
     w.Key("keep_alive"); w.String(s.keep_alive.c_str(), rapidjson::SizeType(s.keep_alive.size()));
+    // A reasoning model (qwen3, qwen3.5, deepseek-r1...) thinks first by default, and its thinking used up the whole
+    // MaxTokens budget, so the reply came back empty and the bot never answered. Only "think": true is refused by a
+    // model that cannot think, so false is safe for every model.
+    if (!s.think)
+    {
+        w.Key("think"); w.Bool(false);
+    }
     w.Key("messages");
     w.StartArray();
     for (Message const& m : messages)

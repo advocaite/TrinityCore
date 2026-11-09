@@ -123,12 +123,13 @@ public:
         // Stratholme has two wings (Scarlet live + Undead Baron); the
         // tank-advance scan finds whichever boss is closest as the
         // bot moves through the dungeon.
+        // The boss route is index for index with the waypoints below: the owed boss is steered to by its waypoint. A boss with no
+        // static spawn (event_summoned_bosses) has no waypoint and is not on it; with one in, every later waypoint answered the
+        // wrong boss.
         a.bosses = {
             10558,  // Hearthsinger Forresten
             11032,  // Commander Malor
             10811,  // Instructor Galford
-            10516,  // The Unforgiven
-            10439,  // Ramstein the Gorger
             10440,  // Baron Rivendare (final, Undead wing)
         };
         // Progression waypoints — Strat is two wings sharing one map_id.

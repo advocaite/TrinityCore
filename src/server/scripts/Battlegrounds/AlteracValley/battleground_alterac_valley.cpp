@@ -20,6 +20,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundPackets.h"
+#include "ChatTextBuilder.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "CreatureData.h"
@@ -27,10 +28,13 @@
 #include "GameObjectAI.h"
 #include "GameObjectData.h"
 #include "GameTime.h"
+#include "GridNotifiersImpl.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapReference.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "World.h"
 
 constexpr uint32 BG_AV_SCORE_INITIAL_POINTS = 700;
 constexpr uint32 BG_AV_EVENT_START_BATTLE = 9166; // Achievement: The Alterac Blitz
@@ -1449,13 +1453,58 @@ namespace ClassicAlteracValley
         CAV_NPC_LANDMINES_LAYER_A   = 13356,
         CAV_NPC_LANDMINES_LAYER_H   = 13357,
         CAV_NPC_LANDMINES_EXPERT_A  = 13598,
-        CAV_NPC_LANDMINES_EXPERT_H  = 13597
+        CAV_NPC_LANDMINES_EXPERT_H  = 13597,
+        CAV_NPC_ARCHDRUID_RENFERAL  = 13442,        // Alliance blood collector: Storm Crystals for Ivus
+        CAV_NPC_PRIMALIST_THURLOGA  = 13236,        // Horde blood collector: Stormpike Soldier's Blood for Lokholar
+        CAV_NPC_IVUS                = 13419,
+        CAV_NPC_LOKHOLAR            = 13256
     };
 
     enum GameObjects : uint32
     {
-        CAV_GO_GATE                 = 180424
+        CAV_GO_GATE                 = 180424,
+        CAV_GO_GUSE_BEACON          = 178545,
+        CAV_GO_GUSE_BEACON_FOCUS    = 178546,
+        CAV_GO_JEZTOR_BEACON        = 178547,
+        CAV_GO_JEZTOR_BEACON_FOCUS  = 178548,
+        CAV_GO_MULVERICK_BEACON     = 178549,
+        CAV_GO_MULVERICK_BEACON_FOCUS = 178550,
+        CAV_GO_VIPORE_BEACON        = 178724,
+        CAV_GO_SLIDORE_BEACON       = 178725,
+        CAV_GO_ICHMAN_BEACON        = 178726,
+        CAV_GO_VIPORE_BEACON_FOCUS  = 178727,
+        CAV_GO_SLIDORE_BEACON_FOCUS = 178728,
+        CAV_GO_ICHMAN_BEACON_FOCUS  = 178729
     };
+
+    // 70532 send-event spells: the summoning rituals (Altar of Summoning, Circle of Calling) and the beacon plantings. VMaNGOS
+    // has no handler for these events, so neither the world bosses nor the beacons ever appeared there.
+    enum GameEventIds : uint32
+    {
+        CAV_GAME_EVENT_CALL_OF_THE_NETHER = 7060,   // spell 21249: Lokholar
+        CAV_GAME_EVENT_CALL_TO_IVUS       = 7268,   // spell 21648: Ivus
+        CAV_GAME_EVENT_GUSE_BEACON        = 7143,   // spell 21355
+        CAV_GAME_EVENT_JEZTOR_BEACON      = 7150,   // spell 21370
+        CAV_GAME_EVENT_MULVERICK_BEACON   = 7158,   // spell 21371
+        CAV_GAME_EVENT_ICHMAN_BEACON      = 7319,   // spell 21728
+        CAV_GAME_EVENT_SLIDORE_BEACON     = 7323,   // spell 21729
+        CAV_GAME_EVENT_VIPORE_BEACON      = 7327    // spell 21730
+    };
+
+    // VMaNGOS BattleGroundAV::initializeChallengeInvocationGoals ("real value" comments), index team, challenge
+    static constexpr std::array<std::array<uint32, CAV_CHALLENGE_MAX>, 2> ChallengeGoals =
+    { {
+        { 90, 60, 30, 25, 25, 280, 70, 200 },
+        { 90, 60, 30, 25, 25, 70, 280, 200 }
+    } };
+
+    // the world bosses appear where the rituals stand (VMaNGOS summons the ritual objects there)
+    static constexpr Position LokholarSpawn = { -360.139f, -133.403f, 26.4856f, 4.41568f };
+    static constexpr Position IvusSpawn = { -199.993f, -343.217f, 6.77662f, 3.68265f };
+
+    // smith upgrades (VMaNGOS UpgradeArmor): thanks, then the zone yell of the new tier
+    static constexpr uint32 BroadcastTextSmithThanks = 8976;
+    static constexpr std::array<uint32, 3> BroadcastTextUnitsEntering = { 8744, 8745, 8746 };
 
     enum Spells : uint32
     {
@@ -1603,6 +1652,7 @@ struct battleground_classic_alterac_valley : BattlegroundScript
         for (auto& team : _teamQuestStatus)
             team.fill(0);
         _scores = { InitialScore, InitialScore };
+        _reinforcementDefeat = sWorld->getBoolConfig(CONFIG_BATTLEGROUND_AV_REINFORCEMENT_DEFEAT);
         _captainBuffTimer = { int32(120000 + urand(0, 4) * 60000), int32(120000 + urand(0, 4) * 60000) };
         _mineOwner = { CAV_TEAM_NEUTRAL, CAV_TEAM_NEUTRAL };
         _mineTimer = { MineTickTimer, MineTickTimer };
@@ -1643,9 +1693,10 @@ struct battleground_classic_alterac_valley : BattlegroundScript
         using namespace ClassicAlteracValley;
         UpdateWorldState(CAV_WS_SCORE_ALLIANCE, _scores[CAV_TEAM_ALLIANCE]);
         UpdateWorldState(CAV_WS_SCORE_HORDE, _scores[CAV_TEAM_HORDE]);
-        // vanilla has no reinforcement defeat (VMaNGOS removed it), so the counters stay hidden
-        UpdateWorldState(CAV_WS_SHOW_SCORE_ALLIANCE, 0);
-        UpdateWorldState(CAV_WS_SHOW_SCORE_HORDE, 0);
+        // vanilla has no reinforcement defeat (VMaNGOS removed it); Battleground.AlteracValley.ReinforcementDefeat turns the TBC rule on
+        // and shows the counters
+        UpdateWorldState(CAV_WS_SHOW_SCORE_ALLIANCE, _reinforcementDefeat ? 1 : 0);
+        UpdateWorldState(CAV_WS_SHOW_SCORE_HORDE, _reinforcementDefeat ? 1 : 0);
         UpdateWorldState(CAV_WS_DREKTHAR_ALIVE, 1);
         UpdateWorldState(CAV_WS_VANNDAR_ALIVE, 1);
         UpdateWorldState(CAV_WS_BALINDA_ALIVE, 1);
@@ -1685,6 +1736,11 @@ struct battleground_classic_alterac_valley : BattlegroundScript
     void OnCreatureCreate(Creature* creature) override
     {
         using namespace ClassicAlteracValley;
+        if (creature->GetEntry() == CAV_NPC_ARCHDRUID_RENFERAL)
+            _bloodCollectorGUIDs[CAV_TEAM_ALLIANCE] = creature->GetGUID();
+        else if (creature->GetEntry() == CAV_NPC_PRIMALIST_THURLOGA)
+            _bloodCollectorGUIDs[CAV_TEAM_HORDE] = creature->GetGUID();
+
         uint8 event1, event2;
         if (!GetSpawnEvent(creature->GetCreatureData(), event1, event2))
             return;
@@ -1820,6 +1876,7 @@ struct battleground_classic_alterac_valley : BattlegroundScript
                 battleground->RewardReputationToTeam(FactionOf(winner), RepBoss[_holiday], TeamOf(winner));
                 battleground->RewardHonorToTeam(battleground->GetBonusHonorFromKill(KillBoss), TeamOf(winner));
                 HeraldTalk(event1 == CAV_EVENT_BOSS_A ? HeraldTextGeneralDeadA : HeraldTextGeneralDeadH);
+                _endCause = event1 == CAV_EVENT_BOSS_A ? "Vanndar killed" : "Drek'Thar killed";
                 battleground->EndBattleground(TeamOf(winner));
                 break;
             }
@@ -1892,16 +1949,21 @@ struct battleground_classic_alterac_valley : BattlegroundScript
             return;
         uint8 const teamIdx = team == ALLIANCE ? CAV_TEAM_ALLIANCE : CAV_TEAM_HORDE;
 
-        // VMaNGOS BattleGroundAV::HandleQuestComplete (team reputation on top of the quest reward)
+        // VMaNGOS BattleGroundAV::HandleQuestComplete (team reputation on top of the quest reward) and
+        // QuestComplete_npc_AVBlood_collector (the assault resources: the required item count of the quest)
         uint32 reputation = 0;
         switch (actionId)
         {
+            case ACTION_CAV_UPGRADE_ARMOR:
+                if (Creature* smith = Object::ToCreature(target))
+                    UpgradeArmor(smith, player, teamIdx);
+                return;
             case ACTION_TURN_IN_SCRAPS:
             {
                 uint32& scraps = _teamQuestStatus[teamIdx][0];
                 scraps += 20;
                 reputation = 1;
-                // supply crates every 100 resources
+                // supply crates every 100 resources; the troops upgrade when someone asks the smith (UpgradeArmor)
                 switch (scraps % 500)
                 {
                     case 100: SpawnEvent(CAV_EVENT_SUPPLIES_100 + teamIdx, 0, true); break;
@@ -1915,52 +1977,68 @@ struct battleground_classic_alterac_valley : BattlegroundScript
                     default:
                         break;
                 }
-                // 500 / 1000 / 1500: seasoned, veteran, champion defenders (VMaNGOS UpgradeArmor)
-                if (scraps == 500 || scraps == 1000 || scraps == 1500)
-                {
-                    battleground->CastSpellOnTeam(CAV_SPELL_UNITS_SEASONED + scraps / 500 - 1, team);
-                    for (uint8 node = 0; node < NodesMax; ++node)
-                        if (_nodes[node].Owner == teamIdx && _nodes[node].State == CAV_STATE_CONTROLLED)
-                            PopulateNode(node);
-                }
                 break;
             }
             case ACTION_TURN_IN_COMMANDER_1:
                 ++_teamQuestStatus[teamIdx][1];
+                ++_challenges[teamIdx][CAV_CHALLENGE_SOLDIER_AIR];
                 reputation = 1;
                 break;
             case ACTION_TURN_IN_COMMANDER_2:
                 ++_teamQuestStatus[teamIdx][2];
+                ++_challenges[teamIdx][CAV_CHALLENGE_LIEUTENANT_AIR];
                 reputation = 2;
                 break;
             case ACTION_TURN_IN_COMMANDER_3:
                 ++_teamQuestStatus[teamIdx][3];
+                ++_challenges[teamIdx][CAV_CHALLENGE_COMMANDER_AIR];
                 reputation = 5;
                 break;
             case ACTION_TURN_IN_BOSS_1:
                 _teamQuestStatus[teamIdx][4] += 4;
+                _challenges[teamIdx][CAV_CHALLENGE_BLOOD_WORLDBOSS] += 4;
                 reputation = 4;
                 [[fallthrough]];
             case ACTION_TURN_IN_BOSS_2:
                 ++_teamQuestStatus[teamIdx][4];
+                ++_challenges[teamIdx][CAV_CHALLENGE_BLOOD_WORLDBOSS];
                 reputation += 1;
                 UpdateWorldState(teamIdx == CAV_TEAM_ALLIANCE ? CAV_WS_IVUS_COUNT : CAV_WS_LOKHOLAR_COUNT, _teamQuestStatus[teamIdx][4]);
+                // enough blood or crystals: the collector walks to the ritual site, once per battle
+                if (_challenges[teamIdx][CAV_CHALLENGE_BLOOD_WORLDBOSS] >= ChallengeGoals[teamIdx][CAV_CHALLENGE_BLOOD_WORLDBOSS]
+                    && !_worldBossRitualStarted[teamIdx])
+                {
+                    if (Creature* collector = battlegroundMap->GetCreature(_bloodCollectorGUIDs[teamIdx]))
+                    {
+                        if (collector->IsAlive() && collector->AI())
+                        {
+                            _worldBossRitualStarted[teamIdx] = true;
+                            _challenges[teamIdx][CAV_CHALLENGE_BLOOD_WORLDBOSS] = 0;
+                            collector->AI()->DoAction(ACTION_CAV_START_WORLD_BOSS_RITUAL);
+                        }
+                    }
+                }
                 break;
+            // Irondeep Supplies (17522) and Coldtooth Supplies (17542), 10 per quest; the near mine is Irondeep for the Alliance
             case ACTION_TURN_IN_NEAR_MINE:
                 ++_teamQuestStatus[teamIdx][5];
+                _challenges[teamIdx][teamIdx == CAV_TEAM_ALLIANCE ? CAV_CHALLENGE_IRONDEEP_GROUND : CAV_CHALLENGE_COLDTOOTH_GROUND] += 10;
                 reputation = 2;
                 break;
             case ACTION_TURN_IN_OTHER_MINE:
                 ++_teamQuestStatus[teamIdx][6];
+                _challenges[teamIdx][teamIdx == CAV_TEAM_ALLIANCE ? CAV_CHALLENGE_COLDTOOTH_GROUND : CAV_CHALLENGE_IRONDEEP_GROUND] += 10;
                 reputation = 3;
                 break;
             case ACTION_TURN_IN_RIDER_HIDE:
                 ++_teamQuestStatus[teamIdx][7];
+                ++_challenges[teamIdx][CAV_CHALLENGE_HIDE_CAVALRY];
                 reputation = 1;
                 break;
             case ACTION_TURN_IN_RIDER_TAME:
             {
                 uint32 const tamed = ++_teamQuestStatus[teamIdx][8];
+                ++_challenges[teamIdx][CAV_CHALLENGE_TAMED_CAVALRY];
                 reputation = 1;
                 // stable mounts every 5 tamed rams / wolves
                 switch (tamed % 25)
@@ -1983,6 +2061,71 @@ struct battleground_classic_alterac_valley : BattlegroundScript
 
         if (reputation)
             battleground->RewardReputationToTeam(FactionOf(teamIdx), reputation, team);
+    }
+
+    uint32 GetData(uint32 dataId) const override
+    {
+        using namespace ClassicAlteracValley;
+        if (dataId >= DATA_CAV_CHALLENGE && dataId < DATA_CAV_CHALLENGE + 2 * CAV_CHALLENGE_MAX)
+            return _challenges[(dataId - DATA_CAV_CHALLENGE) / CAV_CHALLENGE_MAX][(dataId - DATA_CAV_CHALLENGE) % CAV_CHALLENGE_MAX];
+        if (dataId >= DATA_CAV_CHALLENGE_GOAL && dataId < DATA_CAV_CHALLENGE_GOAL + 2 * CAV_CHALLENGE_MAX)
+            return ChallengeGoals[(dataId - DATA_CAV_CHALLENGE_GOAL) / CAV_CHALLENGE_MAX][(dataId - DATA_CAV_CHALLENGE_GOAL) % CAV_CHALLENGE_MAX];
+        if (dataId == DATA_CAV_REINFORCEMENT + CAV_TEAM_ALLIANCE || dataId == DATA_CAV_REINFORCEMENT + CAV_TEAM_HORDE)
+            return _reinforcement[dataId - DATA_CAV_REINFORCEMENT];
+        if (dataId == DATA_CAV_ARMOR_SCRAPS + CAV_TEAM_ALLIANCE || dataId == DATA_CAV_ARMOR_SCRAPS + CAV_TEAM_HORDE)
+            return _teamQuestStatus[dataId - DATA_CAV_ARMOR_SCRAPS][0];
+        return BattlegroundScript::GetData(dataId);
+    }
+
+    // an assault spends its resources (VMaNGOS reset*ChallengeInvocation); the value is ignored
+    void SetData(uint32 dataId, uint32 /*value*/) override
+    {
+        using namespace ClassicAlteracValley;
+        if (dataId < DATA_CAV_CHALLENGE || dataId >= DATA_CAV_CHALLENGE + 2 * CAV_CHALLENGE_MAX)
+            return;
+
+        uint8 const teamIdx = uint8((dataId - DATA_CAV_CHALLENGE) / CAV_CHALLENGE_MAX);
+        switch ((dataId - DATA_CAV_CHALLENGE) % CAV_CHALLENGE_MAX)
+        {
+            case CAV_CHALLENGE_HIDE_CAVALRY:
+            case CAV_CHALLENGE_TAMED_CAVALRY:
+                // the cavalry rides out with the stable mounts
+                _challenges[teamIdx][CAV_CHALLENGE_HIDE_CAVALRY] = 0;
+                _challenges[teamIdx][CAV_CHALLENGE_TAMED_CAVALRY] = 0;
+                for (uint8 i = 0; i < 4; ++i)
+                    SpawnEvent(CAV_EVENT_TAMED_5 + i * 2 + teamIdx, 2, true);
+                break;
+            case CAV_CHALLENGE_IRONDEEP_GROUND:
+            case CAV_CHALLENGE_COLDTOOTH_GROUND:
+                _challenges[teamIdx][CAV_CHALLENGE_IRONDEEP_GROUND] = 0;
+                _challenges[teamIdx][CAV_CHALLENGE_COLDTOOTH_GROUND] = 0;
+                break;
+            default:
+                _challenges[teamIdx][(dataId - DATA_CAV_CHALLENGE) % CAV_CHALLENGE_MAX] = 0;
+                break;
+        }
+    }
+
+    void ProcessEvent(WorldObject* obj, uint32 eventId, WorldObject* invoker) override
+    {
+        using namespace ClassicAlteracValley;
+        switch (eventId)
+        {
+            case CAV_GAME_EVENT_CALL_OF_THE_NETHER:
+                SummonWorldBoss(CAV_TEAM_HORDE, CAV_NPC_LOKHOLAR, LokholarSpawn);
+                break;
+            case CAV_GAME_EVENT_CALL_TO_IVUS:
+                SummonWorldBoss(CAV_TEAM_ALLIANCE, CAV_NPC_IVUS, IvusSpawn);
+                break;
+            case CAV_GAME_EVENT_GUSE_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_GUSE_BEACON, CAV_GO_GUSE_BEACON_FOCUS); break;
+            case CAV_GAME_EVENT_JEZTOR_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_JEZTOR_BEACON, CAV_GO_JEZTOR_BEACON_FOCUS); break;
+            case CAV_GAME_EVENT_MULVERICK_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_MULVERICK_BEACON, CAV_GO_MULVERICK_BEACON_FOCUS); break;
+            case CAV_GAME_EVENT_ICHMAN_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_ICHMAN_BEACON, CAV_GO_ICHMAN_BEACON_FOCUS); break;
+            case CAV_GAME_EVENT_SLIDORE_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_SLIDORE_BEACON, CAV_GO_SLIDORE_BEACON_FOCUS); break;
+            case CAV_GAME_EVENT_VIPORE_BEACON: PlantBeacon(invoker ? invoker : obj, CAV_GO_VIPORE_BEACON, CAV_GO_VIPORE_BEACON_FOCUS); break;
+            default:
+                break;
+        }
     }
 
     void OnEnd(Team winner) override
@@ -2008,6 +2151,18 @@ struct battleground_classic_alterac_valley : BattlegroundScript
             if (owner != CAV_TEAM_NEUTRAL)
                 ++minesOwned[owner];
 
+        // what OnEnd hands out per team, for the end-of-match log line
+        std::array<uint32, 2> bonusKills = { 0, 0 };
+        std::array<uint32, 2> rep = { 0, 0 };
+        for (uint8 team = CAV_TEAM_ALLIANCE; team <= CAV_TEAM_HORDE; ++team)
+        {
+            bonusKills[team] = towersSurvived[team] * KillSurvivingTower + gravesOwned[team] * KillSurvivingGrave + minesOwned[team] * KillSurvivingMine
+                + (_activeEvents[CAV_EVENT_CAPTAIN_DEAD_A + team] != 0 ? KillSurvivingCaptain : 0);
+            rep[team] = towersSurvived[team] * RepSurvivingTower[_holiday] + gravesOwned[team] * RepOwnedGrave[_holiday]
+                + minesOwned[team] * RepOwnedMine[_holiday] + (_activeEvents[CAV_EVENT_CAPTAIN_DEAD_A + team] != 0 ? RepSurvivingCaptain[_holiday] : 0);
+            if (_holiday)
+                bonusKills[team] += TeamOf(team) == winner ? 10 : 8;
+        }
         for (uint8 team = CAV_TEAM_ALLIANCE; team <= CAV_TEAM_HORDE; ++team)
         {
             if (towersSurvived[team])
@@ -2038,6 +2193,20 @@ struct battleground_classic_alterac_valley : BattlegroundScript
             for (Team team : { ALLIANCE, HORDE })
                 battleground->RewardHonorToTeam(battleground->GetBonusHonorFromKill(winner == team ? 10 : 8), team);
         }
+
+        // One line per match end (bot-only AV soaks had no record of who won, why, or the reinforcements at the end). The honor is the
+        // end-of-match bonus above (surviving towers, graveyards, mines, captain, holiday); the win / loss honor and the Marks of Honor
+        // come from Battleground::EndBattleground.
+        TC_LOG_INFO("server.battleground", "[av_end] instance={} winner={} cause={} after={} s reinforcements alliance={} horde={} "
+            "end_bonus alliance={} honor {} rep (towers {} graves {} mines {}) horde={} honor {} rep (towers {} graves {} mines {}) "
+            "reinforcement_defeat={}",
+            battleground->GetInstanceID(), winner == ALLIANCE ? "Alliance" : winner == HORDE ? "Horde" : "none", _endCause,
+            uint32(std::chrono::duration_cast<Seconds>(battleground->GetInProgressDuration()).count()),
+            _scores[CAV_TEAM_ALLIANCE], _scores[CAV_TEAM_HORDE],
+            battleground->GetBonusHonorFromKill(bonusKills[CAV_TEAM_ALLIANCE]), rep[CAV_TEAM_ALLIANCE], towersSurvived[CAV_TEAM_ALLIANCE],
+            gravesOwned[CAV_TEAM_ALLIANCE], minesOwned[CAV_TEAM_ALLIANCE],
+            battleground->GetBonusHonorFromKill(bonusKills[CAV_TEAM_HORDE]), rep[CAV_TEAM_HORDE], towersSurvived[CAV_TEAM_HORDE],
+            gravesOwned[CAV_TEAM_HORDE], minesOwned[CAV_TEAM_HORDE], _reinforcementDefeat ? 1 : 0);
     }
 
     Team GetPrematureWinner() override
@@ -2096,6 +2265,60 @@ private:
             battlegroundMap->SpawnGroupSpawn(groupId, true);
         else
             battlegroundMap->SetSpawnGroupInactive(groupId);
+    }
+
+    // VMaNGOS BattleGroundAV::UpgradeArmor: the smith turns 500 / 1000 / 1500 armor scraps into seasoned, veteran or
+    // champion troops. VMaNGOS dropped the tier back to basic when nothing was due; here the call only ever raises it.
+    void UpgradeArmor(Creature* smith, Player* player, uint8 teamIdx)
+    {
+        using namespace ClassicAlteracValley;
+        uint32 const scraps = _teamQuestStatus[teamIdx][0];
+        uint8 const level = _reinforcement[teamIdx];
+        if (level >= 3 || scraps < (level + 1u) * 500u)
+            return;
+
+        _reinforcement[teamIdx] = level + 1;
+        smith->Say(BroadcastTextSmithThanks, player);
+        battleground->CastSpellOnTeam(CAV_SPELL_UNITS_SEASONED + level, TeamOf(teamIdx));
+        ZoneYell(smith, BroadcastTextUnitsEntering[level]);
+
+        for (uint8 node = 0; node < NodesMax; ++node)
+            if (_nodes[node].Owner == teamIdx && _nodes[node].State == CAV_STATE_CONTROLLED)
+                PopulateNode(node);
+    }
+
+    // VMaNGOS zone yell: every player of the battleground hears it
+    void ZoneYell(Creature* source, uint32 broadcastTextId)
+    {
+        Trinity::BroadcastTextBuilder builder(source, CHAT_MSG_MONSTER_YELL, broadcastTextId, source->GetGender());
+        Trinity::LocalizedDo<Trinity::BroadcastTextBuilder> localizer(builder);
+        for (MapReference const& ref : battlegroundMap->GetPlayers())
+            if (Player* player = ref.GetSource())
+                localizer(player);
+    }
+
+    // the ritual completed: one world boss per team and battle
+    void SummonWorldBoss(uint8 teamIdx, uint32 entry, Position const& pos)
+    {
+        if (_worldBossSummoned[teamIdx])
+            return;
+
+        _worldBossSummoned[teamIdx] = true;
+        battlegroundMap->SummonCreature(entry, pos);
+    }
+
+    // a beacon goes where the planter stands; the spell focus summons it so no player owns it (VMaNGOS clears the owner)
+    void PlantBeacon(WorldObject* planter, uint32 beaconEntry, uint32 focusEntry)
+    {
+        if (!planter)
+            return;
+
+        WorldObject* summoner = planter;
+        if (GameObject* focus = planter->FindNearestGameObject(focusEntry, 30.0f))
+            summoner = focus;
+
+        summoner->SummonGameObject(beaconEntry, planter->GetPosition(), QuaternionData::fromEulerAnglesZYX(planter->GetOrientation(), 0.0f, 0.0f),
+            90s, GO_SUMMON_TIMED_DESPAWN);
     }
 
     uint8 DefenderTier(uint8 teamIdx) const
@@ -2328,7 +2551,10 @@ private:
         UpdateWorldState(MineOwnerWorldStates[mine], _mineOwner[mine] == CAV_TEAM_HORDE ? 2 : _mineOwner[mine] == CAV_TEAM_ALLIANCE ? 1 : 0);
     }
 
-    // reinforcements: VMaNGOS keeps the counter but a team at 0 does not lose
+    // reinforcements: VMaNGOS keeps the counter but a team at 0 does not lose. With Battleground.AlteracValley.ReinforcementDefeat (on by
+    // default, the owner's call 2026-10-26) a team at 0 loses, as from TBC on: bot-only AV 265 and 268 ran 45 min and 1 h 35 min after
+    // both general pushes went, the two armies trading deaths in the middle of the valley, and only the server's soak limit ended them.
+    // The end goes through EndBattleground, so OnEnd hands out the surviving tower / graveyard / mine / captain honor and reputation.
     void UpdateScore(uint8 teamIdx, int32 points)
     {
         using namespace ClassicAlteracValley;
@@ -2336,6 +2562,11 @@ private:
             return;
         _scores[teamIdx] = std::max(0, _scores[teamIdx] + points);
         UpdateWorldState(teamIdx == CAV_TEAM_HORDE ? CAV_WS_SCORE_HORDE : CAV_WS_SCORE_ALLIANCE, _scores[teamIdx]);
+        if (_reinforcementDefeat && _scores[teamIdx] == 0 && battleground->GetStatus() == STATUS_IN_PROGRESS)
+        {
+            _endCause = teamIdx == CAV_TEAM_ALLIANCE ? "Alliance reinforcements at 0" : "Horde reinforcements at 0";
+            battleground->EndBattleground(TeamOf(teamIdx == CAV_TEAM_ALLIANCE ? CAV_TEAM_HORDE : CAV_TEAM_ALLIANCE));
+        }
     }
 
     void HeraldTalk(uint8 textId)
@@ -2357,7 +2588,14 @@ private:
     std::array<ClassicAlteracValley::NodeInfo, ClassicAlteracValley::NodesMax> _nodes;
     std::array<uint8, 256> _activeEvents = { };
     std::array<std::array<uint32, 9>, 2> _teamQuestStatus = { };
+    std::array<std::array<uint32, CAV_CHALLENGE_MAX>, 2> _challenges = { };
+    std::array<uint8, 2> _reinforcement = { };
+    std::array<bool, 2> _worldBossRitualStarted = { };
+    std::array<bool, 2> _worldBossSummoned = { };
+    std::array<ObjectGuid, 2> _bloodCollectorGUIDs;
     std::array<int32, 2> _scores = { };
+    bool _reinforcementDefeat = false;
+    char const* _endCause = "time limit or a team left";   // set where the script ends the match itself
     std::array<int32, 2> _captainBuffTimer = { };
     std::array<uint8, 2> _mineOwner = { };
     std::array<int32, 2> _mineTimer = { };

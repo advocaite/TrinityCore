@@ -26,6 +26,7 @@ struct Settings
     float         temperature = 0.8f;
     std::string   keep_alive  = "30m";   // how long Ollama keeps the model loaded after a reply
     std::uint32_t context_length = 2048;  // options.num_ctx: Ollama's default context can be 32k, a multi-GB KV cache
+    bool          think       = false;   // let a reasoning model (qwen3, deepseek-r1...) think before it answers
 };
 
 struct Message

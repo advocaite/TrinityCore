@@ -310,4 +310,17 @@ constexpr Delivery DeliveryFor(bool conjured, bool soulbound)
     return conjured ? Delivery::Trade : Delivery::Mail;
 }
 
+// The next cast of an order waits for mana. Out of mana, each cast stood the drinking mage up again (a cast stands the bot first), the
+// cast failed, and the drink rule sat it down: it bobbed up and down on the spot and never drank (Tornn, 2026-10-27). So a bot that is
+// drinking finishes the drink (mana full), and one short of the cast's cost waits for the drink rule (or its own regeneration).
+// A cast without a mana cost (most profession recipes) never waits.
+constexpr bool WaitForMana(bool drinking, std::uint32_t mana, std::uint32_t max_mana, std::uint32_t cost)
+{
+    if (cost == 0)
+        return false;
+    if (drinking && mana < max_mana)
+        return true;
+    return mana < cost;
+}
+
 } // namespace Playerbot::V2::PlayerCraft

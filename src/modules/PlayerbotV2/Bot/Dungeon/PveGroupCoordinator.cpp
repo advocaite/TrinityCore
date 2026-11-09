@@ -40,6 +40,12 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "WorldSession.h"
+#include "InstanceScript.h"
+#include "PathGenerator.h"
+#include "Pet.h"
+#include "PlayerbotMovement.h"
+#include "Bot/States/MaintainHelpers.h"   // PointInUnpulledPackReach: the line-of-sight pull spot
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 
 #include <mutex>
 #include <unordered_map>
@@ -128,6 +134,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         bool in_combat = false;     // a living member bot is in combat (sustains the release latch)
         bool owner_order = false;   // a member bot carries an owner attack / pull order (MarksNeedOrder release)
         std::vector<uint64> pullers;   // bots running an owner "pull back": released for their own pull only, not the group
+        std::unordered_map<uint64, BotAI*> ais;   // the line-of-sight pull reads and moves the tank's pull back (PlanSightPull)
     };
     std::unordered_map<uint64, Bucket> buckets;
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
@@ -149,6 +156,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         b.group_low = glow;
         b.map_id    = m->GetId();
         b.bots.emplace_back(uint64(id), p);
+        b.ais[uint64(id)] = e.ai.get();
         if (p->IsAlive() && p->IsInCombat())
             b.in_combat = true;
         // The owner's go (MarksNeedOrder): an attack / engage order, a /focus pin or a pull back running on a member bot.
@@ -213,6 +221,12 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         }
         if (!ref)
             continue;
+        // The raid plan (tank roster, off tank, mob assignment, curses, fear) is for a raid group on a raid map (20 and 40 players) or in
+        // the open world (a world boss). A raid group in a dungeon plays it as a dungeon: UBRS is a 10-man, and its raid plan held both
+        // tanks on an assigned mob while six Incarcerators sat loose on the casters for 18 s (UBRS 2026-10-28 22:16; the owner: "UBRS is
+        // a 10-man, I wouldn't classify that as a raid ... anything above 20-man, you should start falling into your raid tactics").
+        const bool raid_rules = gs->is_raid && ((ref->instance_ctx.is_in_raid && (ref->instance_ctx.max_players == 0 ||
+                                    ref->instance_ctx.max_players >= BotSnapshotView::kRaidTacticsMinPlayers)) || !ref->instance_ctx.is_in_instance);
         DungeonAdvice const advice =
             Services::Dungeons().GetAdvice(BotSnapshotView(*ref));
 
@@ -281,7 +295,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
             if (!started)
                 started = now_ms;
             // A raid waits as long as configured (up to eight seconds: the tank takes a while to run in); a party keeps its six.
-            uint32 const wait_ms = gs->is_raid ? Services::Config().raid_dps_wait_timeout_ms()
+            uint32 const wait_ms = raid_rules ? Services::Config().raid_dps_wait_timeout_ms()
                                                : std::min<uint32>(Services::Config().raid_dps_wait_timeout_ms(), kPartyDpsWaitTimeoutMs);
             if (wait_ms && now_ms - started >= wait_ms && !(mark_release_until_.count(bkey) && now_ms < mark_release_until_[bkey]))
             {
@@ -356,7 +370,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         // while they live and still tank; during a fight the roster only
         // grows (a new add gets a tank, nobody drops a mob mid-pull), out of
         // combat it shrinks back to three. Humans who tank are always on it.
-        if (gs->is_raid)
+        if (raid_rules)
         {
             std::vector<ObjectGuid> engaged;
             for (auto const& sn : snaps)
@@ -366,6 +380,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                 {
                     if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified || !u.unit_in_combat) continue;
                     if (Raid::NoTank(b.map_id, u.entry)) continue;   // a summoned add the DPS burn down
+                    if (Raid::GetBrain().AllSchoolsAvoided(b.group_low, b.map_id, u.guid)) continue;   // immune to everything: no tank needed
                     ThreatVictim const k = ThreatVictim(u.victim_kind);
                     if (k != ThreatVictim::Me && k != ThreatVictim::Tank &&
                         k != ThreatVictim::Member && k != ThreatVictim::MemberPet)
@@ -426,7 +441,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         // advice unconditionally, so list-presence is "always" — and a
         // party tank-swap emergency is already handled by the legacy
         // taunt-swap rule without a standing off-tank designation.
-        const bool wants_off_tank = gs->is_raid;
+        const bool wants_off_tank = raid_rules;
         // Main tank: the raid-frame Main Tank flag first, else the first live tank (humans first).
         uint64 main_tank = 0, off_tank = 0;
         for (auto const& e : mem)
@@ -647,15 +662,40 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                     if (e.guid_low == caster_low) return true;
                 return false;
             };
+            // Every member's view, not only the freshest one: the reference snapshot changes from plan to plan, and a member that
+            // does not see the current focus (out of its range, behind a wall) made the stickiness drop it (zf_antusul RC10: the
+            // focus changed 11 times in 90 s between the Witch Doctors and Shadowcasters of one fight, 112 -> 108 among two
+            // Shadowcasters both alive, while Shadowhunters hexed the tank and the casters were eaten). A mob any member sees dead
+            // or held by the group's crowd control is not a candidate, whatever an older view says.
+            std::vector<ObjectGuid> ruled_out;
+            for (auto const& sp : snaps)
+                for (auto const& u : sp->combat.nearby_enemies)
+                    if (u.hp <= 0 || cc_by_group(u))
+                        ruled_out.push_back(u.guid);
+            auto out = [&](ObjectGuid g) { return std::find(ruled_out.begin(), ruled_out.end(), g) != ruled_out.end(); };
+            // The freshest view first, so a new pick is the one it always was; the others only keep the old focus or fill a gap.
+            std::vector<BotSnapshot const*> views{ ref.get() };
+            for (auto const& sp : snaps)
+                if (sp != ref)
+                    views.push_back(sp.get());
             for (uint32 want : advice.high_priority_kill_entries)
             {
-                for (auto const& u : ref->combat.nearby_enemies)
+                bool kept = false;
+                for (BotSnapshot const* sp : views)
                 {
-                    if (u.hp <= 0 || u.entry != want) continue;
-                    if (cc_by_group(u)) continue;
-                    if (u.victim.IsEmpty()) continue;   // unpulled — leave it
-                    if (kill_focus.IsEmpty()) kill_focus = u.guid;
-                    if (u.guid == prev_focus) { kill_focus = prev_focus; break; }
+                    for (auto const& u : sp->combat.nearby_enemies)
+                    {
+                        if (u.hp <= 0 || u.entry != want || out(u.guid)) continue;
+                        if (u.victim.IsEmpty()) continue;   // unpulled — leave it
+                        // Not one that stands in an idle pack's reach: the damage dealers run to the focus, and that pulls the pack
+                        // (eea74327b3 smlibrary_loksey36: the focus went to a Scarlet Beastmaster shooting from 18 y beside the next
+                        // pack, the rogue ran to it, that pack and the one after it joined, and the warrior died).
+                        if (States::PointInUnpulledPackReach(BotSnapshotView(*sp), u.x, u.y, u.z)) continue;
+                        if (kill_focus.IsEmpty()) kill_focus = u.guid;
+                        if (u.guid == prev_focus) { kill_focus = prev_focus; kept = true; break; }
+                    }
+                    if (kept)
+                        break;
                 }
                 if (!kill_focus.IsEmpty())
                     break;   // highest-priority entry with a live mob wins
@@ -710,7 +750,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
             PlanPrePullCc(bkey, b.group_low, b.map_id, now_ms, mem, snaps, plan);
 
         // -- Raid symbols on bots: kill / tank / crowd-control by icon (after the generic kill focus, before the curses) --
-        PlanMarkOrders(b.group_low, b.map_id, wants_off_tank, mem, snaps, plan);
+        PlanMarkOrders(b.group_low, b.map_id, wants_off_tank, advice.bosses, mem, snaps, plan);
 
         // -- Classic raid prep: warlock curses, fear, resistance potions -----
         // After PlanRaidTanks: the curses fall back to its kill focus.
@@ -719,6 +759,26 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                           b.bots, mem, snaps, plan);
         // After the tank duties: a tanking druid is never asked to Innervate.
         PlanInnervates(bkey, b.group_low, b.map_id, mem, snaps, plan);
+        // The line-of-sight pull: a dungeon plan only (a raid's trash and bosses are the raid layer's), after the tank duties.
+        if (!raid_rules)
+            PlanSightPull(bkey, b.group_low, b.map_id, now_ms, b.in_combat, main_tank, b.bots, b.ais, snaps, plan);
+        else
+            sight_pull_.erase(bkey);
+        // The main tank's pull back, out at the opener or on the way back (not the hold at the return point): the others wait at the
+        // return point and leave the pack alone (eea74327b3 dmnorth_moldar: during the pull of a Gordok Mage-Lord pack the group walked
+        // on after the tank to 20 y of the pack, the mage, hunter and rogue opened on it and on a Brute at 48-50 y, two Brutes came
+        // through to the priest and killed it at 317 s).
+        if (!raid_rules)
+            if (auto it = b.ais.find(main_tank); it != b.ais.end() && it->second && it->second->pull_back_active())
+            {
+                BotAI::PullBackPlan const tpb = it->second->pull_back_plan();
+                if (tpb.active && tpb.map == b.map_id && tpb.phase != BotAI::PullBackPhase::Hold)
+                    for (auto& [low, o] : plan)
+                    {
+                        o.tank_pulling_back = true;
+                        o.tank_pull_x = tpb.rx; o.tank_pull_y = tpb.ry; o.tank_pull_z = tpb.rz;
+                    }
+            }
 
         // Publish the main tank's guid to every ordered bot — the
         // off-tank's between-pull follow consumer and future assist
@@ -748,7 +808,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                     for (Raid::Brain::EnemySchools const& h : *hints)
                         if (h.target == g)
                         {
-                            o->school_hints[n++] = { h.target, h.prefer_mask, h.avoid_mask };
+                            o->school_hints[n++] = { h.target, h.prefer_mask, h.avoid_mask, h.reflect_mask };
                             return;
                         }
                 };
@@ -863,6 +923,8 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         it = buckets.count(it->first) ? std::next(it) : last_innervate_.erase(it);
     for (auto it = felhunter_holders_.begin(); it != felhunter_holders_.end();)
         it = buckets.count(it->first) ? std::next(it) : felhunter_holders_.erase(it);
+    for (auto it = sight_pull_.begin(); it != sight_pull_.end();)
+        it = buckets.count(it->first) ? std::next(it) : sight_pull_.erase(it);
 
     orders_ = std::move(next_orders_);
     next_orders_.clear();
@@ -1214,16 +1276,16 @@ static bool GroupCcSwitchOn(Group const* grp)
     if (!grp)
         return true;
     Player const* human = ObjectAccessor::FindConnectedPlayer(grp->GetLeaderGUID());
-    if (!human || !human->GetSession() || human->GetSession()->IsBot())
+    if (!human || !human->GetSession() || !Scenario::PlaysAsHuman(human))
     {
         human = nullptr;
         for (GroupReference const& r : grp->GetMembers())
-            if (Player const* m = r.GetSource(); m && m->GetSession() && !m->GetSession()->IsBot()) { human = m; break; }
+            if (Player const* m = r.GetSource(); m && m->GetSession() && Scenario::PlaysAsHuman(m)) { human = m; break; }
     }
     return !human || !human->GetSession() || Services::Owners().CcEnabled(human->GetSession()->GetAccountId());
 }
 
-void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid,
+void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid, std::vector<uint32_t> const& bosses,
                                           std::vector<Member> const& mem,
                                           std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
                                           std::unordered_map<uint64, PveOrder>& plan)
@@ -1299,6 +1361,13 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
         Raid::RaidRules const* rr = Raid::RulesForMap(map_id);
         return rr && std::any_of(rr->noControl.begin(), rr->noControl.end(), [&](Raid::NoControl const& n) { return n.enemy == entry; });
     };
+    // A boss is never held. The core flags few of them (Classic::IsBossUnit reads the classification, and most classic dungeon
+    // bosses are plain elites), so the instance script's boss list counts too: in Shadowfang Keep the mage sheeped Rethilgore,
+    // an elite on the core, nine times in 40 s while the tank fell to 9% and the priest ran out of mana (RC4 sfk_rethilgore).
+    auto is_boss = [&](NearbyUnit const& u) -> bool
+    {
+        return Classic::IsBossUnit(u) || std::find(bosses.begin(), bosses.end(), u.entry) != bosses.end();
+    };
     std::vector<ObjectGuid> cc_taken;
     bool moon_is_tank_mark = false;
     for (auto const& [tank_low, marker] : Services::Owners().TankMarks(group_low))
@@ -1368,7 +1437,7 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
             for (uint8 sym : order)
             {
                 NearbyUnit const* u = mob_of(sym);
-                if (!u || Classic::IsBossUnit(*u) || never_controlled(u->entry)) continue;
+                if (!u || is_boss(*u) || never_controlled(u->entry)) continue;
                 if (u->guid == icon[7] || u->guid == icon[6]) continue;   // marked skull / cross: killed, never crowd-controlled
                 if (u->max_hp > 0 && u->hp * 2 < u->max_hp) continue;     // under half health: being killed, not held again
                 if (tank_hits(u->guid)) continue;                          // the tank is on it: killed, not held again
@@ -1418,7 +1487,7 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
                         if (sn->position.map_id != map_id) continue;
                         for (auto const& u : sn->combat.nearby_enemies)
                             if (u.hp > 0 && !u.is_player && !u.untargetable && u.unit_in_combat && !u.victim.IsEmpty() &&
-                                !Classic::IsBossUnit(u) && seen.insert(u.guid.GetCounter()).second)
+                                !is_boss(u) && seen.insert(u.guid.GetCounter()).second)
                                 if (NearbyUnit const* full = unit_any(u.guid))
                                     pack.push_back(full);
                     }
@@ -1586,7 +1655,9 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
                                         std::unordered_map<uint64, PveOrder>& plan)
 {
     PrePullCc::Request pcc;
-    if (!PrePullCc::Get(group_low, now_ms, pcc))
+    bool const have_pcc = PrePullCc::Get(group_low, now_ms, pcc);
+    auto moon_it = prepull_moon_.find(bkey);
+    if (!have_pcc && moon_it == prepull_moon_.end())
         return;
     Group* mk_grp = nullptr;
     for (auto const& e : mem)
@@ -1595,8 +1666,25 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
     if (!mk_grp)
         return;
     constexpr uint8 kMoon = 4;
-    std::array<ObjectGuid, 8>& ours = marks_set_[bkey];
     ObjectGuid const by = mk_grp->GetLeaderGUID();
+    // The moon this code put on a mob comes off when the request is finished or gone (it expires after kLifeMs, also inside the
+    // tank's own Get), unless somebody has moved it since. It used to be tracked in marks_set_, which a 5-man clears every pass, so
+    // it was never taken off: hot_faldrim RC3, the mage never got in range to sheep the marked rat, the tank pulled on without it,
+    // and the rat kept the moon. The tank's pull skips a mob with an icon and its pack stop still yielded to it, so the group stood
+    // there for the rest of the run.
+    auto clear_moon = [&]
+    {
+        if (moon_it == prepull_moon_.end())
+            return;
+        if (mk_grp->GetTargetIcon(kMoon) == moon_it->second)
+            mk_grp->SetTargetIcon(kMoon, ObjectGuid::Empty, by);
+        prepull_moon_.erase(moon_it);
+        moon_it = prepull_moon_.end();
+    };
+    if (!have_pcc || (moon_it != prepull_moon_.end() && moon_it->second != pcc.mob))
+        clear_moon();
+    if (!have_pcc)
+        return;
     auto unit_of = [&](ObjectGuid g) -> NearbyUnit const*
     {
         for (auto const& sn : snaps)
@@ -1616,11 +1704,7 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
     bool const finished = pcc.done_ms && uint32(now_ms - pcc.done_ms) > PrePullCc::kAfterDoneMs;
     if (!caster_ok || !mob_ok || finished)
     {
-        if (ours[kMoon] == pcc.mob)
-        {
-            mk_grp->SetTargetIcon(kMoon, ObjectGuid::Empty, by);
-            ours[kMoon] = ObjectGuid::Empty;
-        }
+        clear_moon();
         PrePullCc::Erase(group_low);
         return;
     }
@@ -1630,7 +1714,7 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
         bool other_icon = false;
         for (uint8 m2 = 0; m2 < 8 && !other_icon; ++m2)
             other_icon = m2 != kMoon && mk_grp->GetTargetIcon(m2) == pcc.mob;
-        bool const moon_taken = !cur.IsEmpty() && cur != ours[kMoon] && unit_of(cur) && unit_of(cur)->hp > 0;
+        bool const moon_taken = !cur.IsEmpty() && cur != marks_set_[bkey][kMoon] && unit_of(cur) && unit_of(cur)->hp > 0;
         if (other_icon || moon_taken)
         {
             if (pcc.state != PrePullCc::State::Refused)
@@ -1644,7 +1728,8 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
         else
         {
             mk_grp->SetTargetIcon(kMoon, pcc.mob, by);
-            ours[kMoon] = pcc.mob;
+            prepull_moon_[bkey] = pcc.mob;
+            moon_it = prepull_moon_.find(bkey);
             PrePullCc::SetState(group_low, PrePullCc::State::Marked);
             TC_LOG_INFO("playerbot.v2", "[raid_pull] group={} map={} marks {} ({}) with the moon for {}'s crowd control",
                 group_low, map_id, cu->entry, pcc.mob.GetCounter(), caster->src->name);
@@ -1702,6 +1787,10 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 k != ThreatVictim::Member && k != ThreatVictim::MemberPet)
                 continue;
             if (u.is_cc_locked && member_of(u.cc_caster)) continue;
+            // A mob immune to every school (Lord Victor Nefarius behind Nefarius Barrier 22663, a banished mob) is nothing to hold: nothing
+            // the tank does reaches it. bwl_nefarian 2026-11-07: the main tank was assigned to the rooted, immune Victor for the whole
+            // drakonid phase, the "boss is never left without a tank" pass gave him back every time, and the raid fell to the waves.
+            if (Raid::GetBrain().AllSchoolsAvoided(group_low, map_id, u.guid)) continue;
             if (find_mob(u.guid)) continue;
             Member const* v = member_of(u.victim);
             mobs.push_back({ &u, v && !v->tank });
@@ -1740,11 +1829,18 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
             }
             return nullptr;
         };
+        // A mob the raid brain's order forbids this tank (a fixed tank row's tank waits at its slot for an add still far out, RaidBrain
+        // TankSpotFor) is not this tank's to hold now: the brain reads the room's shape, this pass only distances.
+        auto raid_forbids = [&](uint64 tank_low, ObjectGuid mob) -> bool
+        {
+            RaidOrder const* ro = Raid::GetBrain().OrderFor(tank_low);
+            return ro && ro->active && std::find(ro->forbidden_targets.begin(), ro->forbidden_targets.end(), mob) != ro->forbidden_targets.end();
+        };
         for (auto it = sticky.begin(); it != sticky.end();)
         {
             auto t = by_low.find(it->first);
             bool keep = t != by_low.end() && t->second->tank && t->second->alive &&
-                        find_mob(it->second) != nullptr;
+                        find_mob(it->second) != nullptr && !raid_forbids(it->first, it->second);
             if (!keep && t != by_low.end() && t->second->tank && t->second->alive)
             {
                 // [raid_tank] why a tank lost its mob (Garr 2026-10-08: one tank hopped between Firesworn ~15 times).
@@ -1753,7 +1849,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                     cc_held_[bkey][it->second.GetCounter()] = { t->first, now_ms + kCcHoldMs };
                 TC_LOG_INFO("playerbot.v2", "[raid_tank] group={} map={} {} drops {} ({}): {}", group_low, map_id, t->second->src->name,
                             it->second.GetEntry(), it->second.GetCounter(),
-                            !gone ? "out of every view or dead" : (gone->is_cc_locked ? "crowd-controlled" : (!gone->unit_in_combat ? "out of combat" : "no longer hitting the group")));
+                            !gone ? "out of every view or dead" : raid_forbids(it->first, it->second) ? "the raid order forbids it" : (gone->is_cc_locked ? "crowd-controlled" : (!gone->unit_in_combat ? "out of combat" : "no longer hitting the group")));
             }
             it = keep ? std::next(it) : sticky.erase(it);
         }
@@ -1836,6 +1932,9 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 Mob const* mm = find_mob(mk_grp->GetTargetIcon(mkr));
                 if (!mm) continue;
                 if (Raid::OffTankMob(map_id, mm->u->entry)) continue;   // the second tank's, whatever tank the icon was given to
+                // The raid brain's forbid wins over the icon: the sticky check above drops it again on the next pass, and the tank took
+                // and dropped the marked add every pass (bwl_nefarian 1109a run 1: Mctankwa "takes … why=marker 0" / "drops" in a loop).
+                if (raid_forbids(tl, mm->u->guid)) continue;
                 if (auto sit = sticky.find(tl); sit != sticky.end() && sit->second == mm->u->guid) continue;
                 for (auto it = sticky.begin(); it != sticky.end();)
                     it = it->second == mm->u->guid ? sticky.erase(it) : std::next(it);
@@ -1940,7 +2039,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
             float best_d2 = kTankAssignRange * kTankAssignRange;
             for (auto const& m : mobs)
             {
-                if (is_taken(m.u->guid) || cc_owned(m)) continue;
+                if (is_taken(m.u->guid) || cc_owned(m) || raid_forbids(t->guid_low, m.u->guid)) continue;
                 const float dx = m.u->x - t->src->x, dy = m.u->y - t->src->y;
                 const float d2 = dx * dx + dy * dy;
                 if (d2 > kTankAssignRange * kTankAssignRange) continue;
@@ -2001,6 +2100,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 Mob const* pick = find_mob(t->src->victim);
                 char const* why = "already_on_it";
                 if (pick && Raid::NoTank(map_id, pick->u->entry)) pick = nullptr;   // a Spawn is no mob to hold
+                if (pick && raid_forbids(t->guid_low, pick->u->guid)) pick = nullptr;
                 if (pick && Raid::TankLast(map_id, pick->u->entry) && other_free_mob(pick->u->guid)) pick = nullptr;   // the adds first
                 if (!pick || is_taken(pick->u->guid))
                 {
@@ -2030,6 +2130,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
         {
             if (!t->is_bot || sticky.count(t->guid_low)) continue;
             if (Mob const* cur = find_mob(t->src->victim); cur && !is_taken(cur->u->guid) && !Raid::NoTank(map_id, cur->u->entry) && !cc_owned(*cur) &&
+                !raid_forbids(t->guid_low, cur->u->guid) &&
                 !(Raid::TankLast(map_id, cur->u->entry) && other_free_mob(cur->u->guid)))
                 assign(t, *cur, "already_on_it");
         }
@@ -3266,6 +3367,316 @@ void PveGroupCoordinator::PlanInnervates(uint64 bkey, uint64 group_low, uint32 m
         }
     }
     last = std::move(now);
+}
+
+// ---------- Line-of-sight pull ([sight_pull]) ----------
+// smlibrary_loksey 8d2fd499aa: the tank threw at a Scarlet Tracking Hound and ran it back to the return point, and two mobs of its pack, a
+// Scarlet Beastmaster and an Adept, stayed where they stood 37-47 y off and shot and cast at the priest. The tank walked out to taunt
+// them (taunt reach 4 y), the fight moved to their spot, the Beastmaster fled at 15% to the next pack 28 y on, and twelve mobs killed the
+// group. What a player does instead: break their line of sight, so they have to walk round the corner into the fight. Each plan:
+//  1. Watch the mobs on the group: one that stands still (not rooted, stunned, feared or crowd-controlled, not unable to reach), more
+//     than kStandOffYd from its victim with the victim in its sight, for kStandOffMs, stands off.
+//  2. When a mob of the fight stands off within kStandOffNearYd of the anchor, search a spot near the anchor (rings kSpotRings around
+//     it, its floor) out of every such mob's sight, with a margin to each side, outside every idle pack's reach, that the anchor has a
+//     short path to. The anchor is the pull back's return point while the bot main tank runs one home or holds there; with no pull
+//     back it is the tank itself, and only once every mob still on the group stands off (nothing left in reach to fight).
+//  3. Publish it (PveOrder::sight_*) to every bot, and move a running pull back's return point there. The bots gather at it and do not
+//     walk out to a mob on the list (State_InCombat SightPullTick, the loose-mob pickup).
+//  4. A mob leaves the list once it is within kArrivedYd of the spot, dies or drops combat; the pull ends when the list is empty,
+//     after kSightPullCapMs, or when a mob stops again with the spot in its sight (one search again, then the end).
+// Not for a group with a player in it (the player leads where the group fights) or during a boss encounter.
+void PveGroupCoordinator::PlanSightPull(uint64 bkey, uint64 group_low, uint32 map_id, uint32 now_ms, bool in_combat, uint64 main_tank,
+                                        std::vector<std::pair<uint64, Player*>> const& bots,
+                                        std::unordered_map<uint64, BotAI*> const& ais,
+                                        std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
+                                        std::unordered_map<uint64, PveOrder>& plan)
+{
+    constexpr float  kStandOffYd      = 8.0f;     // farther than this from its victim
+    constexpr uint32 kStandOffMs      = 2000;     // and still this long
+    constexpr float  kStillYd         = 1.0f;     // "still": within this of where it was first seen
+    constexpr float  kStandOffNearYd  = 50.0f;    // the mob is part of the fight at the return point
+    constexpr float  kArrivedYd       = 10.0f;    // a mob this close to the spot has come in
+    // b3ca0b4b67 overnight: a spot the mobs did not come to held the group for 20 s; 12 s is a caster's walk round a corner and back.
+    constexpr uint32 kSightPullCapMs  = 12000;
+    constexpr float  kSideYd          = 2.0f;     // the spot stays hidden this far to each side of it
+    constexpr float  kFloorDz         = 4.0f;     // the spot is on the return point's floor
+    constexpr float  kMaxPathYd       = 35.0f;
+    constexpr int    kMaxPathProbes   = 6;
+    static constexpr float kSpotRings[] = { 6.0f, 9.0f, 12.0f, 15.0f, 18.0f, 21.0f, 24.0f };
+    constexpr int    kBearings        = 24;
+
+    SightPull& sp = sight_pull_[bkey];
+    auto end = [&](char const* why)
+    {
+        if (sp.active)
+            TC_LOG_INFO("playerbot.v2", "[sight_pull] group={} map={} ends after {} ms: {}", group_low, map_id, now_ms - sp.since_ms, why);
+        sp.active = false;
+        sp.mobs.clear();
+        sp.replans = 0;
+    };
+
+    Player* tank = nullptr;
+    for (auto const& [low, p] : bots)
+        if (low == main_tank) { tank = p; break; }
+    auto ai_it = ais.find(main_tank);
+    BotAI* tank_ai = ai_it == ais.end() ? nullptr : ai_it->second;
+    if (!in_combat || !tank || !tank_ai || !tank->IsInWorld() || !tank->IsAlive() || tank->GetMapId() != map_id)
+    {
+        end(!in_combat ? "combat over" : "no bot main tank");
+        sp.watch.clear();
+        return;
+    }
+    Map* map = tank->GetMap();
+    if (!map || !map->IsDungeon())
+        return end("not in an instance");
+    // A player in the group leads where it fights (the player, or a scenario's stand-in for one).
+    if (Group const* grp = tank->GetGroup())
+        for (GroupReference const& r : grp->GetMembers())
+            if (Player const* m = r.GetSource(); m && Scenario::PlaysAsHuman(m))
+                return end("a player is in the group");
+    if (InstanceMap* im = map->ToInstanceMap())
+        if (InstanceScript const* is = im->GetInstanceScript(); is && is->IsEncounterInProgress())
+            return end("boss encounter");
+
+    // 1. Who stands off. Every mob on a bot of the group or its pet.
+    std::vector<Creature*> engaged;
+    auto add_attackers = [&](Unit const* u)
+    {
+        if (!u) return;
+        for (Unit* a : u->getAttackers())
+            if (Creature* c = a ? a->ToCreature() : nullptr; c && std::find(engaged.begin(), engaged.end(), c) == engaged.end())
+                engaged.push_back(c);
+    };
+    for (auto const& [low, p] : bots)
+    {
+        if (!p || !p->IsInWorld() || p->GetMapId() != map_id) continue;
+        add_attackers(p);
+        add_attackers(p->GetPet());
+    }
+    std::vector<Creature*> standing;
+    std::unordered_map<uint64, SightPull::Watch> watch;
+    for (Creature* c : engaged)
+    {
+        if (!c->IsAlive() || !c->IsInCombat() || c->IsDungeonBoss() || c->isWorldBoss()) continue;
+        Unit* v = c->GetVictim();
+        if (!v) continue;
+        bool const still_able = !c->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_LOST_CONTROL | UNIT_STATE_EVADE) &&
+                                !c->HasUnitMovementFlag(MOVEMENTFLAG_ROOT) && !c->CanNotReachTarget();
+        if (!still_able || c->isMoving() || c->GetExactDist2d(v) <= kStandOffYd || !c->IsWithinLOSInMap(v))
+            continue;
+        uint64 const key = c->GetGUID().GetCounter();
+        SightPull::Watch w;
+        if (auto it = sp.watch.find(key); it != sp.watch.end() &&
+            c->GetExactDist2d(it->second.x, it->second.y) <= kStillYd)
+            w = it->second;
+        else
+            w = { now_ms, now_ms, c->GetPositionX(), c->GetPositionY() };
+        w.seen_ms = now_ms;
+        watch[key] = w;
+        if (now_ms - w.since_ms >= kStandOffMs)
+            standing.push_back(c);
+    }
+    sp.watch = std::move(watch);
+
+    auto dist2 = [](float ax, float ay, float bx, float by) { return (ax - bx) * (ax - bx) + (ay - by) * (ay - by); };
+    PhaseShift const& ps = tank->GetPhaseShift();
+    float const eye = tank->GetCollisionHeight();
+    auto sees = [&](Creature const* c, float x, float y, float z)
+    {
+        return map->isInLineOfSight(ps, x, y, z + eye, c->GetPositionX(), c->GetPositionY(), c->GetPositionZ() + eye,
+                                    LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2);
+    };
+    // Hidden from c at (x, y, z) and kSideYd to each side across c's line to it: a spot on the very edge of a corner is no cover.
+    auto hidden_from = [&](Creature const* c, float x, float y, float z)
+    {
+        float lx = x - c->GetPositionX(), ly = y - c->GetPositionY();
+        float const ll = std::sqrt(lx * lx + ly * ly);
+        if (ll < 0.5f) return false;
+        lx /= ll; ly /= ll;
+        return !sees(c, x, y, z) && !sees(c, x - ly * kSideYd, y + lx * kSideYd, z) && !sees(c, x + ly * kSideYd, y - lx * kSideYd, z);
+    };
+    std::shared_ptr<BotSnapshot const> tank_snap;
+    for (auto const& sn : snaps)
+        if (sn->guid.GetCounter() == main_tank) { tank_snap = sn; break; }
+
+    // The search: rings round the return point, the nearest ring first; within a ring the bearings that do not bring the group
+    // closer to the mobs first. A short complete path from the return point.
+    auto search = [&](std::vector<Creature*> const& mobs, float ax, float ay, float az, float& ox, float& oy, float& oz, std::string& why) -> bool
+    {
+        struct Cand { float x, y, z, score; };
+        std::vector<Cand> cands;
+        uint32 n_floor = 0, n_seen = 0, n_pack = 0;
+        for (float r : kSpotRings)
+            for (int i = 0; i < kBearings; ++i)
+            {
+                float const a = float(i) * 2.0f * float(M_PI) / float(kBearings);
+                float const x = ax + r * std::cos(a), y = ay + r * std::sin(a);
+                float const z = map->GetHeight(ps, x, y, az + kFloorDz, true, kFloorDz * 2.0f);
+                if (z <= INVALID_HEIGHT + 1.0f || std::fabs(z - az) > kFloorDz) { ++n_floor; continue; }
+                bool hidden = true;
+                float closer = 0.0f;   // how much nearer the mobs the spot is than the return point
+                for (Creature const* c : mobs)
+                {
+                    if (!hidden_from(c, x, y, z)) { hidden = false; break; }
+                    float const ds = std::sqrt(dist2(x, y, c->GetPositionX(), c->GetPositionY()));
+                    float const da = std::sqrt(dist2(ax, ay, c->GetPositionX(), c->GetPositionY()));
+                    closer = std::max(closer, da - ds);
+                }
+                if (!hidden) { ++n_seen; continue; }
+                if (tank_snap && States::PointInUnpulledPackReach(BotSnapshotView(*tank_snap), x, y, z)) { ++n_pack; continue; }
+                cands.push_back({ x, y, z, r + 2.0f * closer });
+            }
+        std::stable_sort(cands.begin(), cands.end(), [](Cand const& l, Cand const& rr) { return l.score < rr.score; });
+        int probes = 0;
+        uint32 n_path = 0;
+        for (Cand const& c : cands)
+        {
+            if (probes++ >= kMaxPathProbes) break;
+            PathGenerator path(tank);
+            if (!BotMovement::SehSafeCalculatePathFrom(path, ax, ay, az, c.x, c.y, c.z) ||
+                (path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) || path.GetPathLength() > kMaxPathYd)
+            {
+                ++n_path;
+                continue;
+            }
+            G3D::Vector3 const& e = path.GetActualEndPosition();
+            ox = e.x; oy = e.y; oz = e.z;
+            return true;
+        }
+        why = fmt::format("{} points off the floor, {} in sight, {} in an idle pack's reach, {} without a short path ({} candidates)",
+                          n_floor, n_seen, n_pack, n_path, uint32(cands.size()));
+        return false;
+    };
+    auto names = [](std::vector<Creature*> const& mobs)
+    {
+        std::string out;
+        for (Creature const* c : mobs)
+            out += fmt::format("{}{} ({}) at ({:.1f},{:.1f})", out.empty() ? "" : ", ", c->GetEntry(), c->GetGUID().GetCounter(),
+                               c->GetPositionX(), c->GetPositionY());
+        return out;
+    };
+
+    BotAI::PullBackPlan const pb = tank_ai->pull_back_plan();
+    if (sp.active)
+    {
+        // 4. Who is still out there.
+        std::vector<ObjectGuid> left;
+        bool seen_again = false;
+        std::vector<Creature*> stopped;
+        for (ObjectGuid const& g : sp.mobs)
+        {
+            Creature* c = ObjectAccessor::GetCreature(*tank, g);
+            if (!c || !c->IsAlive() || !c->IsInCombat() || c->IsInEvadeMode()) continue;
+            if (dist2(c->GetPositionX(), c->GetPositionY(), sp.x, sp.y) <= kArrivedYd * kArrivedYd) continue;
+            left.push_back(g);
+            if (std::find(standing.begin(), standing.end(), c) != standing.end())
+            {
+                stopped.push_back(c);
+                if (sees(c, sp.x, sp.y, sp.z)) seen_again = true;
+            }
+        }
+        // A mob that started standing off since (a caster that came round the corner and stopped short of it).
+        for (Creature* c : standing)
+            if (std::find(left.begin(), left.end(), c->GetGUID()) == left.end() &&
+                dist2(c->GetPositionX(), c->GetPositionY(), sp.x, sp.y) > kArrivedYd * kArrivedYd && sees(c, sp.x, sp.y, sp.z))
+            {
+                left.push_back(c->GetGUID());
+                stopped.push_back(c);
+                seen_again = true;
+            }
+        if (left.empty())
+            return end("every mob that stood off has come in");
+        if (now_ms - sp.since_ms > kSightPullCapMs)
+            return end(fmt::format("{} s cap, {} still out", kSightPullCapMs / 1000u, left.size()).c_str());
+        if (seen_again)
+        {
+            float x = 0.f, y = 0.f, z = 0.f;
+            std::string why;
+            if (sp.replans >= 1 || !search(stopped, sp.x, sp.y, sp.z, x, y, z, why))
+                return end(fmt::format("a mob stopped with the spot in its sight: {}{}", names(stopped),
+                                       why.empty() ? std::string() : " (" + why + ")").c_str());
+            ++sp.replans;
+            TC_LOG_INFO("playerbot.v2", "[sight_pull] group={} map={} {} stopped with the spot ({:.1f},{:.1f}) in sight: new spot ({:.1f},{:.1f},{:.1f})",
+                        group_low, map_id, names(stopped), sp.x, sp.y, x, y, z);
+            sp.x = x; sp.y = y; sp.z = z;
+            if (tank_ai->pull_back_active())
+                tank_ai->edit_pull_back([&](BotAI::PullBackPlan& q) { q.rx = x; q.ry = y; q.rz = z; });
+        }
+        sp.mobs = std::move(left);
+    }
+    else
+    {
+        // 2. The start: a mob of the fight stands off while the tank runs a pull back home or holds at its return point; or, with no pull
+        // back, while every mob still on the group stands off, so the tank has nothing in reach to fight and would walk out to them.
+        // eea74327b3 smlibrary_loksey36 (all three runs): with the pack beaten, the tank walked out to a Scarlet Adept or Beastmaster
+        // casting from 15-20 y, next to the next pack; that pack and the one after it joined, the priest ran dry and the warrior or the
+        // rogue died. The tank-anchored start of 0035 moved the tank in the middle of its fight (taken out in 0036); this one starts
+        // only when the fight in reach is over, so the walk to the spot replaces the walk out.
+        bool const pulling_back = tank_ai->pull_back_active() && pb.active && pb.map == map_id;
+        if (pulling_back && pb.phase == BotAI::PullBackPhase::Pull)
+            return;
+        if (!pulling_back)
+        {
+            if (standing.empty() || !tank->IsInCombat())
+                return;
+            // A mob that fights in reach or still walks in: the fight is on, nobody moves. One held by crowd control does not count.
+            for (Creature* c : engaged)
+                if (c->IsAlive() && c->IsInCombat() && c->GetVictim() && !c->HasUnitState(UNIT_STATE_LOST_CONTROL) &&
+                    std::find(standing.begin(), standing.end(), c) == standing.end())
+                    return;
+        }
+        float const ax = pulling_back ? pb.rx : tank->GetPositionX();
+        float const ay = pulling_back ? pb.ry : tank->GetPositionY();
+        float const az = pulling_back ? pb.rz : tank->GetPositionZ();
+        char const* const from = pulling_back ? "the return point" : "the tank";
+        std::vector<Creature*> mobs;
+        for (Creature* c : standing)
+            if (dist2(c->GetPositionX(), c->GetPositionY(), ax, ay) <= kStandOffNearYd * kStandOffNearYd)
+                mobs.push_back(c);
+        if (mobs.empty())
+            return;
+        if (mobs.size() > PveOrder::kMaxSightMobs)
+            mobs.resize(PveOrder::kMaxSightMobs);
+        float x = 0.f, y = 0.f, z = 0.f;
+        std::string why;
+        if (!search(mobs, ax, ay, az, x, y, z, why))
+        {
+            if (now_ms - sp.no_spot_log_ms >= 5000u)
+            {
+                sp.no_spot_log_ms = now_ms;
+                TC_LOG_INFO("playerbot.v2",
+                            "[sight_pull] group={} map={} {} stand off, no spot out of their sight within {:.0f} y of {} ({:.1f},{:.1f}): {}",
+                            group_low, map_id, names(mobs), kSpotRings[std::size(kSpotRings) - 1], from, ax, ay, why);
+            }
+            return;
+        }
+        sp.active = true;
+        sp.since_ms = now_ms ? now_ms : 1u;
+        sp.replans = 0;
+        sp.x = x; sp.y = y; sp.z = z;
+        sp.ax = ax; sp.ay = ay; sp.az = az;
+        sp.mobs.clear();
+        for (Creature const* c : mobs)
+            sp.mobs.push_back(c->GetGUID());
+        if (pulling_back)
+            tank_ai->edit_pull_back([&](BotAI::PullBackPlan& q) { q.rx = x; q.ry = y; q.rz = z; });
+        TC_LOG_INFO("playerbot.v2", "[sight_pull] group={} map={} {} stand off and shoot from where they stood: the group gathers at ({:.1f},{:.1f},{:.1f}), "
+                    "{:.0f} y from {} ({:.1f},{:.1f}), out of their sight",
+                    group_low, map_id, names(mobs), x, y, z, std::sqrt(dist2(x, y, ax, ay)), from, ax, ay);
+    }
+
+    // 3. Publish.
+    for (auto& [low, o] : plan)
+    {
+        o.sight_pull = true;
+        o.sight_x = sp.x; o.sight_y = sp.y; o.sight_z = sp.z;
+        o.sight_mobs = {};
+        for (size_t i = 0; i < sp.mobs.size() && i < PveOrder::kMaxSightMobs; ++i)
+            o.sight_mobs[i] = sp.mobs[i];
+        // The DPS burn a mob at the spot meanwhile: a kill focus out there would send them to it (loksey: kill_focus=23, the Beastmaster).
+        if (o.sight_pull_mob(o.kill_focus))
+            o.kill_focus = ObjectGuid::Empty;
+    }
 }
 
 } // namespace Playerbot

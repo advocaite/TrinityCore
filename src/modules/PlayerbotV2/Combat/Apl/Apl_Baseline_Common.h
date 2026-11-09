@@ -17,10 +17,13 @@
 #include "../ApRotation.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/BotSnapshotView.h"
+#include "Bot/States/MaintainHelpers.h"   // RaidPointInUnpulledReach
+#include "Bot/ThreatDiscipline.h"         // RaidLogDue
 #include "Group/GroupSnapshot.h"
 #include "SharedDefines.h"
 #include "Log.h"
 
+#include <cmath>
 #include <cstdint>
 #include <unordered_set>
 
@@ -40,6 +43,9 @@ inline bool AlwaysInCombat(ApPredicateContext const& ctx)
     return ctx.bot.in_combat();
 }
 
+// Beyond this an attacker is not taken for one beside the bot (melee reach plus a step).
+constexpr float kRetaliateMeleeYds = 8.0f;
+
 inline void DoAutoAttack(ApPredicateContext const& ctx, BotIntentEmitter& e)
 {
     ObjectGuid t = ctx.bot.victim();
@@ -49,9 +55,45 @@ inline void DoAutoAttack(ApPredicateContext const& ctx, BotIntentEmitter& e)
     // wedge cluster). Engage whatever is meleeing us (attackers are adjacent and
     // reachable), else the nearest visible enemy, so combat actually resolves.
     // Strictly additive: only runs when no target was already selected.
+    //
+    // The nearest attacker, not the first listed. An attacker is not always adjacent: a ranged mob shoots from where it stands, and in
+    // a dungeon that can be beside the next, unpulled pack. Chasing it walks the bot into that pack's aggro reach (SM Library,
+    // 4c455c9969, both runs: the tank's victim died, the retaliate went to a Scarlet Beastmaster shooting it from 30 y inside the
+    // next room, the tank walked in and pulled 6 more mobs; the wipe). Such an attacker is left to the ranged damage dealers, and the
+    // bot does not fall through to "the nearest visible enemy" either, which could be one of the idle mobs of that same room.
     if (t.IsEmpty())
+    {
+        float bx, by, bz;
+        ctx.bot.position(bx, by, bz);
+        bool const in_dungeon = ctx.bot.is_in_instance() && !ctx.bot.in_battleground();
+        NearbyUnit const* nearest = nullptr;
+        NearbyUnit const* left = nullptr;
+        float nearest_d2 = 0.f;
         for (auto const& u : ctx.bot.attackers())
-            if (u.hp > 0) { t = u.guid; break; }
+        {
+            if (u.hp <= 0) continue;
+            float const dx = u.x - bx, dy = u.y - by, dz = u.z - bz;
+            float const d2 = dx * dx + dy * dy + dz * dz;
+            if (in_dungeon && d2 > kRetaliateMeleeYds * kRetaliateMeleeYds &&
+                ::Playerbot::States::RaidPointInUnpulledReach(ctx.bot, u.x, u.y, u.z, /*exempt_victim_pack*/ false))
+            {
+                left = &u;
+                continue;
+            }
+            if (!nearest || d2 < nearest_d2) { nearest = &u; nearest_d2 = d2; }
+        }
+        if (nearest)
+            t = nearest->guid;
+        else if (left)
+        {
+            uint32 const now = ctx.bot.published_at_ms();
+            if (::Playerbot::RaidLogDue((uint64(ctx.bot.guid().GetCounter()) << 8) | 37u, now, 5000u))
+                TC_LOG_INFO("playerbot.v2", "[retaliate_hold] {} does not chase entry {} ({}) hitting it from {:.0f} y: it stands in an idle pack's reach",
+                    ctx.bot.name(), left->entry, left->guid.GetCounter(),
+                    std::sqrt((left->x - bx) * (left->x - bx) + (left->y - by) * (left->y - by) + (left->z - bz) * (left->z - bz)));
+            return;
+        }
+    }
     if (t.IsEmpty())
         for (auto const& u : ctx.bot.nearby_enemies())
             if (u.hp > 0 && u.in_los) { t = u.guid; break; }

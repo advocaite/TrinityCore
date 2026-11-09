@@ -1,6 +1,7 @@
 // BotChatModel - see header.
 
 #include "BotChatModel.h"
+#include "BotBridge.h"
 #include "BotChatModelClient.h"
 #include "BotConversation.h"
 #include "BotIntent.h"
@@ -97,6 +98,7 @@ ChatModel::Settings SettingsFrom(ConfigReader::ChatModelConfig const& cfg)
     s.temperature = cfg.temperature;
     s.keep_alive = cfg.keep_alive;
     s.context_length = cfg.context_length;
+    s.think = cfg.think;
     return s;
 }
 
@@ -287,31 +289,36 @@ std::string BuildSystemPrompt(Player* bot, V2::ConversationContext const& ctx, B
 
 } // namespace
 
+// Player lines go to the outside program through the bot bridge (Bot/BotBridge.h) while one answers there; otherwise to Ollama.
 bool BotChatModel::WhispersOn()
 {
     auto const& c = Services::Config().chat_model();
-    return c.enable && c.whispers && !IsDown();
+    return c.whispers && (BotBridge::ChatOn() || (c.enable && !IsDown()));
 }
 
 bool BotChatModel::PartyOn()
 {
     auto const& c = Services::Config().chat_model();
-    return c.enable && c.party && !IsDown();
+    return c.party && (BotBridge::ChatOn() || (c.enable && !IsDown()));
 }
 
 bool BotChatModel::SayReplyOn()
 {
     auto const& c = Services::Config().chat_model();
-    return c.enable && c.say_reply && !IsDown();
+    return c.say_reply && (BotBridge::ChatOn() || (c.enable && !IsDown()));
 }
 
 bool BotChatModel::SayOn()
 {
-    return Services::Config().chat_model().enable && !IsDown();
+    return BotBridge::TalkOn() || (Services::Config().chat_model().enable && !IsDown());
 }
 
 bool BotChatModel::AskSay(Player* bot, std::string const& system, std::string const& chat, uint64 key, uint32 per_minute)
 {
+    // With a program answering the chat (Playerbot.Bridge.Talk), it writes the bots' talk too: one model for all of it, never the
+    // built-in one loaded next to it on the same graphics card.
+    if (BotBridge::TalkOn())
+        return BotBridge::AskTalk(bot, system, chat, key, per_minute);
     auto const& cfg = Services::Config().chat_model();
     if (!cfg.enable || !bot || IsDown())
         return false;
@@ -351,7 +358,9 @@ bool BotChatModel::AskSay(Player* bot, std::string const& system, std::string co
 
 std::vector<std::pair<std::string, std::string>> BotChatModel::TakeSaid(uint64 key)
 {
-    std::vector<std::pair<std::string, std::string>> out;
+    std::vector<std::pair<std::string, std::string>> out = BotBridge::TakeTalk(key);
+    if (!out.empty())
+        return out;
     if (auto it = g_said.find(key); it != g_said.end())
     {
         out.swap(it->second);
@@ -364,13 +373,14 @@ bool BotChatModel::Ask(Player* bot, Player* sender, V2::ConversationContext cons
                        uint32 extra_delay_ms)
 {
     auto const& cfg = Services::Config().chat_model();
-    if (!cfg.enable || !bot || !sender || msg.empty())
+    bool const bridge = BotBridge::ChatOn();
+    if ((!cfg.enable && !bridge) || !bot || !sender || msg.empty())
         return false;
 
     BotId const id = bot->GetGUID().GetCounter();
     Clock::time_point const now = Clock::now();
 
-    if (IsDown())
+    if (!bridge && IsDown())
         return false;
     if (auto it = g_last_ask.find(id); it != g_last_ask.end() && now - it->second < std::chrono::milliseconds(cfg.bot_cooldown_ms))
         return false;
@@ -381,6 +391,20 @@ bool BotChatModel::Ask(Player* bot, Player* sender, V2::ConversationContext cons
         TC_LOG_INFO("playerbot.v2", "[conv] {} <- {}: chat model skipped (MaxPerMinute {} reached)", bot->GetName(), sender->GetName(),
                     cfg.max_per_minute);
         return false;
+    }
+
+    if (bridge)
+    {
+        // Same limits as the model above; the outside program answers in replies.jsonl and BotBridge says the answer.
+        char const* const ch = channel == Channel::Whisper ? "whisper" : channel == Channel::Party ? "party"
+                             : channel == Channel::Raid ? "raid" : "say";
+        std::string const prompt = BuildSystemPrompt(bot, ctx, channel, cfg.language, msg, cfg.extra_prompt, cfg.date_in_prompt);
+        if (!BotBridge::ReportChat(bot, sender, ch, msg, prompt))
+            return false;
+        g_last_ask[id] = now;
+        g_minute.push_back(now);
+        TC_LOG_INFO("playerbot.v2", "[conv] {} <- {}: sent to the bot bridge ({})", bot->GetName(), sender->GetName(), ch);
+        return true;
     }
 
     Job job;
@@ -436,6 +460,11 @@ void BotChatModel::WarmUp()
 {
     auto const& cfg = Services::Config().chat_model();
     if (!cfg.enable)
+        return;
+    // With the bot bridge answering chat, the outside program brings its own model. Loading this one too kept a second model
+    // (llama3.2:3b, 3 GB) in the graphics card next to the program's qwen2.5:14b (Karrz's PC, 2026-11-08). It is loaded on the
+    // first line it really has to answer: when the program is not running.
+    if (auto const& bridge = Services::Config().bridge(); bridge.enable && bridge.chat)
         return;
     std::string const which = cfg.host + ":" + std::to_string(cfg.port) + "/" + cfg.model;
     if (which == g_warmed)
