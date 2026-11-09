@@ -998,6 +998,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.XP.BattlegroundKill"sv, .DefaultValue = 1.0f, .Index = RATE_XP_BG_KILL },
         { .Name = "Rate.XP.Quest"sv, .DefaultValue = 1.0f, .Index = RATE_XP_QUEST },
         { .Name = "Rate.XP.Explore"sv, .DefaultValue = 1.0f, .Index = RATE_XP_EXPLORE },
+        { .Name = "Rate.XP.DungeonKill"sv, .DefaultValue = 1.8f, .Index = RATE_XP_DUNGEON_KILL, .Min = 0.0f },
         { .Name = "XP.Boost.Rate"sv, .DefaultValue = 2.0f, .Index = RATE_XP_BOOST },
         { .Name = "Rate.RepairCost"sv, .DefaultValue = 1.0f, .Index = RATE_REPAIRCOST, .Min = 0.0f },
         { .Name = "Rate.Reputation.Gain"sv, .DefaultValue = 1.0f, .Index = RATE_REPUTATION_GAIN },

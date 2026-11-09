@@ -2703,6 +2703,16 @@ Rate.XP.Explore = 1
 Rate.Talent = 1
 
 #
+#    Rate.XP.DungeonKill
+#        Description: Extra experience for killing creatures in 5 player dungeons (raids not included), on top of
+#                     Rate.XP.Kill and the vanilla elite bonus.
+#        Default:     1.8 - (WoW Forever live: +20% from October 8 2026, then +50% from the November 8 2026 hotfix)
+#                     1.2 - (WoW Forever before the November 8 2026 hotfix)
+#                     1   - (Vanilla, no extra dungeon experience)
+
+Rate.XP.DungeonKill = 1.8
+
+#
 #    Rate.XP.BattlegroundKill
 #        Description: Experience rate for honorable kills in battlegrounds,
 #                     it works when Battleground.GiveXPForKills = 1
