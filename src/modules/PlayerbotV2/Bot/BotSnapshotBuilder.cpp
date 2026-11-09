@@ -5545,7 +5545,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // "dropped" the goal and was handed it right back). Honor it here
             // so dropping a goal actually rotates the picker to other work
             // for the blacklist window.
-            if (bot_ai && bot_ai->quest_blacklisted(q.quest_id, now_ms))
+            // Only the bot's OWN drop counts here: the other bots' drops (QuestGoalMemory) are about starting a quest, and with them
+            // a bot halfway through a quest stopped working on it as soon as two others somewhere had given up on theirs.
+            if (bot_ai && bot_ai->quest_blacklisted(q.quest_id, now_ms, /*fleet_memory*/ false))
                 continue;
             // Level gate: skip a quest the bot is too LOW-level to actually do.
             // A bot force-granted a quest far above its level (verified live: L4
@@ -6092,7 +6094,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                     Quest const* dqt = sObjectMgr->GetQuestTemplate(dq.quest_id);
                     if (dqt && dqt->GetRequiredSkill() && const_cast<Player*>(p)->GetSkillValue(dqt->GetRequiredSkill()) == 0)
                         skip = "skill";
-                    else if (bot_ai && bot_ai->quest_blacklisted(dq.quest_id, now_ms))
+                    else if (bot_ai && bot_ai->quest_blacklisted(dq.quest_id, now_ms, /*fleet_memory*/ false))
                         skip = "quest_blacklist";
                     else if (dqt && !const_cast<Player*>(p)->SatisfyQuestMinLevel(dqt, false))
                         skip = "min_level";
@@ -7442,7 +7444,17 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 // Cheapest first: skip quests already in the log and the
                 // per-bot blacklists.
                 if (p->GetQuestStatus(qid) != QUEST_STATUS_NONE) continue;
-                if (offer_bot_ai && offer_bot_ai->quest_blacklisted(qid, offer_now_ms))
+                // A starting-zone quest (bot and quest at level 10 or below) is taken even when other bots gave up on its goal: the
+                // first quests of a zone open everything after them, so skipping one strands every new bot there (Shadowglen 0.1.34:
+                // two drops of The Balance of Nature left 40 bots with empty quest logs). Only the bot's own drop skips it.
+                bool const starter_quest = [&]
+                {
+                    if (p->GetLevel() > 10)
+                        return false;
+                    Quest const* sq = sObjectMgr->GetQuestTemplate(qid);
+                    return sq && p->GetQuestLevel(sq) <= 10;
+                }();
+                if (offer_bot_ai && offer_bot_ai->quest_blacklisted(qid, offer_now_ms, /*fleet_memory*/ !starter_quest))
                     continue;
                 // Permanent class/race-impossible skip — these gates never flip
                 // for this bot, so don't re-run the expensive CanTakeQuest or

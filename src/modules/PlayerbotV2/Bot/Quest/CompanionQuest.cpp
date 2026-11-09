@@ -174,7 +174,8 @@ void BuildState(Player* bot, BotAI* ai, BotSnapshot& snap)
                 QuestStatus const os = owner->GetQuestStatus(qid);
                 bool const owner_holds = os == QUEST_STATUS_INCOMPLETE;
                 if (!owner_holds && !accept_all) continue;
-                if (ai && ai->quest_blacklisted(qid, now_ms)) continue;
+                // The player holds the quest: the companion takes it too, whatever other bots elsewhere gave up on.
+                if (ai && ai->quest_blacklisted(qid, now_ms, /*fleet_memory*/ !owner_holds)) continue;
                 if (!BotCanTake(bot, qid)) continue;
                 CompanionQuestAction a;
                 a.giver = giver;

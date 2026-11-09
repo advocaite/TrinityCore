@@ -19997,7 +19997,7 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                         if (t.goal_is_quest && s.current_quest_id() != 0)
                         {
                             ai.blacklist_quest(s.current_quest_id(), now_ms);
-                            ::Playerbot::V2::Travel::QuestGoalMemory::Instance().NoteDropped(s.current_quest_id(), now_ms);
+                            ::Playerbot::V2::Travel::QuestGoalMemory::Instance().NoteDropped(s.current_quest_id(), uint64(s.bot_id()), now_ms);
                             tw.last_recovery_ms = now_ms;
                             tw.recovery_tier = 3;
                             ai.set_last_rule_fired("idle:unstick:drop_goal");

@@ -80,17 +80,21 @@ TEST_CASE("ReachMemory: the table never grows past its cap and keeps the newest"
     CHECK(m.KnownUnreachable(0, 0, 0, last, 0, t));
 }
 
-TEST_CASE("QuestGoalMemory: two bots giving up on a quest make it known unreachable until the time is up", "[reachmemory]")
+TEST_CASE("QuestGoalMemory: three different bots giving up on a quest make it known unreachable until the time is up", "[reachmemory]")
 {
     QuestGoalMemory m;
     CHECK_FALSE(m.KnownUnreachable(4286, 1000));
-    m.NoteDropped(4286, 1000);
-    CHECK_FALSE(m.KnownUnreachable(4286, 1100));                         // one bot may be stuck for its own reasons
-    m.NoteDropped(4286, 2000);
+    m.NoteDropped(4286, 11, 1000);
+    m.NoteDropped(4286, 11, 1050);
+    m.NoteDropped(4286, 11, 1080);
+    CHECK_FALSE(m.KnownUnreachable(4286, 1100));                         // one bot stuck again and again is that bot's own trouble
+    m.NoteDropped(4286, 12, 1500);
+    CHECK_FALSE(m.KnownUnreachable(4286, 1600));                         // two bots are not enough (Shadowglen 0.1.34)
+    m.NoteDropped(4286, 13, 2000);
     CHECK(m.KnownUnreachable(4286, 3000));
     CHECK_FALSE(m.KnownUnreachable(4287, 3000));                         // another quest is not affected
     CHECK_FALSE(m.KnownUnreachable(4286, 2000 + QuestGoalMemory::kTtlMs));
-    m.NoteDropped(4286, 2000 + QuestGoalMemory::kTtlMs + 5);             // an old count does not carry over the expiry
+    m.NoteDropped(4286, 14, 2000 + QuestGoalMemory::kTtlMs + 5);         // an old count does not carry over the expiry
     CHECK_FALSE(m.KnownUnreachable(4286, 2000 + QuestGoalMemory::kTtlMs + 10));
     CHECK_FALSE(m.KnownUnreachable(0, 3000));
 }

@@ -2074,14 +2074,15 @@ public:
         std::lock_guard<std::mutex> lk(quest_mem_mtx_);
         quest_blacklist_until_ms_[quest_id] = now_ms + kQuestBlacklistMs;
     }
-    bool quest_blacklisted(uint32 quest_id, uint32 now_ms) const
+    // fleet_memory=false: only this bot's own drops count, not the other bots' (a starting-zone quest, see the offer scan).
+    bool quest_blacklisted(uint32 quest_id, uint32 now_ms, bool fleet_memory = true) const
     {
         if (quest_id == 0) return false;
         std::lock_guard<std::mutex> lk(quest_mem_mtx_);
         auto const it = quest_blacklist_until_ms_.find(quest_id);
         if (it == quest_blacklist_until_ms_.end())
             // Not this bot's own drop: other bots may have given up on the walk to its goal (Travel/ReachMemory.h).
-            return ::Playerbot::V2::Travel::QuestGoalMemory::Instance().KnownUnreachable(quest_id, now_ms);
+            return fleet_memory && ::Playerbot::V2::Travel::QuestGoalMemory::Instance().KnownUnreachable(quest_id, now_ms);
         return now_ms < it->second;
     }
     // Drop expired entries. Called periodically from State_Idle (every ~5min)

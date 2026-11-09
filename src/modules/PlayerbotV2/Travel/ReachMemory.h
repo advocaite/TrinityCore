@@ -119,21 +119,27 @@ private:
 // QuestGoalMemory - the same idea for a quest objective: when bots keep giving up on the walk to one quest's goal (the tracker drops the goal
 // after it made no progress), the other bots stop starting that quest for a while instead of each paying the same 90 s wedge
 //. Per quest, not per place: the objective is one point.
+// Several DIFFERENT bots must have given up, not one bot twice, and the memory lasts 10 minutes. With two drops (any bots) and 30
+// minutes, renewed by every new drop, Shadowglen's first quest The Balance of Nature (456) was skipped by every bot of the zone in
+// 0.1.34: the bots there wedge on Aldrassil's roots now and then, two drops locked the quest for the whole fleet, and as every
+// other Shadowglen quest follows it, 40 bots of level 1 to 5 stood with empty quest logs and wandered (9,599 quest_offer_refused,
+// 2,556 quest_truly_stuck). The offer scan also leaves this memory out for starting-zone quests (BotSnapshotBuilder).
 class QuestGoalMemory
 {
 public:
-    static constexpr std::uint32_t kTtlMs = 30u * 60u * 1000u;
-    static constexpr std::uint32_t kMinDrops = 2;   // one bot can be stuck for its own reasons (a pack on the path, its own gear)
+    static constexpr std::uint32_t kTtlMs = 10u * 60u * 1000u;
+    static constexpr std::uint32_t kMinBots = 3;   // one bot can be stuck for its own reasons (a pack on the path, its own gear)
 
-    void NoteDropped(std::uint32_t quest_id, std::uint32_t now_ms)
+    void NoteDropped(std::uint32_t quest_id, std::uint64_t bot_id, std::uint32_t now_ms)
     {
         if (quest_id == 0)
             return;
         std::lock_guard<std::mutex> lk(mx_);
         Entry& e = quests_[quest_id];
-        if (e.drops == 0 || std::uint32_t(now_ms - e.last_ms) >= kTtlMs)
-            e.drops = 0;
-        ++e.drops;
+        if (e.bots.empty() || std::uint32_t(now_ms - e.last_ms) >= kTtlMs)
+            e.bots.clear();
+        if (std::find(e.bots.begin(), e.bots.end(), bot_id) == e.bots.end() && e.bots.size() < 8)
+            e.bots.push_back(bot_id);
         e.last_ms = now_ms;
     }
 
@@ -143,7 +149,7 @@ public:
             return false;
         std::lock_guard<std::mutex> lk(mx_);
         auto const it = quests_.find(quest_id);
-        return it != quests_.end() && it->second.drops >= kMinDrops && std::uint32_t(now_ms - it->second.last_ms) < kTtlMs;
+        return it != quests_.end() && it->second.bots.size() >= kMinBots && std::uint32_t(now_ms - it->second.last_ms) < kTtlMs;
     }
 
     static QuestGoalMemory& Instance()
@@ -153,7 +159,7 @@ public:
     }
 
 private:
-    struct Entry { std::uint32_t last_ms = 0; std::uint32_t drops = 0; };
+    struct Entry { std::uint32_t last_ms = 0; std::vector<std::uint64_t> bots; };
     mutable std::mutex mx_;
     std::unordered_map<std::uint32_t, Entry> quests_;
 };

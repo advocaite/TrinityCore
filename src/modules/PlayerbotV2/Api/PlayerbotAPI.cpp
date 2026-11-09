@@ -2307,6 +2307,36 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         }
     }
 
+    // A goal moved far UP onto a model: the bot asked for a spot at its own level (a wander step, a chunk of a long walk), and a height
+    // probe from high above or the polygon nearest the goal lies 8+ y higher on something that is not the terrain: a tree's roots or
+    // branches, a roof. Shadowglen 0.1.34: wander goals at the bot's level under Aldrassil were moved onto the tree (far_end_snap 1358.1
+    // -> 1397.3, the NoPath retry from 50 y above landing 18 to 29 y up on the trunks), and the bots ran at the trees, stopped and picked
+    // again, round and round. A hill is terrain, so the terrain height there is close to the surface found and the goal still moves up.
+    // Open world only: in a dungeon, a battleground or a capital the floors are models and have their own guards.
+    bool const open_world_level_ask = std::fabs(z_ask - p_->GetPositionZ()) < ::Playerbot::V2::Fleet::kSameLevelYards
+        && p_->GetMap() && !p_->GetMap()->IsDungeon() && !p_->GetMap()->IsBattlegroundOrArena()
+        && !::Playerbot::V2::World::IsVanillaCapitalZone(p_->GetZoneId()) && !p_->GetTransport() && !p_->IsInWater();
+    auto rise_onto_model = [&](float sx, float sy, float sz) -> bool
+    {
+        constexpr float kModelRise = 8.0f;
+        if (!open_world_level_ask || sz <= std::max(z_ask, p_->GetPositionZ()) + kModelRise)
+            return false;
+        float const terrain = p_->GetMap()->GetGridHeight(p_->GetPhaseShift(), sx, sy);
+        bool const on_model = terrain <= INVALID_HEIGHT || sz - terrain > 4.0f;
+        if (on_model)
+        {
+            static std::unordered_map<uint64, uint32> s_modelAt;
+            uint32 const mnow = GameTime::GetGameTimeMS();
+            uint32& mat = s_modelAt[p_->GetGUID().GetCounter()];
+            if (mat == 0 || mnow - mat >= 10000u)
+            {
+                mat = mnow ? mnow : 1u;
+                TC_LOG_INFO("playerbot.v2", "[goal_on_model] {} asked ({:.1f},{:.1f},{:.1f}) at its own level, not moved up to {:.1f} at ({:.1f},{:.1f}): terrain {:.1f}",
+                            p_->GetName(), x, y, z_ask, sz, sx, sy, terrain);
+            }
+        }
+        return on_model;
+    };
     if (!path_ok || (pt & PATHFIND_NOPATH))
     {
         // Dest-Z mesh-snap RETRY. Stepped/projected waypoints carry the
@@ -2337,7 +2367,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
                     break;
                 gz = below;
             }
-            if (gz > INVALID_HEIGHT && std::fabs(gz - z) > 8.0f)
+            if (gz > INVALID_HEIGHT && std::fabs(gz - z) > 8.0f && !rise_onto_model(x, y, gz))
             {
                 // Re-run on the SAME PathGenerator (repeated CalculatePath
                 // calls overwrite internal state by design).
@@ -2367,7 +2397,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
                                               true, 160.0f);
                     if (mz <= INVALID_HEIGHT)
                         mz = (p_->GetPositionZ() + z) * 0.5f;
-                    if (SehSafeCalculatePath(path, mx, my, mz) &&
+                    if (!rise_onto_model(mx, my, mz) && SehSafeCalculatePath(path, mx, my, mz) &&
                         !(path.GetPathType() & PATHFIND_NOPATH))
                     {
                         pt = path.GetPathType();
@@ -2524,7 +2554,8 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         // one, so the goal was picked again and again (Burning Steppes, Simer: 53 path_fail Magma for one quest goal in 3 minutes).
         // Left unsnapped, the goal ends as FarFromPolyEnd, which suppresses it for long and lets goal selection move on.
         bool const end_in_hazard = BotMovement::ClassifyDestinationLiquid(p_, ae.x, ae.y, ae.z) == BotMovement::LiquidVerdict::Hazard;
-        if (off_end <= 12.0f && std::fabs(dz_end) < max_dz && !snaps_under && !end_in_hazard && !::Playerbot::V2::Fleet::PathHasCliff(path.GetPath()))
+        if (off_end <= 12.0f && std::fabs(dz_end) < max_dz && !snaps_under && !end_in_hazard && !::Playerbot::V2::Fleet::PathHasCliff(path.GetPath())
+            && !rise_onto_model(ae.x, ae.y, ae.z))
         {
             if (SehSafeCalculatePath(path, ae.x, ae.y, ae.z) && !(path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_FARFROMPOLY_END)))
             {
