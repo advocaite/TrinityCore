@@ -1276,6 +1276,37 @@ std::unordered_map<uint64_t, uint32_t> g_lastTankSpot;
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
 constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned within this reach, in nobody's combat yet, are off limits too
 
+// An add of a fixed row that has reached the raid: it stands in melee with a raider, wherever that raider is (another tank's pile, a melee DPS
+// beside it, a healer). bwl_nefarian 1109y: a drakonid held at a neighbour's pile (on the arc's far side, 23-26 y from the centre) or on a
+// raider outside the arc counted as "still coming" for every tank further than 15 y; the main tank stood at its slot with nothing for 40 s
+// ("Mctankwa 100%>-") while Mctankwb and Mctankda held three and four each, and those two died first in all three runs.
+bool ReachedRaid(Plan const& plan, Unit* add)
+{
+    Unit* const v = add->GetVictim();
+    if (!v || !v->IsAlive())
+        return false;
+    Player* const vp = v->ToPlayer();
+    if (!vp || std::none_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p == vp; }))
+        return false;
+    return add->IsWithinMeleeRange(v);
+}
+
+// Whether a fixed row's tank goes after <add>, an add of the rule not on it: one that has reached the raid (ReachedRaid), one inside the
+// arc (among the raid, on a healer or a caster at the camp), or one within the fetch reach of the tank that is also near the arc (it
+// intercepts an add running past its slot). Everything else is still on its way in, and the tank waits for it at its slot. The fetch reach
+// alone, measured from the tank wherever it stood, kept a tank at a drakonid door: every new drakonid spawned within 15 y of it, it
+// turned on each one and never walked back (bwl_nefarian 1109y: Mctankwb fought at -7597,-1195 beside the west door, 63 y from the
+// healers' post, from 20 s into the pull until it died; Mctankda died 45 y north of the camp).
+bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
+{
+    if (ReachedRaid(plan, add))
+        return true;
+    if (rule.reach <= 0.0f)
+        return bot->IsWithinDistInMap(add, kFixedSpotFetchReach);
+    float const fromCentre = Dist2D(add->GetPositionX(), add->GetPositionY(), rule.x, rule.y);
+    return fromCentre <= rule.reach || (fromCentre <= rule.reach + kFixedSpotFetchReach && bot->IsWithinDistInMap(add, kFixedSpotFetchReach));
+}
+
 // waitFor (fixed rows): set to the loose add this tank waits for at its slot instead of walking out to it.
 bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, float& outX, float& outY, Unit** waitFor = nullptr)
 {
@@ -1290,9 +1321,8 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
         // -7515,-1153), 41 yards and more from the healers' post, and the healers ran after them and back.
         if (Unit* const v = bot->GetVictim(); v && v->IsAlive() && v->GetVictim() != bot)
         {
-            // An add already inside the arc is among the raid, on a healer or a caster at the camp: the tank fetches it as well.
-            if (bot->IsWithinDistInMap(v, kFixedSpotFetchReach) ||
-                (rule.reach > 0.0f && Dist2D(v->GetPositionX(), v->GetPositionY(), rule.x, rule.y) <= rule.reach))
+            // One the tank goes after (FetchesAdd): it fetches it and brings it back.
+            if (FetchesAdd(plan, rule, bot, v))
                 return false;
             if (waitFor)
                 *waitFor = v;
@@ -2328,9 +2358,9 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
             {
                 if (!enemy->IsAlive() || !InTankSpot(rule, enemy->GetEntry()) || enemy->GetVictim() == bot)
                     continue;
-                if (bot->IsWithinDistInMap(enemy, kFixedSpotFetchReach))
-                    continue;
-                if (rule.reach > 0.0f && Dist2D(enemy->GetPositionX(), enemy->GetPositionY(), rule.x, rule.y) <= rule.reach)
+                // The ones it goes after (FetchesAdd). One already in melee with a raider is among them: a tank with a free hand takes it,
+                // so the adds spread over the tanks instead of piling on the ones that met them first.
+                if (FetchesAdd(plan, rule, bot, enemy))
                     continue;
                 out.forbidden_targets.push_back(enemy->GetGUID());
             }
