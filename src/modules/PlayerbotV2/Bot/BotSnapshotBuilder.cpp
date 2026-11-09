@@ -1441,6 +1441,12 @@ bool SameMapRelocationNeedsBridge(
 // worker, so a given bot's pairs stay on a single cache (good locality).
 bool CachedLosCheck(Player const* p, Unit const* t, uint32 now_ms)
 {
+    // Within melee reach the two stand against each other: a melee swing needs no line of sight on the server, and the ray between
+    // the two heads can still end in a branch or an overhang right above them. The Barrens near the Crossroads (Discord 2026-11-09,
+    // mob 3632): bots 0.1 y from their target read "out of LoS", walked about six times looking for a clear spot, dropped the target
+    // and took it again, round and round.
+    if (p->IsWithinMeleeRange(t))
+        return true;
     struct LosEntry { uint32 at_ms; bool los; };
     thread_local std::unordered_map<uint64, LosEntry> s_losCache;
     if (s_losCache.size() > 65536)
