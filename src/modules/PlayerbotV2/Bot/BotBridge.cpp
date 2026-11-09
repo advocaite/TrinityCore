@@ -130,7 +130,11 @@ std::unordered_map<BotId, uint32> g_last_line_ms;
 uint32      g_bad_lines = 0;
 uint32      g_last_bad_warn_ms = 0;
 struct ChatAsk { BotId bot = 0; std::string sender; ObjectGuid sender_guid; bool sender_is_bot = false; std::string channel; uint32 asked_ms = 0;
-                 uint64 talk_key = 0; };   // talk_key: a bot-to-bot talk line (AskTalk), kept for TakeTalk
+                 uint64 talk_key = 0;         // a bot-to-bot talk line (AskTalk), kept for TakeTalk
+                 std::vector<BotId> group; }; // a group order (AskGroupOrder): the other bots that take the answer's action too
+// The group's part of a group order: each other bot runs the answer's action a moment after the first (HandleGroupFollowups).
+struct GroupFollowup { BotId bot = 0; ChatAsk ask; Reply reply; uint32 read_ms = 0, due_ms = 0; };
+std::vector<GroupFollowup> g_group_followups;
 // Channel posts (QueuePost): what the server asked for, by event id, until the answer comes; a bot's last post (for a player who
 // whispers about it); the answers by other bots waiting for their time.
 constexpr uint64 kNoTalkKey = ~uint64(0);   // ChatAsk::talk_key of a talk line nobody takes back (a greeting)
@@ -1684,8 +1688,60 @@ void CheckLeashes(uint32 now_ms)
     }
 }
 
+// A group order's action for the rest of the group, one bot every 300 ms (a group that all turns at once looks scripted). A ref
+// is the answering bot's (its NEAR list): each bot gets its own ref for the same thing.
+void QueueGroupFollowups(BotId first, ChatAsk const& ask, Reply const& r, uint32 read_ms, uint32 now_ms)
+{
+    ObjectGuid ref_guid;
+    uint8 ref_kind = 0;
+    if (r.action.ref)
+        if (auto const* e = g_refs.Find(first, r.action.ref, now_ms))
+        {
+            ref_guid = e->id;
+            ref_kind = e->kind;
+        }
+    uint32 due = now_ms;
+    for (BotId b : ask.group)
+    {
+        if (b == first)
+            continue;
+        GroupFollowup f;
+        f.bot = b;
+        f.ask = ask;
+        f.ask.bot = b;
+        f.ask.group.clear();
+        f.reply = r;
+        f.reply.say.clear();
+        if (r.action.ref)
+            f.reply.action.ref = ref_guid.IsEmpty() ? 0 : g_refs.Add(b, ref_guid, ref_kind, now_ms);
+        f.read_ms = read_ms;
+        f.due_ms = (due += 300);
+        g_group_followups.push_back(std::move(f));
+    }
+}
+
+void HandleGroupFollowups(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
+{
+    for (std::size_t i = 0; i < g_group_followups.size();)
+    {
+        GroupFollowup& f = g_group_followups[i];
+        if (int32(now_ms - f.due_ms) < 0)
+        {
+            ++i;
+            continue;
+        }
+        GroupFollowup const done = std::move(f);
+        g_group_followups.erase(g_group_followups.begin() + std::ptrdiff_t(i));
+        Player* p = FindBot(done.bot);
+        if (!p || !Services::HasIntents(done.bot))
+            continue;
+        HandleAction(cfg, done.bot, p->GetName(), done.reply.reply_to, &done.ask, done.reply, done.read_ms, now_ms);   // logs itself
+    }
+}
+
 void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
 {
+    HandleGroupFollowups(cfg, now_ms);
     std::erase_if(g_chat, [&](auto const& kv) { return now_ms - kv.second.asked_ms > cfg.reply_max_age_sec * 1000u; });
     for (uint32 n = 0; n < kRepliesPerTick && !g_reply_lines.empty(); ++n)
     {
@@ -1770,6 +1826,8 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
         if (has_action && !ask.talk_key)
         {
             ActionOutcome const done = HandleAction(cfg, bot, bot_name, r.reply_to, answers ? &ask : nullptr, r, read_ms, now_ms);
+            if (answers && !ask.group.empty() && r.action_error.empty() && IsGroupAct(r.action.act))
+                QueueGroupFollowups(bot, ask, r, read_ms, now_ms);
             std::string const said = text;
             text = LineAfterAction(r.action.act, done.ok, done.speaks_later, done.why, text);
             if (!answers && !done.ok)
@@ -2489,7 +2547,8 @@ bool BotBridge::ChatOn()
     return Enabled() && g_started && g_client_alive && Services::Config().bridge().chat;
 }
 
-uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt)
+uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt,
+                             std::vector<BotId> const& group)
 {
     if (!ChatOn() || !bot || !sender)
         return 0;
@@ -2497,6 +2556,20 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     e.type = "chat_in";
     FillBot(e, bot, 0);
     e.fields.emplace_back("channel", channel);
+    std::vector<BotId> others;
+    if (!group.empty())
+    {
+        // "all go to the inn": the others the order is for, by name, so the line can speak for the group ("on our way").
+        std::string names;
+        for (BotId g : group)
+            if (Player* p = FindBot(g); p && g != bot->GetGUID().GetCounter())
+            {
+                others.push_back(g);
+                names += (names.empty() ? "" : ", ") + p->GetName();
+            }
+        e.numbers.emplace_back("group_order", 1);
+        e.fields.emplace_back("group", names);
+    }
     e.fields.emplace_back("from", sender->GetName());
     e.fields.emplace_back("locale", ClientLocale(sender));
     e.numbers.emplace_back("from_is_bot", Services::Registry().has(sender->GetGUID().GetCounter()) ? 1 : 0);
@@ -2548,8 +2621,31 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     Write(e);
     if (g_chat.size() > 2048)
         g_chat.clear();
-    g_chat[e.id] = ChatAsk{ bot_id, sender->GetName(), sender->GetGUID(), from_bot, channel, now_ms };
+    g_chat[e.id] = ChatAsk{ bot_id, sender->GetName(), sender->GetGUID(), from_bot, channel, now_ms, 0, std::move(others) };
     return e.id;
+}
+
+bool BotBridge::AskGroupOrder(Player* sender, std::vector<Player*> const& group, std::string const& channel, std::string const& text)
+{
+    if (!ChatOn() || !Services::Config().bridge().actions || !sender || group.empty() || text.empty())
+        return false;
+    std::vector<BotId> ids;
+    for (Player const* p : group)
+        if (p)
+            ids.push_back(p->GetGUID().GetCounter());
+    // The one who answers: a bot the sender owns when there is one (his companion speaks for his group), else the first.
+    Player* talker = group.front();
+    for (Player* p : group)
+        if (p && OwnsBot(sender, p->GetGUID().GetCounter()))
+        {
+            talker = p;
+            break;
+        }
+    uint64 const id = ReportChat(talker, sender, channel, text, {}, ids.size() > 1 ? ids : std::vector<BotId>{});
+    if (id)
+        TC_LOG_INFO("playerbot.v2", "[bridge] group order from {} for {} bot(s), {} answers: \"{}\"", sender->GetName(), ids.size(),
+                    talker->GetName(), text.substr(0, 80));
+    return id != 0;
 }
 
 void BotBridge::ReportStuck(BotId bot, std::string detail)

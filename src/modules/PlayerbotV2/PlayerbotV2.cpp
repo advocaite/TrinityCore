@@ -4430,6 +4430,38 @@ bool Module::GroupHasBotNamed(Group const* group, std::string_view name)
     return false;
 }
 
+bool Module::AskModelSquadOrder(Player* sender, Group* group, std::string const& body)
+{
+    if (!sender || !group || body.empty() || !BotBridge::ChatOn())
+        return false;
+    // "Name:rest" / "squad:rest" (AddressedGroupOrder), or a ';' line with no name. A role or class prefix ("tank: ...") stays the
+    // parser's: the program does not pick bots by role.
+    std::string name, text = body;
+    if (auto const colon = body.find(':'); colon != std::string::npos && body.find(' ') > colon)
+    {
+        name = body.substr(0, colon);
+        text = body.substr(colon + 1);
+        if (StringEqualI(name, "squad") || StringEqualI(name, "all") || StringEqualI(name, "everyone"))
+            name.clear();
+        else if (!GroupHasBotNamed(group, name))
+            return false;
+    }
+    text.erase(0, text.find_first_not_of(' '));
+    text.erase(text.find_last_not_of(' ') + 1);
+    if (text.empty())
+        return false;
+    std::vector<Player*> bots;
+    for (GroupReference const& itr : group->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || m == sender || !Services::Registry().has(m->GetGUID().GetCounter()) || !m->IsInWorld())
+            continue;
+        if (!name.empty() ? StringEqualI(m->GetName(), name) : BotCommandParser::ControlsForGroupOrder(sender, m))
+            bots.push_back(m);
+    }
+    return BotBridge::AskGroupOrder(sender, bots, group->isRaidGroup() ? "raid" : "party", text);
+}
+
 void Module::DispatchSquadLine(Player* sender, Group* group, std::string const& body, bool answer_unknown)
 {
     if (!sender || !group || body.empty()) return;
@@ -4476,7 +4508,7 @@ void Module::DispatchSquadLine(Player* sender, Group* group, std::string const& 
     if (!primary)
         primary = any_group_bot;
     if (!primary) return;
-    if (!BotCommandParser::Dispatch(sender, primary, body, "party;") && answer_unknown)
+    if (!BotCommandParser::Dispatch(sender, primary, body, "party;") && !AskModelSquadOrder(sender, group, body) && answer_unknown)
     {
         // A ";" line is meant as an order: an unknown or refused one answers instead of vanishing. (A plain whisper falls
         // through to the social reactor and a bare party word is chatter, so only this explicit route replies.)

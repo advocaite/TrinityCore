@@ -83,6 +83,9 @@ public:
     // sender's first bot in the group as the messenger. answer_unknown: an unrecognised order whispers back instead of
     // vanishing (the ';' form only; a bare line could be chatter).
     void DispatchSquadLine(Player* sender, Group* group, std::string const& body, bool answer_unknown);
+    // A squad line the parser does not know ("all go to the bank and wait", "Lentha dance with me"): to the bot bridge's program
+    // as an order for the bots it names ("all" / no name: every bot of the sender's in the group). False: not sent.
+    static bool AskModelSquadOrder(Player* sender, Group* group, std::string const& body);
     static bool GroupHasBotNamed(Group const* group, std::string_view name);
     // Phase C.3: route guild chat messages to BotChatReactor::ReactGuild.
     void OnGuildChat(Player* sender, uint64 guild_id, std::string const& msg);

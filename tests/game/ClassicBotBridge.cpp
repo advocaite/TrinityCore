@@ -640,4 +640,13 @@ TEST_CASE("BotBridge: the line with an action is only said when it is true", "[B
     CHECK(LineAfterAction(Act::Sit, false, false, "I'm not ready yet", "taking a break") == "taking a break");
 }
 
+TEST_CASE("BotBridge: a group order's action is one every bot can take", "[BotBridge]")
+{
+    for (Act a : { Act::Follow, Act::Stay, Act::GoTo, Act::Sit, Act::Emote, Act::Order, Act::Step, Act::Attack, Act::SignCharter })
+        CHECK(IsGroupAct(a));
+    // one bot's things: its bags, its spells, its quest log
+    for (Act a : { Act::Trade, Act::Cast, Act::AcceptQuest, Act::TurnIn, Act::DropQuest, Act::ShareQuest, Act::Unstuck, Act::None })
+        CHECK_FALSE(IsGroupAct(a));
+}
+
 #endif // TESTS_HAVE_PLAYERBOT_V2

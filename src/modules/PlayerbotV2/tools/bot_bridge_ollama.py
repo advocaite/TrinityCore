@@ -649,6 +649,11 @@ def build_prompt(event, actions_on, minds, swearing):
         system += ("%s is your friend and leads your group; you play together. When %s asks you to do something you can do, "
                    "do it (put it in \"do\") and say a short, cheeky okay. If you can't, say why in a friendly way. A request "
                    "or an order is not rude.\n" % (player, player))
+    if event.get("group_order") and actions_on:
+        # "all go to the bank and wait" in party: the server has every bot of the group do the action this answer picks.
+        system += ("%s gives this order to your whole group: you and %s. Pick ONE action from \"You can do now\" that does it; "
+                   "the others do the same. Say one short line for the group, the way a player answers for his friends "
+                   "(\"on our way\", \"ok, all sitting\").\n" % (player, event.get("group") or "the others"))
     system += "Facts about you from the game: " + facts + "\n"
     if actions_on and can:
         system += ("You can do now: " + ", ".join(can) + ". Do one of these only when the player asks for it or it clearly fits"

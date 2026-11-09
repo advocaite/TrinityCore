@@ -41,7 +41,13 @@ public:
 
     // World thread. Writes a chat_in event for `bot` and returns its id (0 when not written). `channel` is say/party/raid/whisper,
     // `prompt` the bot description the built-in chat model would have used (a program may use it or ignore it).
-    static uint64 ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt);
+    // `group`: the line is an order to these bots of the sender's (bot itself among them): the program picks one action and every
+    // one of them runs it (each with its own checks), while only `bot` answers.
+    static uint64 ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt,
+                             std::vector<BotId> const& group = {});
+    // World thread. A party / raid order the bot command parser does not know ("all go to the bank and wait"): to the program
+    // when it answers chat with actions on, as a group order for `group` (one bot: an order to that bot only). False: not sent.
+    static bool AskGroupOrder(Player* sender, std::vector<Player*> const& group, std::string const& channel, std::string const& text);
 
     // Any thread. A bot problem; `detail` says what went wrong in words. quest_id 0: the bot's current quest is looked up.
     static void ReportStuck(BotId bot, std::string detail);

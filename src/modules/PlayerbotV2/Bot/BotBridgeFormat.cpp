@@ -833,6 +833,19 @@ PlaceKind ParsePlace(std::string const& place, std::string& rest)
     return kind;
 }
 
+bool IsGroupAct(Act a)
+{
+    switch (a)
+    {
+        case Act::Follow: case Act::Stay: case Act::Resume: case Act::Attack: case Act::StopAttack: case Act::Flee: case Act::GoTo:
+        case Act::Sit: case Act::Stand: case Act::Mount: case Act::Dismount: case Act::Emote: case Act::Order: case Act::Step:
+        case Act::SignCharter:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::string LineAfterAction(Act a, bool ok, bool speaks_later, std::string const& why, std::string const& said)
 {
     if (ok)

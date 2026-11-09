@@ -215,6 +215,10 @@ char const* CheckActionContext(Act a, ActionContext const& ctx);
 // knows before it answers what this bot may do for this player right now. `allowed` is ParseAllowedActions' result.
 std::string AllowedActsJson(ActionContext const& ctx, std::vector<bool> const& allowed);
 
+// An action every bot of a group order takes ("all go to the inn", "everyone sit", "all of you sign my charter"): moving,
+// stopping, fighting together, emotes, orders and the charter. Not a trade, a spell, a quest, an unstuck: those are one bot's.
+bool IsGroupAct(Act a);
+
 // The line a bot says with an action, once the action's result is known. The program writes its line before the action runs
 // ("here's your water"), so the line is only true when the action did what it promised:
 //  - done: `said` as it is; done but the action speaks for itself later (a mage conjures first and its order says how that goes):
