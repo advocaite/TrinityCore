@@ -3661,7 +3661,8 @@ void SmartScript::ProcessEvent(SmartScriptHolder& e, Unit* unit, uint32 var0, ui
         }
         case SMART_EVENT_FRIENDLY_HEALTH_PCT:
         {
-            if (!me || me->IsInEvadeMode())
+            // Forever: classic healers only heal allies while engaged themselves (reverts upstream 1248bdffcb for this event)
+            if (!me || !me->IsEngaged())
                 return;
 
             Unit* unitTarget = nullptr;
@@ -4346,6 +4347,51 @@ void SmartScript::SetTimedActionList(SmartScriptHolder& e, uint32 entry, Unit* i
     // any SmartScriptHolder contained like the "e" parameter passed to this function
     if (isProcessingTimedActionList)
     {
+        // A list started from inside a list (VMaNGOS scripts call other scripts): when the called list is instant, run its
+        // actions here and now, as the original ran the called script beside the caller. A delayed list cannot be run here.
+        SmartAIEventList called = sSmartScriptMgr->GetScript(entry, SMART_SCRIPT_TYPE_TIMED_ACTIONLIST);
+        Trinity::Containers::EraseIf(called, [startFromEventId](SmartScriptHolder const& script) { return script.event_id < startFromEventId; });
+        bool instant = !called.empty();
+        for (SmartScriptHolder const& holder : called)
+        {
+            uint32 const type = holder.GetEventType();
+            if ((type != SMART_EVENT_UPDATE && type != SMART_EVENT_UPDATE_IC && type != SMART_EVENT_UPDATE_OOC)
+                || holder.event.minMaxRepeat.min || holder.event.minMaxRepeat.max || holder.link)
+            {
+                instant = false;
+                break;
+            }
+        }
+        // A called list may call another: bounded, so a cycle in the data cannot recurse without end. Maps update on
+        // their own threads, so the counter is per thread.
+        thread_local uint32 t_inlineDepth = 0;
+        if (instant && t_inlineDepth >= 4)
+        {
+            TC_LOG_ERROR("scripts.ai", "Entry {} SourceType {} Event {} Action {}: timed action list {} called from a list nests deeper than 4, not run.", e.entryOrGuid, e.GetScriptType(), e.GetEventType(), e.GetActionType(), entry);
+            return;
+        }
+        if (instant)
+        {
+            if (!invoker && me && !mTimedActionListInvoker.IsEmpty())
+                invoker = ObjectAccessor::GetUnit(*me, mTimedActionListInvoker);
+            // the same event type the list would get from the caller's timer type, so ProcessEvent keeps its in and out of
+            // combat checks; an entry of another phase stays out, as UpdateTimer would keep it
+            SMART_EVENT const type = e.GetActionType() == SMART_ACTION_CALL_TIMED_ACTIONLIST
+                ? (e.action.timedActionList.timerType == 0 ? SMART_EVENT_UPDATE_OOC : e.action.timedActionList.timerType == 1 ? SMART_EVENT_UPDATE_IC : SMART_EVENT_UPDATE)
+                : SMART_EVENT(e.GetEventType());   // a random list has no timer type: it keeps the running list's
+            ++t_inlineDepth;
+            for (SmartScriptHolder& holder : called)
+            {
+                if (holder.event.event_phase_mask && !IsInPhase(holder.event.event_phase_mask))
+                    continue;
+                holder.event.type = type;
+                holder.active = true;
+                holder.enableTimed = true;
+                ProcessEvent(holder, invoker);
+            }
+            --t_inlineDepth;
+            return;
+        }
         TC_LOG_ERROR("scripts.ai", "Entry {} SourceType {} Event {} Action {} is trying to overwrite timed action list from a timed action, this is not allowed!.", e.entryOrGuid, e.GetScriptType(), e.GetEventType(), e.GetActionType());
         return;
     }
