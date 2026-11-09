@@ -1,69 +1,69 @@
-# Contributing
+# Contributing to ForeverCore
 
-So, you want to contribute? Great!  
-Contributing is not only about creating fixes, but also reporting bugs. Before reporting a bug, please make sure to use the latest core and database revision.  
+Thanks for helping. Bug reports, data fixes and code are all welcome. Please read this page once before you start.
 
+## The one rule: Blizzlike, with a source
 
-Issues
-======
+ForeverCore copies Blizzard's game for the WoW Forever client. A change is welcome when it does one of these:
 
-Read [this](https://community.trinitycore.org/topic/37-the-trinitycore-issuetracker-and-you/) before creating a ticket.  
-If you have problems with TrinityCore installation, read [this](https://community.trinitycore.org/topic/13962-trouble-with-your-trinity-install-starting-login-readme-1st-faqs/).
+- makes the server match Blizzard's game, and says **where that comes from**, or
+- fixes the server itself (a crash, a wrong packet, pathing, a broken script).
 
-Mandatory things when creating a ticket:  
-========================================
+Good sources, best first:
 
-- Branch  
-- commit hash (if you get something like TrinityCore rev. unknown 1970-01-01 00:00:00 +0000 (Archived branch) (Win64, Release), please read this [post](https://community.trinitycore.org/topic/345-howto-properly-install-git-on-windows-fix-trinitycore-rev-1970-01-01-000000-0000/) or clone this repository instead downloading the source code.  
-- entries of affected creatures / items / quests with a link to the relevant wowhead page.  
-- clear title and description of the bug - if your english is very bad, please use google translate or yandex to translate to english and include one text in your native language.
+1. Packet captures (sniffs) from the official Forever realms.
+2. Client data: DB2 files, hotfixes, the player's `WDB` cache.
+3. Questie data, Wowhead (the Forever / Classic pages), in-game screenshots or video.
+4. VMaNGOS, CMaNGOS or TrinityCore, for vanilla behaviour that Forever did not change.
 
-When reporting a crash, you MUST compile in debug mode because release dumps are useless (not enough information) - if you don't know how to compile in debug, read [this](https://community.trinitycore.org/topic/13962-trouble-with-your-trinity-install-starting-login-readme-1st-faqs/?tab=comments#comment-47672)
+Not welcome in the core: custom items, quests, NPCs, rates or features. Things that only some server owners want can be
+an option in `worldserver.conf` that is **off by default**, or a module in `src/modules/` (see
+[src/modules/README.md](src/modules/README.md)).
 
-We sugest the title and body to have the next style:
+## Reporting a bug
 
-DB/Quest: The Collapse
+Use the [issue forms](https://github.com/Karrz1/TrinityCore/issues/new/choose). Please give:
 
-4.3.4 branch  
-hash 63f96a282307  
-The quest "The Collapse" http://www.wowhead.com/quest=11706 lacks final event.
+- the commit you run (`.server debug` in game, or the first lines of the worldserver log),
+- the ids of the creatures, quests, items or spells involved, with a Wowhead link if you have one,
+- what happens, and what should happen instead (and how you know),
+- for a crash: the crash log from the `Crashes` folder.
 
-Creating Pull Requests:
-=======================
+Search the open issues first; if the bug is already there, add to it instead of opening a new one.
 
-1. Fork it.
-2. Create a branch (`git checkout -b fixes`) (Note: fixes is an arbitrary name, choose whatever you want here)
-3. Commit your changes (`git commit -am "Added Snarkdown"`)
-4. Push to the branch (`git push origin fixes`)
-5. Open a Pull Request
+## Sending a pull request
 
+1. Fork the repository and make a branch from `forever` (or from `forever-bots` for a change to the bots module).
+2. One fix per pull request. Small pull requests get reviewed quickly.
+3. Fill in the pull request form, including the **source** box.
+4. Say how you tested it: does it build, did you check it in game.
 
-When creating patches read:
-- [TrinityCore Development Standards](https://trinitycore.atlassian.net/wiki/spaces/tc/pages/2130103/C+Development+Standards)
-- [WDB Fields](https://community.trinitycore.org/topic/58-wdb-fields/)
-- [Git Squash](https://ariejan.net/2011/07/05/git-squash-your-latests-commits-into-one/)
+Please tick "Allow edits from maintainers", so we can fix small things for you.
 
+### C++
 
-We suggest that you create one branch for each C++ based fix: this will allow you to create more fixes without having to wait for your pull request to be merged.  
-For the SQL files coming with C++ based fixes the naming schema is `YYYY_MM_DD_i_database.sql`, where `YYYY_MM_DD` is the date of the fix, `i_database` is the *ith* sql created that day for `database`.  
-When doing changes to `auth` or `characters` database remember to update the base files (`/sql/base/*`).  
-For SQL only fixes, please [create a ticket](https://github.com/TrinityCore/TrinityCore/issues/new/choose).
-Since it's very unlikely that your Pull Request will be merged on the day that you open it, please name the files with an impossible date to avoid merging issues ie: 2015_13_32_00_world.sql
+- Follow the [TrinityCore C++ standards](https://trinitycore.atlassian.net/wiki/spaces/tc/pages/2130103/C+Development+Standards)
+  and `.editorconfig` (4 spaces, at most 160 columns).
+- Change core files only when you must. If a feature can be a module or a script, make it one.
+- A new option goes in `worldserver.conf.dist` with a description and a Blizzlike default.
 
-Wiki
-====
+### SQL
 
-The wiki is located at [https://trinitycore.info](https://trinitycore.info).
+- World data fixes go in `sql/custom/world/`, named `YYYY_MM_DD_NN_world_<classic|forever>_<short_name>.sql`
+  (`classic` for vanilla data, `forever` for what the Forever client added or changed). For an open pull
+  request, use today's date; we fix the date when we merge if needed.
+- Start the file with a comment that says what it fixes and **where the data comes from**.
+- Every file must be safe to run twice: `DELETE` the rows you `INSERT` (by guid and id for spawns), no `REPLACE INTO`.
+- Use backticks around table and column names, list the column names in every `INSERT`, and use one `INSERT` per table.
+- Don't use database names in the file, and don't `DELETE` + `INSERT` a row just to change one column: use `UPDATE`.
+- New spawns: use free guids, and say where the position comes from (sniff, Questie, video).
+- Changes to the `auth` or `characters` schema also go into `sql/base/`.
 
-You are welcome to create an account and help us improve and extend the wiki.
+### Credits
 
+If your fix uses another project's code or data, name it in the file and in the pull request, and check that its license
+allows it (GPL-2.0 compatible). We keep the author of every merged commit.
 
-Requirements
-============
+## Questions
 
-
-Software requirements are available in the [wiki](https://www.trinitycore.info/display/tc/Requirements) for
-Windows, Linux and Mac OSX.
-
-
-If you choose Linux, we recommend to use Debian 8, since it's the Linux that we use to test compilations.
+Ask on our [Discord](https://discord.gg/eJt62dDh54). Please don't ask the TrinityCore team about ForeverCore.
