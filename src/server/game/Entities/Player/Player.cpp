@@ -14992,8 +14992,16 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                             canTalk = false;
                     break;
                 }
-                case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
+                {
+                    // "I want to browse your goods" with nothing to sell opened no window at all (the shared fishing trainer menu 5665:
+                    // Lee Brown in Elwynn and the other fishing trainers, Discord 2026-11-09). Shown only by an NPC that sells something.
+                    VendorItemData const* items = sObjectMgr->GetNpcVendorItemList(creature->GetEntry());
+                    if (!items || items->Empty())
+                        canTalk = false;
+                    break;
+                }
+                case GossipOptionNpc::None:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
