@@ -4736,7 +4736,17 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // The owner's Attack is the group's go whoever may open (live MC 2026-10-11: the marked mob was idle, only the main tank got the
         // order, and the other 38 bots never saw an Attack): PveGroupCoordinator latches the raid's release from it.
         if (BotAI* attack_ai = Services::Registry().ai(bot->GetGUID().GetCounter()))
+        {
             attack_ai->note_owner_attack(GameTime::GetGameTimeMS());
+            // An Attack while the panel's Passive is on was dropped without a word: every bot but the healer stood still and "ignored"
+            // the orders (Discord 2026-11-09). The owner's own Attack ends Passive: the bot goes to defensive and says so.
+            if (attack_ai->owner_no_fight() && attack_ai->set_owner_stance(BotAI::OwnerStance::Passive))
+            {
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: attack ends passive (now defensive)", bot->GetName(), sender->GetName());
+                Push(bot, WhisperIntent{sender->GetName(),
+                    "I was on Passive (I attack nothing), so your Attack sets me to Defensive. The stance button on the bot panel sets it too."});
+            }
+        }
         // Raid map, nobody fighting the unit yet: only the main tank opens (RaidPullGateAllows); the others wait for
         // the normal pull gate or assist once it is in combat.
         if (!RaidPullGateAllows(bot, target))
