@@ -2415,12 +2415,6 @@ struct BgState
     // prep. TC source: Battleground::GetInProgressDuration().
     uint32 in_progress_ms = 0;
 
-    // Arena only, once the gates are open: the nearest living enemy player anywhere in the match (not stealthed or
-    // invisible). Arena teams start out of sight of each other, so the 40 y enemy scan alone left a bot nobody hit
-    // standing at its start spot for the whole match. Empty guid = none known.
-    ObjectGuid arena_enemy;
-    float      arena_enemy_x = 0.f, arena_enemy_y = 0.f, arena_enemy_z = 0.f;
-
     // CTF flag carriers + their world positions (resolved at builder time).
     // Scalar fields hold the FIRST detected carrier per side (back-compat
     // for WSG/TP/EotS/BfG/DG semantics where the BG has at most one
@@ -2556,8 +2550,6 @@ struct BgState
         gate_doors = 0;
         mount_ok = false;
         in_progress_ms = 0;
-        arena_enemy = ObjectGuid::Empty;
-        arena_enemy_x = arena_enemy_y = arena_enemy_z = 0.f;
         friendly_flag_carrier = ObjectGuid::Empty;
         enemy_flag_carrier = ObjectGuid::Empty;
         friendly_carrier_hp_pct = 0;

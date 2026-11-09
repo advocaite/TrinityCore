@@ -5,8 +5,6 @@
 #include "MotionMaster.h"   // ship rides clear the bot's movement before boarding
 #include "../Util/SlowCall.h"
 #include "BotPopulationManager.h"
-#include "HireMgr.h"
-#include "CompanionDelete.h"   // a finder loan bot is deleted like `.bot delete`
 #include "ClassicSpec.h"
 #include "SoakAnchors.h"
 #include "CompanionRole.h"
@@ -1253,7 +1251,6 @@ void BotPopulationManager::RunGearBackfill(uint32 now_ms)
         gear_scan_pos_ = 0;
         gear_regear_count_ = 0;
         Services::Registry().for_each([&](BotId id, BotRegistryEntry const&) { gear_scan_.push_back(id); });
-        ReleaseOfflineLoans(now_ms);
     }
     const uint32 t0 = getMSTime();
     while (gear_scan_pos_ < gear_scan_.size() && getMSTimeDiff(t0, getMSTime()) < kGearBudgetMs)
@@ -1280,52 +1277,9 @@ void BotPopulationManager::RunGearBackfill(uint32 now_ms)
     }
 }
 
-// Hired bots only (Playerbot.Hire.Mode): a Group Finder / dungeon finder bot is lent to its group (HireMgr::SetLoaned). Once it is
-// out of its owner's group (left, dismissed, the owner went offline) it is deleted like `.bot delete`, so a free bot never becomes
-// one to keep. True when it was taken back.
-bool BotPopulationManager::ReleaseLoan(BotId id, Player* p, uint32 now_ms)
-{
-    HireMgr& hire = HireMgr::Instance();
-    if (!hire.IsLoaned(id) || !hire.LoanSettled(id, now_ms) || pending_companions_.contains(id) || pending_deletes_.contains(id))
-        return false;
-    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(id);
-    if (p)
-    {
-        uint64 const owner_guid = Services::Owners().OwnerCharacter(id);
-        Player const* owner = owner_guid ? ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(owner_guid)) : nullptr;
-        Group* group = p->GetGroup();
-        if (owner && group && group->IsMember(owner->GetGUID()))
-            return false;   // still playing with the group it was lent to
-    }
-    if (!Fleet::MayDeleteCompanion(Services::Accounts().is_pool_account(sCharacterCache->GetCharacterAccountIdByGuid(guid))))
-    {
-        hire.Forget(id);   // never a player's own character; just not a loan any more
-        return false;
-    }
-    TC_LOG_INFO("playerbot.v2", "[hire] finder loan bot {} left its group: it goes", guid.ToString());
-    if (p)
-    {
-        if (Group* group = p->GetGroup())
-            group->RemoveMember(guid);
-        Services::SessionMgr().LogoutBot(guid);
-    }
-    QueueCompanionDelete(id);
-    hire.Forget(id);
-    return true;
-}
-
-void BotPopulationManager::ReleaseOfflineLoans(uint32 now_ms)
-{
-    for (BotId id : HireMgr::Instance().LoanedBots())
-        if (!ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id)))
-            ReleaseLoan(id, nullptr, now_ms);
-}
-
 void BotPopulationManager::CompanionUpkeep(BotId id, Player* p)
 {
     if (Services::Owners().OwnerCharacter(id) == 0 || IsPlayersOwnCharacter(p))
-        return;
-    if (ReleaseLoan(id, p, getMSTime()))
         return;
     ::Playerbot::API api(p);
     api.learn_class_quest_spells_free();
@@ -1355,8 +1309,6 @@ void BotPopulationManager::CompanionUpkeep(BotId id, Player* p)
             TC_LOG_INFO("playerbot.v2", "[Companion] {} one-time varied gear re-roll: {} slot(s) changed", p->GetName(), changed);
         }
     }
-    // A hired bot's grade health follows its level and gear (and a changed Playerbot.Hire.<Grade>.HealthPct after `.reload config`).
-    HireMgr::Instance().ApplyHealth(p);
 }
 
 void BotPopulationManager::GrantCompanionStarterPet(BotId id, Player* p)
@@ -1883,8 +1835,6 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
             }
         }
         RegearNow(bot);
-        // A hired bot's grade health (Playerbot.Hire.<Grade>.HealthPct), on the health its new level and gear give it.
-        HireMgr::Instance().ApplyHealth(bot);
         // GiveLevel fills health and mana for the new level, but the gear put on after it raises the pools again: three mages made for
         // the owner in UBRS (2026-10-29 09:28:31) stood at 18-19 % mana with their new L60 gear and were in the fight 12 s later, wanding.
         // A companion just levelled here joins rested.
@@ -2264,10 +2214,6 @@ static Gear::Owned::GearMode CompanionGearMode(Player const* bot)
     uint32 const account = Services::Owners().GetOwner(bot->GetGUID().GetCounter()).account_id;
     if (!account)
         return Gear::Owned::GearMode::Match;
-    // A hired bot wears its grade's gear (Veteran best, Legend bis), a Sellsword or any companion of a player who must hire the
-    // normal companion gear, whatever the owner chose (HirePolicy.h).
-    if (int const hired = HireMgr::Instance().GearModeOverride(bot->GetGUID().GetCounter(), account); hired >= 0)
-        return Gear::Owned::GearMode(hired);
     return Gear::Owned::EffectiveMode(Gear::Owned::GearMode(Services::Owners().OwnerGearMode(account)), Gear::OwnedAllowedModes(),
                                       bot->GetLevel() >= MaxPlayerLevel());
 }

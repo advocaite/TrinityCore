@@ -223,7 +223,6 @@ std::unique_ptr<BattlegroundScript> MakeTolViron3ArenaScript();
 std::unique_ptr<BattlegroundScript> MakeBlackRookHold3ArenaScript();
 std::unique_ptr<BattlegroundScript> MakeRobodromeArenaScript();
 std::unique_ptr<BattlegroundScript> MakeEmpyreanDomainArenaScript();
-std::unique_ptr<BattlegroundScript> MakeMakgoraArenaScript();
 }
 #include "Session/BotSessionMgr.h"
 #include "Travel/QuestHubDatabase.h"
@@ -246,7 +245,6 @@ std::unique_ptr<BattlegroundScript> MakeMakgoraArenaScript();
 #include "Threading/TickScheduler.h"
 #include "Util/ConfigReader.h"
 #include "Diagnostics/PerfCounters.h"
-#include "Fleet/HireMgr.h"
 #include "Config.h"   // sConfigMgr->GetFilename for resolving playerbot.conf next to worldserver.conf
 #include <atomic>
 #include <filesystem>
@@ -335,8 +333,6 @@ void Init()
     // also reads, so safe to load right after.
     h->owners = std::make_unique<OwnerRegistry>();
     h->owners->LoadFromDb();
-    // Hired bots (Playerbot.Hire.*): grades, prices paid and upkeep, from the same character table.
-    V2::Fleet::HireMgr::Instance().LoadFromDb();
     // Dungeon script registry — pure in-memory, populated by
     // factories defined in Bot/Dungeon/Scripts/*.cpp. Empty registry
     // is fine — script-less dungeons fall back to generic logic.
@@ -565,7 +561,6 @@ void Init()
     h->battlegrounds->Register(MakeBlackRookHold3ArenaScript());
     h->battlegrounds->Register(MakeRobodromeArenaScript());
     h->battlegrounds->Register(MakeEmpyreanDomainArenaScript());
-    h->battlegrounds->Register(MakeMakgoraArenaScript());
     // Team-level BG coordinator (BG audit N60). Driven from
     // Module::OnWorldUpdate ahead of the snapshot pass.
     h->bg_coordinator = std::make_unique<BgTeamCoordinator>();

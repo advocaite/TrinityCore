@@ -1597,10 +1597,7 @@ function UI.BuildBots()
     SelectClass(1)
     local quick = Btn(botsPane, 0, 106, 117, 24, L["Quick party"], {})
     quick:SetScript("OnClick", QuickParty)
-    Tip(quick, L["Quick party"], L["Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid. With hired bots on (/fb hire), your hired bots come; next to a mercenary broker the missing places are hired for gold."])
-    -- hired bots only hides the class and role buttons (ForeverBots_Hire.lua)
-    Cmd.ns.addButtons = { roles = roleBtns, classes = classBtns, sel = selFS, pane = botsPane }
-    if Cmd.ns.Hire then Cmd.ns.Hire.Attach(botsPane) end
+    Tip(quick, L["Quick party"], L["Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid."])
     gearBtn = Btn(botsPane, 121, 106, 117, 24, "", {})
     gearBtn:SetScript("OnClick", function()
         local cur = ForeverBotsDB.gear or "match"
@@ -2120,7 +2117,7 @@ local function ToggleMinimapMenu()
     if not mmMenu then
         local m = CreateFrame("Frame", "ForeverBotsMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
         mmMenu = m
-        m:SetSize(150, 7 * 28 + 12)   -- seven items below
+        m:SetSize(150, 4 * 28 + 12)
         m:SetFrameStrata("DIALOG")
         m:EnableMouse(true)
         if m.SetBackdrop then
@@ -2134,10 +2131,6 @@ local function ToggleMinimapMenu()
             { L["Raid ready"], RaidReady },
             { L["Call saved bots"], function() ServerCommand(".bot summon saved") end },
             { L["Dismiss all bots"], function() ServerCommand(".bot dismiss all") end },
-            -- arena (".bot arena"): the party leader queues the party; 2v2 needs a party of 2, 3v3 a party of 3 (bots count)
-            { L["Arena 2v2"], function() ServerCommand(".bot arena 2") end },
-            { L["Arena 3v3"], function() ServerCommand(".bot arena 3") end },
-            { L["Leave arena queue"], function() ServerCommand(".bot arena leave") end },
             { L["Hide this button"], function()
                 ForeverBotsDB.minimap.hidden = true
                 mmButton:Hide()
@@ -3155,10 +3148,6 @@ SlashCmdList.FOREVERBOTS = function(msg)
         GroupOrder("flee")
     elseif verb == "quick" then
         QuickParty()
-    elseif verb == "hire" then
-        -- Hired bots (the server's Playerbot.Hire.Mode): no word shows whether you must hire and the prices here; on / off is your
-        -- own choice when the realm leaves it to each player.
-        ServerCommand((class == "on" or class == "off") and (".bot hire " .. class) or ".bot hire")
     elseif verb == "dungeon" or verb == "dungeons" then
         UI.DungeonQueue((class and class ~= "") and class or "list")
     elseif verb == "maintank" then
@@ -3167,7 +3156,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
         Toggle()
     else
         Print(L["unknown /fb word \"%s\" (add-on %s)"]:format(tostring(verb), UI.version or "?"))
-        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb hire [on|off]; /fb dungeon [name|any|leave|cancel]; /fb debug on|off; /fb perf [reset]; /fb part [name on|off]")
+        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb dungeon [name|any|leave|cancel]; /fb debug on|off; /fb perf [reset]; /fb part [name on|off]")
     end
 end
 UI.slash = SlashCmdList.FOREVERBOTS

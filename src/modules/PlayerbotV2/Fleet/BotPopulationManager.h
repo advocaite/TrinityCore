@@ -204,9 +204,6 @@ public:
     // each RunGearBackfill pass teaches it its new ranks, class-quest abilities and talents, and mends its gear. Runs
     // for every companion, whatever its gear. Cheap; no-op for any other bot.
     void CompanionUpkeep(BotId id, Player* p);
-    // Hired bots only: a Group Finder loan bot out of its owner's group is deleted (HireMgr::SetLoaned).
-    bool ReleaseLoan(BotId id, Player* p, uint32 now_ms);
-    void ReleaseOfflineLoans(uint32 now_ms);
     // A hunter companion's starter pet, granted once per bot (OwnerRegistry::StarterPetGranted).
     void GrantCompanionStarterPet(BotId id, Player* p);
     // A bot hunter of level 10+ nobody owns (world, pool and scenario bots) that has no pet, summoned, dismissed or stabled, gets a beast of its own:

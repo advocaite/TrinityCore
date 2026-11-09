@@ -30,15 +30,8 @@ regroup, formation and spacing, tanks and markers), Assign a bot to an icon, You
 - Ignore target and Clear (0.6.9): your target goes on the list of mobs your bots never attack, even when it attacks you (a beast
   you tame); the button again on it takes it off, Clear empties the list. Group orders `ignore target` / `ignore clear`; the
   server answers in a system line. Secure buttons, so they work in combat.
-- Arena (0.6.11), in the minimap button's menu: Arena 2v2, Arena 3v3 and Leave arena queue send `.bot arena 2|3|leave`. The
-  party leader queues the party; 2v2 needs a party of exactly 2 and 3v3 of exactly 3, your bots count. The other team is a real
-  party or a bot party the server makes. The same lines can be typed in chat.
-- Arena ready pop-up: when your arena is ready a small window shows Enter and Leave (the game's own arena pop has Enter only).
-  They send `.bot arena enter` and `.bot arena leave`; Leave also takes your party's bots out of the same queue.
 - One button per class and role: adds that bot (`.bot add <class> <role>`). It joins you at your level, geared,
   in your group.
-- Hired bots only (0.6.10, the server's Playerbot.Hire.Mode): when you must hire, the class and role buttons are hidden and a
-  line says where to hire bots instead (HIRE_REQ / HIRE_RESP, ForeverBots_Hire.lua). Quick party, Call saved and Raid ready stay.
 - Orders to the group: Follow, Stay, Attack (your target), Resume; Pull (your tank bots open on your target, the
   rest join once it is engaged), Flee (break off and run to you), Come (teleport to you), Stop (stop attacking and
   return to normal), Release (after a wipe: every dead bot releases its spirit, runs back to its corpse as a ghost,

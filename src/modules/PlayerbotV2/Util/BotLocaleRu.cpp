@@ -780,14 +780,6 @@ std::vector<Catalog::Entry> const& RussianEntries()
         { "sorry, the invite didn't go through", "извините, приглашение не прошло" },
         { "sure! invite to <{}> sent, welcome :)", "конечно! приглашение в <{}> отправлено, добро пожаловать :)" },
         { "i can't invite myself, so {} sent you the invite to <{}>", "у меня нет права приглашать, поэтому {} отправляет вам приглашение в <{}>" },
-        // ---- arena (.bot arena, the arena ready line) ------------------------------------------------------------------------
-        { "Your arena is ready. Enter: click Enter at the minimap or type .bot arena enter. Leave: type .bot arena leave.", "Ваша арена готова. Войти: нажмите «Войти» у миникарты или введите .bot arena enter. Отказаться: введите .bot arena leave." },
-        { "No arena is ready for you yet.", "Для вас пока нет готовой арены." },
-        { "You left the arena queue.", "Вы покинули очередь на арену." },
-        { "You are not in an arena queue.", "Вы не стоите в очереди на арену." },
-        { "Only the party leader can queue the party for an arena.", "Только лидер группы может поставить группу в очередь на арену." },
-        { "You are already in a battleground or arena.", "Вы уже на поле боя или на арене." },
-        { "Usage: .bot arena 2 (2v2, a party of 2), .bot arena 3 (3v3, a party of 3), .bot arena enter, .bot arena leave", "Использование: .bot arena 2 (2 на 2, группа из 2), .bot arena 3 (3 на 3, группа из 3), .bot arena enter, .bot arena leave" },
     };
     return entries;
 }

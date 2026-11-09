@@ -15566,29 +15566,6 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
         // through target acquisition; no formation follow is needed
         // for that small a roster.
 
-        // Arena, gates open, not fighting: go and find the other team. The teams start out of sight of each other (Mak'gora:
-        // 90 yards), so a bot that nobody came to hit stood at its start spot for the whole match (Karrz, 2026-11-08 2v2).
-        // Close enough: attack; further: run to the enemy. The combat state does the rest (healers heal from there).
-        if (s.is_alive() && !s.is_casting() && !s.in_combat() &&
-            s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && !s.raw().bg.arena_enemy.IsEmpty())
-        {
-            float self_x = 0.f, self_y = 0.f, self_z = 0.f;
-            s.position(self_x, self_y, self_z);
-            float const ex = s.raw().bg.arena_enemy_x, ey = s.raw().bg.arena_enemy_y, ez = s.raw().bg.arena_enemy_z;
-            float const dsq = (ex - self_x) * (ex - self_x) + (ey - self_y) * (ey - self_y);
-            if (dsq <= 35.0f * 35.0f && emit.start_attack(s.raw().bg.arena_enemy))
-            {
-                ai.set_last_rule_fired("idle:arena_attack_enemy");
-                return true;
-            }
-            if (dsq > 8.0f * 8.0f)
-            {
-                emit.move_to(ex, ey, ez, /*run=*/true);
-                ai.set_last_rule_fired("idle:arena_seek_enemy");
-                return true;
-            }
-        }
-
         // Arena positional intelligence — pillars / hazards / opening
         // rally. Gated on the script populating at least one of those
         // fields, so non-arena BGs see zero cost (vector empty checks).
@@ -15600,12 +15577,12 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
         {
             float self_x = 0.f, self_y = 0.f, self_z = 0.f;
             s.position(self_x, self_y, self_z);
-            // Opening rally: once the gates are open and no enemy is known (all hidden), go to the middle. Not during the
-            // preparation minute: the bots wait at their start spot like players (walking out then made the battleground
-            // put them back at the start every second, the "jumping" Karrz saw on 2026-11-08).
+            // Opening rally: while gates still up OR match elapsed
+            // is brief (start_delay_ms running), advance to the rally
+            // coord so bots don't dawdle in the starting cage AABB.
             if ((bg_advice.opening_rally_x != 0.f ||
                  bg_advice.opening_rally_y != 0.f) &&
-                s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && s.bg_start_delay_ms() == 0)
+                s.bg_start_delay_ms() > 0)
             {
                 float dx = bg_advice.opening_rally_x - self_x;
                 float dy = bg_advice.opening_rally_y - self_y;

@@ -13,7 +13,6 @@
 #include "Fleet/BotIdentityRegistry.h"
 #include "Fleet/BotPopulationManager.h"
 #include "Fleet/BotSize.h"
-#include "Fleet/HireMgr.h"
 #include "LfgBotFill.h"
 #include "Services.h"
 #include "Session/BotSessionMgr.h"
@@ -890,23 +889,6 @@ void HandlePopReq(uint32 client_seq, WorldSession* sess, std::vector<std::string
 }
 
 // ----------------------------------------------------------------------------
-// HIRE_REQ - hired bots only (Playerbot.Hire.Mode): the ForeverBots Bots tab greys its
-// "Add a bot" buttons for a player who must hire (Karrz 2026-11-03). Returns:
-//   HIRE_RESP|<must hire 0/1>|<mode 0 off, 1 everyone, 2 each player>
-// ----------------------------------------------------------------------------
-void HandleHireReq(uint32 client_seq, WorldSession* sess)
-{
-    Player* me = sess ? sess->GetPlayer() : nullptr;
-    if (!me || !Services::Initialized())
-    {
-        SendFields(sess, client_seq, "HIRE_RESP", {"0", "0"});
-        return;
-    }
-    bool const must = V2::Fleet::HireMgr::Instance().MustHire(me);
-    SendFields(sess, client_seq, "HIRE_RESP", { must ? "1" : "0", std::to_string(uint32(V2::Fleet::HireMgr::ConfigMode())) });
-}
-
-// ----------------------------------------------------------------------------
 // PLACE_REQ - the ForeverBots Positions tab: chosen bots stand in a shape at a spot
 // and stay there (BotCommandParser::PlaceBots, Bot/Placement.h).
 //   PLACE_REQ|<shape>|<tight|normal|wide>|<here|target>|<who>|<who>|...
@@ -1655,10 +1637,6 @@ void DispatchAssembled(WorldSession* sess, uint32 seq,
     {
         HandlePopReq(seq, sess, fields);
     }
-    else if (mtype == "HIRE_REQ")
-    {
-        HandleHireReq(seq, sess);
-    }
     else if (mtype == "PLACE_REQ")
     {
         HandlePlaceReq(seq, sess, fields);
@@ -1765,7 +1743,6 @@ bool OnAddonWhisper(Player* sender, Player* /*receiver*/,
             && mtype != "PING"
             && mtype != "LFG_REQ"
             && mtype != "POP_REQ"
-            && mtype != "HIRE_REQ"
             && mtype != "ASSIGN_REQ")
             return false;
     }

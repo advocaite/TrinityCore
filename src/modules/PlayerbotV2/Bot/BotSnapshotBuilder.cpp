@@ -8980,33 +8980,6 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // returns Milliseconds(0) during prep / waiting. Cast to uint32
         // ms; ~50 day overflow is well past any realistic match length.
         snap->bg.in_progress_ms = uint32(bg->GetInProgressDuration().count());
-        // Arena: the nearest enemy player in the whole match, for idle:arena_seek_enemy. Stealthed and invisible players are
-        // left out (a bot must not walk straight to a hidden rogue).
-        if (bg->isArena() && bg->GetStatus() == STATUS_IN_PROGRESS)
-        {
-            float best_dsq = std::numeric_limits<float>::max();
-            for (auto const& [guid, ref] : bg->GetPlayers())
-            {
-                if (guid == p->GetGUID())
-                    continue;
-                Player* other = ObjectAccessor::FindPlayer(guid);
-                if (!other || other->GetMap() != p->GetMap() || !other->IsAlive() || other->IsGameMaster())
-                    continue;
-                if (other->GetBGTeam() == p->GetBGTeam())
-                    continue;
-                if (other->HasStealthAura() || other->HasInvisibilityAura())
-                    continue;
-                float const dsq = p->GetExactDistSq(other);
-                if (dsq < best_dsq)
-                {
-                    best_dsq = dsq;
-                    snap->bg.arena_enemy   = other->GetGUID();
-                    snap->bg.arena_enemy_x = other->GetPositionX();
-                    snap->bg.arena_enemy_y = other->GetPositionY();
-                    snap->bg.arena_enemy_z = other->GetPositionZ();
-                }
-            }
-        }
         snap->bg.score_alliance     = bg->GetTeamScore(TEAM_ALLIANCE);
         snap->bg.score_horde        = bg->GetTeamScore(TEAM_HORDE);
         // Real match clock (audit N54). TC's GetRemainingTime() exposes

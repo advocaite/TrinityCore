@@ -19,7 +19,6 @@
 #include "Bot/BotArchetype.h"
 #include "Bot/BotRegistry.h"
 #include "Fleet/BotGroupBuilder.h"
-#include "Fleet/HireMgr.h"
 #include "Fleet/InstanceGroupCap.h"
 #include "Fleet/OwnerRegistry.h"
 #include "GroupFinderListings.h"
@@ -514,10 +513,7 @@ namespace
         for (GroupReference const& ref : group->GetMembers())
             if (Player const* member = ref.GetSource(); member && member != human && !IsHuman(member))
             {
-                // In hired mode (Playerbot.Hire.*) the group's bots play with the player but are nobody's to keep: they stay world bots,
-                // ordered as group members, so joining a listed group never becomes a free hire.
-                if (!Fleet::HireMgr::Instance().MustHire(human))
-                    Playerbot::Services::Owners().SetOwner(member->GetGUID().GetCounter(), human->GetSession()->GetAccountId(), 0);
+                Playerbot::Services::Owners().SetOwner(member->GetGUID().GetCounter(), human->GetSession()->GetAccountId(), 0);
                 ++bots;
             }
         TC_LOG_INFO("playerbot.v2", "[lfg] {} joined the listed bot group of {}: {} bot(s) are now their companions", human->GetName(),

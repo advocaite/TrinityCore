@@ -9310,12 +9310,6 @@ Result API::bg_queue(ObjectGuid battlemaster, uint16 bg_type_id, uint8 arena_typ
         return Result::Locked;
     }
 
-    // a template with no map (Classic data has no "All Arenas" map unless the arena SQL is in) would read address 0
-    if (bg_tmpl->MapIDs.empty())
-    {
-        TC_LOG_INFO("playerbot.v2", "[bg_queue] {} reject: no_map (bg_type_id={})", p_->GetName(), bg_type_id);
-        return Result::NotKnown;
-    }
     PVPDifficultyEntry const* bracket =
         DB2Manager::GetBattlegroundBracketByLevel(bg_tmpl->MapIDs.front(), p_->GetLevel());
     if (!bracket)
@@ -9336,20 +9330,22 @@ Result API::bg_queue(ObjectGuid battlemaster, uint16 bg_type_id, uint8 arena_typ
     // SKIRMISH arenas (no arena-team / MMR dependency), mirroring
     // HandleBattlemasterJoinArena with arena teams disabled.
     const bool is_arena = arena_type > 0 || bg_tmpl->IsArena();
-    // Bots queue the SAME arena queue a real party joins (HandleBattlemasterJoinArena): the Arena queue id, rated bit set,
-    // team size 2, 3 or 5, rating 1/1 and no arena team. A bot team in the old 3v3 skirmish queue could never meet a real
-    // party, and 2v2 was impossible. With no arena team the match changes no rating.
-    if (is_arena && arena_type != 2 && arena_type != 3 && arena_type != 5)
+    // Bots queue UNRATED SKIRMISH only (they have no persistent ArenaTeam).
+    // Per BattlegroundMgr::IsValidQueueId, the unrated path is the dedicated
+    // ArenaSkirmish queue type which (in this core) is 3v3-ONLY and still
+    // carries the Rated bit set. The plain Arena queue type REQUIRES rated +
+    // an ArenaTeam, so it can never be a bot path. Hence arena == 3v3 skirmish.
+    if (is_arena && arena_type != 3)
     {
         TC_LOG_INFO("playerbot.v2",
-            "[bg_queue] {} reject: arena_type_not_2_3_5 (arena_type={} bg_type_id={})",
+            "[bg_queue] {} reject: arena_skirmish_is_3v3_only (arena_type={} bg_type_id={})",
             p_->GetName(), uint32(arena_type), bg_type_id);
         return Result::NotKnown;
     }
     BattlegroundQueueTypeId qid = is_arena
         ? BattlegroundMgr::BGQueueTypeId(bg_type_id,
-                                         BattlegroundQueueIdType::Arena,
-                                         /*rated*/ true,   // IsValidQueueId requires the bit for the Arena queue
+                                         BattlegroundQueueIdType::ArenaSkirmish,
+                                         /*rated*/ true,   // IsValidQueueId requires the bit set for skirmish
                                          /*teamSize*/ arena_type)
         : BattlegroundMgr::BGQueueTypeId(bg_type_id,
                                          BattlegroundQueueIdType::Battleground,
@@ -9551,22 +9547,6 @@ Result API::bg_port(uint16 bg_type_id, bool accept)
         {
             qid = q;
             break;
-        }
-    }
-    // An arena (or random battleground) invite names the match's own type (Mak'gora Arena 1169), while the queue slot holds the queue
-    // that picked it ("All Arenas" 6): take the slot of that kind the bot is invited from. Before, bots never entered an arena.
-    if (qid == BATTLEGROUND_QUEUE_NONE)
-    {
-        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
-        {
-            BattlegroundQueueTypeId q = p_->GetBattlegroundQueueTypeId(i);
-            if (q != BATTLEGROUND_QUEUE_NONE
-                && (q.BattlemasterListId == BATTLEGROUND_AA || BattlegroundMgr::IsRandomBattleground(q.BattlemasterListId))
-                && p_->IsInvitedForBattlegroundQueueType(q))
-            {
-                qid = q;
-                break;
-            }
         }
     }
     if (qid == BATTLEGROUND_QUEUE_NONE)

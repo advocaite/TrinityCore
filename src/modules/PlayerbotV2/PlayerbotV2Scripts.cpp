@@ -31,7 +31,6 @@
 #include <algorithm>
 
 void AddSC_playerbot_v2_commandscript();
-void AddSC_playerbot_v2_hire_broker();
 
 namespace
 {
@@ -441,7 +440,6 @@ void AddSC_playerbot_v2()
     new playerbot_v2_group();
     new playerbot_v2_guild();
     AddSC_playerbot_v2_commandscript();
-    AddSC_playerbot_v2_hire_broker();
 
     PathGenerator::SetLiquidRouteCheck(&BotPathTouchesAvoidedLiquid);
 }

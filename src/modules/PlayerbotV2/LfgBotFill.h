@@ -33,7 +33,7 @@ bool LfgBotGroupCanTake(Player* member, Player* applicant);
 // A member (the leader) of a listed bot group that `applicant` (a player without a group) could join, for the dungeon on `map`
 // (0 = any) and about his level; nullptr when none. A channel LFG line is answered from it (Bot/ChannelChat.cpp).
 Player* LfgBotGroupMemberFor(Player* applicant, uint32 map);
-// Creates one companion for the owner (shared with `.bot add`). In hired mode it is a finder loan bot (HireMgr::SetLoaned).
+// Creates one companion for the owner (shared with `.bot add`).
 bool AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg);
 // Fills the leader's group up to `size` now with level-matched companions (`.bot lfg` and the dungeon finder). `gap` is what was
 // missing; returns the bots started, `report` says why any could not be.

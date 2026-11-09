@@ -281,7 +281,7 @@ Playerbot.World.HomeFriendlyPct = 100
 #            warlock Corruption, priest Shadow Word: Pain, druid Moonfire, paladin Judgement / Hammer of Justice, shaman Earth
 #            Shock / Lightning Bolt, hunter Serpent Sting, rogue from stealth (Cheap Shot / Ambush). AttackBots = 1: enemy world bots too.
 #   Everyone else never starts a fight with a player; it fights back when attacked.
-# Never a companion, hired bot or bot in a group; never in a battleground, dungeon, raid, capital or sanctuary. On free-for-all
+# Never a companion or bot in a group; never in a battleground, dungeon, raid, capital or sanctuary. On free-for-all
 # realms hunters also jump bots and players of their own faction. Log lines: [world_pvp] in Playerbot.log.
 # BorderFriendlyPct / ContestedFriendlyPct: on those realms the share of the player's own faction among the bots around him in
 # border and contested zones is at most this (so enemies are about); home zones and capitals keep the numbers above.
@@ -508,10 +508,6 @@ Playerbot.Bg.AutoSeed.Matches = 0
 
 # Also auto-seed Arena matches (bot-only). 0 = off.
 Playerbot.Bg.AutoSeed.Arena = 0
-
-# Arena opponents: when a real party queues for a 2v2 or 3v3 arena, idle bots of the other faction in the same level
-# bracket form a party of the same size and queue against it. 1 = on, 0 = off (the party then waits for another party).
-Playerbot.Arena.BotOpponents = 0
 
 # Force a specific Arena bracket type for auto-seeding (0 = let the system
 # choose; otherwise an arena type id, e.g. 2 = 2v2, 3 = 3v3).
@@ -770,62 +766,6 @@ Playerbot.Gear.Owned.OwnerSlack = 6
 #                                The choice is kept per owner account (table playerbot_v2_owner_gear). World and battleground bots
 #                                ignore it. Example for a server that keeps raid tiers to be earned: AllowedModes = "match,best"
 Playerbot.OwnedGear.AllowedModes = ""
-
-#   Playerbot.Hire.Mode         hired bots (an idea from Neylem): 0 = off (default; .bot add, Quick party and the Group finder make bots for
-#                                free), 1 = on for everyone, 2 = each player chooses (`.bot hire on|off`, the add-on's Settings, or a broker's
-#                                gossip). With hired bots on, nothing is made out of nothing: a companion you already have that is not out
-#                                comes instead (the same role, the same class first), and standing next to a broker a Sellsword is hired for
-#                                you. Brokers: a Sellsword Captain at the inns and in the capitals (Sellsword: your level, normal companion
-#                                gear), a Veteran Recruiter in the capitals (Veteran: level cap only, raid gear up to Playerbot.Gear.MaxTier
-#                                whatever you wear), a Black Market Broker in Gadgetzan, Booty Bay and Ratchet (Legend: level cap only, best
-#                                in slot). Bots you owned before hired mode came on count as Sellswords with no upkeep. World bots are not
-#                                affected, and a listed Group finder group you join plays with you without becoming yours.
-#                                Hired bots only (Karrz 2026-11-03): with it on the ForeverBots add-on hides its "Add a bot" buttons (the server
-#                                says so in HIRE_RESP). The Group finder and the dungeon finder (`.bot lfg`, `.bot dungeon`, a posted listing)
-#                                still fill the group for free, but those bots are only lent: they cannot be called on their own and are
-#                                deleted once they leave that group.
-#   Playerbot.Hire.GmBypass     1 = a GM account (security above player) makes bots for free as before. Default 0 (since 0.1.29: on a
-#                                local realm the player's own account is a GM, and hired bots only must hold for them too).
-#   Playerbot.Hire.BrokerRange  yards from a broker in which `.bot add` and Quick party hire. Default 15.
-#   Playerbot.Hire.<Grade>.PartyPrice / RaidPrice   copper, at the level cap: what the 4 bots of a 5-man / the 39 bots of a 40-man cost
-#                                together. One bot costs the party price / 4, or the raid price / 39 in a raid group or an instance for
-#                                more than 5. A Sellsword below the cap costs (level / cap)^2 of that, never under 1 silver.
-#                                Defaults: Sellsword 1g / 20g, Veteran 3g / 60g, Legend 5g / 100g.
-#   Playerbot.Hire.UpkeepPct    a hired bot's wages: this share of what was paid for it, once for each day it is called (a day it stays
-#                                home costs nothing). A bot whose owner cannot pay stays home. 0 = no upkeep. Default 25.
-#   Playerbot.Hire.MaxPerAccount         the most bots one account may own while it hires (0 = no limit). Default 0.
-#   Playerbot.Hire.Legend.MaxPerAccount  the most Legends one account may hire (0 = no limit). Default 0.
-#   Playerbot.Hire.<Grade>.Gear       the gear a hired bot of that grade wears: match (normal gear for its level, up to your own),
-#                                best (raid gear up to Playerbot.Gear.MaxTier), bis (best in slot), t1 / t2 / t3 (that tier set).
-#                                The raid modes only work at the level cap; below it the bot wears match.
-#                                Defaults: Sellsword match, Veteran best, Legend bis.
-#   Playerbot.Hire.<Grade>.HealthPct  a hired bot's health, in percent of what its class, level and gear give it (25 to 1000).
-#                                Default 100 (normal health) for every grade.
-#   Playerbot.Hire.<Broker>.Sells     the grades each kind of broker sells: Inn (the Sellsword Captains at the inns), Capital (the
-#                                Veteran Recruiters in the capitals), BlackMarket (Gadgetzan, Booty Bay, Ratchet). A list of
-#                                sellsword, veteran, legend; "none" = sells nothing. Defaults: Inn "sellsword", Capital
-#                                "sellsword, veteran", BlackMarket "legend". Veterans and Legends still only sign on at the level cap.
-Playerbot.Hire.Mode = 0
-Playerbot.Hire.GmBypass = 0
-Playerbot.Hire.BrokerRange = 15
-Playerbot.Hire.Sellsword.PartyPrice = 10000
-Playerbot.Hire.Sellsword.RaidPrice = 200000
-Playerbot.Hire.Veteran.PartyPrice = 30000
-Playerbot.Hire.Veteran.RaidPrice = 600000
-Playerbot.Hire.Legend.PartyPrice = 50000
-Playerbot.Hire.Legend.RaidPrice = 1000000
-Playerbot.Hire.UpkeepPct = 25
-Playerbot.Hire.MaxPerAccount = 0
-Playerbot.Hire.Legend.MaxPerAccount = 0
-Playerbot.Hire.Sellsword.Gear = "match"
-Playerbot.Hire.Veteran.Gear = "best"
-Playerbot.Hire.Legend.Gear = "bis"
-Playerbot.Hire.Sellsword.HealthPct = 100
-Playerbot.Hire.Veteran.HealthPct = 100
-Playerbot.Hire.Legend.HealthPct = 100
-Playerbot.Hire.Inn.Sells = "sellsword"
-Playerbot.Hire.Capital.Sells = "sellsword, veteran"
-Playerbot.Hire.BlackMarket.Sells = "legend"
 #   Scenario.DummyEntry   the creature the damage_parity scenarios hit (`.playerbot scenario run damage_parity_<class>`, finisher_sweep_<class>,
 #                         talent_audit_<class>): a creature_template entry that can be attacked and does nothing; the runner makes it level 63,
 #                         3731 armor, 2 billion health. 0 (default): the first "Training Dummy" / "Target Dummy" template without a script.
