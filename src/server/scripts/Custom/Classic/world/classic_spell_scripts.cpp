@@ -2141,6 +2141,54 @@ class classic_spell_shadow_storm_min_range : public SpellScript
     }
 };
 
+// 1258773 - Testing the Wells (Forever quest 92742, Westfall): the Well Testing Kit 254545 casts a dummy on a "nearby entry" target that
+// nothing in the data names, so every use failed with an invalid target and the two water samples could never be had (Discord
+// 2026-11-09). The target is the caster now (SpellMgr::LoadSpellInfoCorrections); next to a well the kit gives that well's sample.
+// Wells: the players' map spots 56.5,18.8 (Furlbrow's Pumpkin Farm) and 46.0,38.3 (the Molsen Farm), turned into world spots with
+// Gryan Stoutmantle and Salma Saldean as fit points; the 25 yd radius covers the guess.
+class classic_spell_quest_testing_the_wells : public SpellScript
+{
+    struct Well { float x, y; uint32 sample; };
+    static constexpr Well WELLS[] =
+    {
+        { -9839.2f, 1038.2f, 254546 },
+        { -10294.1f, 1405.4f, 254547 },
+    };
+    static constexpr float WELL_RADIUS = 25.0f;
+
+    Well const* NearestWell() const
+    {
+        Unit* caster = GetCaster();
+        if (caster->GetMapId() != 0)
+            return nullptr;
+        for (Well const& well : WELLS)
+            if (caster->GetExactDist2d(well.x, well.y) <= WELL_RADIUS)
+                return &well;
+        return nullptr;
+    }
+
+    SpellCastResult CheckWell()
+    {
+        return NearestWell() ? SPELL_CAST_OK : SPELL_FAILED_NOT_HERE;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Well const* well = NearestWell();
+        if (!player || !well)
+            return;
+        if (player->GetItemCount(well->sample) == 0)
+            player->AddItem(well->sample, 1);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_quest_testing_the_wells::CheckWell);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_quest_testing_the_wells::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -2194,4 +2242,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_mage_decipher);
     new classic_player_scroll_deciphering();
     RegisterSpellScript(classic_spell_shadow_storm_min_range);
+    RegisterSpellScript(classic_spell_quest_testing_the_wells);
 }
