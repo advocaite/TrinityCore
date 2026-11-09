@@ -553,6 +553,39 @@ namespace {
             it = ((now_ms - it->second) >= kEquipFailTtlMs) ? m.erase(it) : std::next(it);
         m[key] = now_ms;
     }
+
+    // A town bot that must keep dry and has no dry way out of where it stands. The Stormwind canal tunnel at the Mage Quarter
+    // (-8940,800, z 91) lies under a bridge, beside the water: every route out of it touches the canal, so an ungrouped bot down
+    // there was refused each move and stood in the tunnel until something else moved it (Discord 2026-11-09: ten bots at a time,
+    // each for a minute or two). A bot refused this way again and again without leaving the spot may take the wet route for a while.
+    struct WetRefusals { float x = 0.0f, y = 0.0f; uint32 first_ms = 0, n = 0, open_until = 0; };
+    constexpr uint32 kWetRefusalsToOpen = 3;        // refusals from one spot
+    constexpr uint32 kWetRefusalWindowMs = 180000;  // within three minutes
+    constexpr float  kWetRefusalSpotYards = 8.0f;   // a bot that walked off in between is not stuck
+    constexpr uint32 kWetWayOutMs = 30000;          // how long the wet route is allowed then
+
+    bool NoDryWayOut(Player const* p)
+    {
+        static std::unordered_map<uint64, WetRefusals> s_wet;
+        uint32 const now = GameTime::GetGameTimeMS();
+        WetRefusals& w = s_wet[p->GetGUID().GetCounter()];
+        if (w.open_until && int32(w.open_until - now) > 0)
+            return true;
+        w.open_until = 0;
+        float const px = p->GetPositionX(), py = p->GetPositionY();
+        if (w.first_ms == 0 || now - w.first_ms > kWetRefusalWindowMs
+            || std::hypot(px - w.x, py - w.y) > kWetRefusalSpotYards)
+        {
+            w = WetRefusals{ px, py, now ? now : 1u, 0, 0 };
+        }
+        if (++w.n < kWetRefusalsToOpen)
+            return false;
+        w = WetRefusals{};
+        w.open_until = (now + kWetWayOutMs) ? now + kWetWayOutMs : 1u;
+        TC_LOG_INFO("playerbot.v2", "[wet_way_out] {} has no dry way out of ({:.1f},{:.1f},{:.1f}); it may cross the water for {} s",
+                    p->GetName(), px, py, p->GetPositionZ(), kWetWayOutMs / 1000u);
+        return true;
+    }
 } // anonymous
 
 API::API(Player* p) : p_(p) {}
@@ -2459,7 +2492,8 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
     // A wet route is refused here as well as at the liquid gate below: the partial and far-end branches in between drive the route they
     // got without reaching that gate.
     if (BotMovement::g_LiquidPathPolicy && path.IsWetRoute()
-        && BotMovement::DecideLiquid(BotMovement::g_LiquidPathPolicy(p_), /*path_wet*/ true, /*dry_found*/ false) == BotMovement::LiquidAction::Refuse)
+        && BotMovement::DecideLiquid(BotMovement::g_LiquidPathPolicy(p_), /*path_wet*/ true, /*dry_found*/ false) == BotMovement::LiquidAction::Refuse
+        && !NoDryWayOut(p_))
     {
         Playerbot::V2::Module::instance().OnPathOutcome(3 /*FarFromPolyEnd*/);
         log_path_fail("Liquid");
@@ -2480,12 +2514,17 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         float const dz_end = ae.z - z;
         // In a capital the layers lie 20 to 40 y apart (Stormwind): a polygon that far from the asked height is another level, not a
         // slope (Hellice, on a roof at z 148.6, was snapped to a polygon 20 to 35 y below it).
-        float const max_dz = ::Playerbot::V2::World::IsVanillaCapitalZone(p_->GetZoneId()) ? ::Playerbot::V2::Fleet::kCityDropYards : 60.0f;
+        bool const in_capital = ::Playerbot::V2::World::IsVanillaCapitalZone(p_->GetZoneId());
+        float const max_dz = in_capital ? ::Playerbot::V2::Fleet::kCityDropYards : 60.0f;
+        // Nor is a polygon well below the ask in a capital: a bridge's deck snapped down to the walkway under it (Stormwind, the
+        // canal tunnel at the Mage Quarter: asked z 100.5 on the bridge, snapped to the tunnel floor at z 90.9, and the bots that
+        // went down there found no dry way back up).
+        bool const snaps_under = in_capital && dz_end < -::Playerbot::V2::Fleet::kLiquidDropYards;
         // A polygon in magma or slime is no place to walk to: the liquid gate below refuses it, and the refusal is only the short 3 s
         // one, so the goal was picked again and again (Burning Steppes, Simer: 53 path_fail Magma for one quest goal in 3 minutes).
         // Left unsnapped, the goal ends as FarFromPolyEnd, which suppresses it for long and lets goal selection move on.
         bool const end_in_hazard = BotMovement::ClassifyDestinationLiquid(p_, ae.x, ae.y, ae.z) == BotMovement::LiquidVerdict::Hazard;
-        if (off_end <= 12.0f && std::fabs(dz_end) < max_dz && !end_in_hazard && !::Playerbot::V2::Fleet::PathHasCliff(path.GetPath()))
+        if (off_end <= 12.0f && std::fabs(dz_end) < max_dz && !snaps_under && !end_in_hazard && !::Playerbot::V2::Fleet::PathHasCliff(path.GetPath()))
         {
             if (SehSafeCalculatePath(path, ae.x, ae.y, ae.z) && !(path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_FARFROMPOLY_END)))
             {
@@ -3026,7 +3065,8 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         // one when that exists (for this move_to and for follow/chase alike); a route that is still wet means there is none:
         // town life of an ungrouped bot then does not move (the rule picks another goal), a follower goes on through the water.
         if (BotMovement::g_LiquidPathPolicy && path_ok && !(pt & PATHFIND_NOPATH) && path.IsWetRoute()
-            && BotMovement::DecideLiquid(BotMovement::g_LiquidPathPolicy(p_), /*path_wet*/ true, /*dry_found*/ false) == BotMovement::LiquidAction::Refuse)
+            && BotMovement::DecideLiquid(BotMovement::g_LiquidPathPolicy(p_), /*path_wet*/ true, /*dry_found*/ false) == BotMovement::LiquidAction::Refuse
+            && !NoDryWayOut(p_))
         {
             Playerbot::V2::Module::instance().OnPathOutcome(3 /*FarFromPolyEnd*/);
             log_path_fail("Liquid");
