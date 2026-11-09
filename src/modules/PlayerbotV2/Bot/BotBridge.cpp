@@ -1985,6 +1985,29 @@ std::string ClientLocale(Player const* player)
     return l < TOTAL_LOCALES ? localeNames[l] : "enUS";
 }
 
+// The language most real players on the bot's map play in, for lines no one player asked for (a street talk, a General or
+// Trade post): a Russian realm got English posts (Geshka, 2026-11-09). No player there: the realm's own language.
+std::string ListenersLocale(Player const* bot)
+{
+    std::array<uint32, TOTAL_LOCALES> count{};
+    if (Map* map = bot ? bot->GetMap() : nullptr)
+        for (MapReference const& ref : map->GetPlayers())
+        {
+            Player const* p = ref.GetSource();
+            if (p && p->GetSession() && !Services::Registry().has(p->GetGUID().GetCounter()))
+            {
+                LocaleConstant const l = p->GetSession()->GetSessionDbcLocale();
+                if (l < TOTAL_LOCALES)
+                    ++count[l];
+            }
+        }
+    std::size_t best = std::size_t(sWorld->GetDefaultDbcLocale());
+    for (std::size_t l = 0; l < count.size(); ++l)
+        if (count[l] > count[best])
+            best = l;
+    return best < TOTAL_LOCALES ? localeNames[best] : "enUS";
+}
+
 void WriteMoment(ConfigReader::BridgeConfig const& cfg, Moment const& m, uint32 now_ms)
 {
     Player* bot = FindBot(m.bot);
@@ -2074,6 +2097,7 @@ uint64 WriteChannelTalk(ConfigReader::BridgeConfig const& cfg, Player* bot, uint
     e.fields.emplace_back("channel", ChannelWord(channel_id));
     e.fields.emplace_back("scene", scene);
     e.fields.emplace_back("talk", "");
+    e.fields.emplace_back("locale", ListenersLocale(bot));
     if (!keep.empty())
         e.fields.emplace_back("keep", keep);
     if (cfg.swearing)
@@ -2407,6 +2431,7 @@ bool BotBridge::AskTalk(Player* bot, std::string const& scene, std::string const
     e.fields.emplace_back("channel", "say");
     e.fields.emplace_back("scene", scene.size() > 1500 ? scene.substr(0, 1500) : scene);
     e.fields.emplace_back("talk", chat.size() > 1500 ? chat.substr(chat.size() - 1500) : chat);
+    e.fields.emplace_back("locale", ListenersLocale(bot));
     if (Services::Config().bridge().swearing)
         e.numbers.emplace_back("swearing", 1);
     e.fields.emplace_back("weather", WeatherWord(bot->GetMap() ? bot->GetMap()->GetZoneWeather(bot->GetZoneId()) : WEATHER_STATE_FINE));

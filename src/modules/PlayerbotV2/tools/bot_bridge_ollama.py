@@ -76,6 +76,7 @@ PLACE_WORDS = ["auction house", "flight master", "flight path", "stable master",
                "bank", "inn", "auctioneer", "vendor", "merchant", "repair", "trainer", "graveyard", "mail", "ah"]
 EMOTES = ["wave", "hello", "bye", "bow", "thank", "cheer", "laugh", "dance", "salute", "point", "yes", "nod", "no", "cry",
           "roar", "flex", "kneel", "applaud", "shy", "talk", "question", "exclamation", "rude", "chicken", "beg", "shout", "eat"]
+TALK_TIMEOUT_S = 20    # bots' own talk: dropped sooner than a player's answer
 MAX_AGE_S = 50          # the server drops answers older than ReplyMaxAgeSec (60 s by default)
 HISTORY_LINES = 6       # lines of each conversation the model sees
 POLL_S = 0.2            # how often the events file is read
@@ -415,7 +416,7 @@ class ChatApi:
             log("model service %s: %s" % (self.url, "ready, model " + self.model if self.up else "not reachable, fixed answers for now"))
         return self.up
 
-    def chat(self, system, user):
+    def chat(self, system, user, timeout=None):
         # 160 tokens is room for the longest answer (a line, an action and a memory); fewer would cut the JSON off
         body = {"model": self.model, "temperature": 0.8, "max_tokens": 160,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
@@ -431,7 +432,7 @@ class ChatApi:
             req = urllib.request.Request(self.url + "/chat/completions", data=json.dumps(body).encode("utf-8"), headers=self._headers())
             try:
                 t0 = time.time()
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                     out = json.load(r)
                 with self.lock:
                     self.avg_s = 0.8 * self.avg_s + 0.2 * (time.time() - t0)
@@ -962,6 +963,23 @@ def answer(event, api, actions_on, minds, opts):
                                0.4 + 0.15 * abs(mood), now)
             minds.save(bot)
         reply = reply if (reply.get("say") or reply.get("do")) else None
+    if reply and reply.get("say") and wants_russian(event) and not mostly_cyrillic(reply["say"]):
+        # Small models slip into English now and then (qwen2.5:3b, Geshka 2026-11-09): one more ask, else a Russian line.
+        log("%s's line for %s is not Russian (%s): asking again" % (bot, player, reply["say"]))
+        try:
+            again = parse_json(api.chat(system, user + "\n(Your \"say\" was in English. Write it again in Russian.)"))
+            say2, why2 = check_line(str((again or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200], swearing)
+        except (OSError, ValueError) as e:
+            log("second ask failed (%s)" % e)
+            say2, why2 = "", "failed"
+        if say2 and not why2 and mostly_cyrillic(say2):
+            reply["say"] = say2
+        elif event.get("_moment"):
+            reply.pop("say", None)
+        elif "do" in reply:
+            reply["say"] = "ок"   # the action speaks for itself
+        else:
+            reply["say"] = (fixed_answer(event) or {}).get("say", "")
     if not reply and event.get("_moment") and data:
         log("%s -> %s [%s, %.1f s, moment %s]: (says nothing)" % (bot, player, source, time.time() - started, event.get("what")))
         return   # the model chose to say nothing about it: fine, people don't comment on everything
@@ -1016,14 +1034,20 @@ def answer_talk(event, api, minds, opts):
     system += "Now: " + str(event.get("scene", "")) + "\n"
     if event.get("weather") or event.get("time_of_day"):
         system += "Weather here: %s. Time of day: %s.\n" % (event.get("weather", "clear"), event.get("time_of_day", "day"))
+    # The players around read it: a Russian realm gets Russian street talk and posts ("locale" is theirs, from the server).
+    russian = str(event.get("locale", "")).lower() == "ruru"
+    if russian:
+        system += language_line(True).replace("The player writes", "The players here write") + "\n"
     talk = str(event.get("talk", "") or "").strip()
     user = ("The talk so far:\n%s\nYour next line (answer the others, don't repeat what was said):" % talk) if talk else \
         "Start the talk with one line."
+    if russian:
+        user += "\n(Answer in Russian.)"
     try:
-        data = parse_json(api.chat(system, user))
+        # A talk line is never worth a long wait: on a slow PC it would hold the model while a player's line waits.
+        data = parse_json(api.chat(system, user, timeout=min(api.timeout, TALK_TIMEOUT_S)))
     except (OSError, ValueError) as e:
         log("talk line of %s failed (%s)" % (bot, e))
-        api.next_check = 0
         return
     say = str((data or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200]
     if ":" in say[:24] and say.split(":", 1)[0].strip().lower() == bot.lower():
@@ -1031,6 +1055,9 @@ def answer_talk(event, api, minds, opts):
     say, why = check_line(say, swearing)
     if why:
         log("talk line of %s %s" % (bot, why))
+    if russian and say and not mostly_cyrillic(say):
+        log("talk line of %s not in Russian, not said: %s" % (bot, say))
+        return
     if not say:
         return
     rng = random.Random()
@@ -1108,7 +1135,7 @@ def main():
         threading.Thread(target=api.warm, daemon=True).start()   # loads the model now, not on the first player's line
     last_warm, last_chat = time.time(), 0.0
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, opts.workers) + 1)   # one more for warm()
-    pending = set()
+    pending, chat_pending = set(), set()
     log("bot bridge: folder %s, model %s at %s, actions %s" % (folder, opts.model, url, "on" if actions_on else "off"))
 
     current, offset, last_ping, carry = None, 0, 0.0, b""
@@ -1157,12 +1184,16 @@ def main():
                         write_reply(folder, reply)
                         log("%s -> %s [fixed, model busy]: %s" % (e.get("from"), e.get("bot"), reply.get("say", "")))
                         continue
-                    pending.add(pool.submit(safe_answer, e, api, actions_on, minds, opts))
+                    fut = pool.submit(safe_answer, e, api, actions_on, minds, opts)
+                    pending.add(fut)
+                    chat_pending.add(fut)
                     last_chat = time.time()
                 elif kind == "talk":
                     # World bots chatting with each other: only when no player's line waits (players always come first).
                     pending = {p for p in pending if not p.done()}
-                    if len(pending) >= opts.workers:
+                    chat_pending = {p for p in chat_pending if not p.done()}
+                    # Not even next to a player's answer: two at once on a small card made his take 41 s (Geshka, 2026-11-09).
+                    if len(pending) >= opts.workers or chat_pending:
                         log("talk line of %s skipped: players' chat comes first" % e.get("bot"))
                         continue
                     e["_seen"], e["_folder"] = time.time(), folder
