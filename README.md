@@ -19,8 +19,10 @@ Branches:
 | `forever` (default) | The clean core. |
 | `forever-bots` | The same core plus the optional player bots module (`src/modules/PlayerbotV2`). Bots stay off until you turn them on. |
 
-**Just want to play?** Get the ready-to-play Windows repack from our [Discord](https://discord.gg/eJt62dDh54). It is
-built from a tagged `forever-bots` commit, and you choose bots on or off when you start it.
+**Just want to play?** Download the ready-to-play Windows repack from
+[the latest repack release](https://github.com/Karrz1/Karrz-playerbots-wow-forever/releases/latest) (the
+`WoW-Forever-Bots-<version>.zip` file). It is built from a tagged `forever-bots` commit, and you choose bots on or off
+when you start it. The launcher updates itself from [Forever Launcher releases](https://github.com/Karrz1/foreverlauncher-releases/releases).
 
 ## Philosophy
 
@@ -114,6 +116,7 @@ fix per pull request, and every data change names its source.
 
 - [Discord](https://discord.gg/eJt62dDh54)
 - [Issues](https://github.com/Karrz1/TrinityCore/issues)
+- [Repack download](https://github.com/Karrz1/Karrz-playerbots-wow-forever/releases/latest)
 - [Releases](https://github.com/Karrz1/TrinityCore/releases) (source releases and the Forever world database)
 - [TrinityCore](https://github.com/TrinityCore/TrinityCore), the upstream project
 
