@@ -33,7 +33,6 @@ if(NOT BUILD_PLAYERBOT_V2)
     ClassicGuildAskText.cpp
     ClassicBotLocale.cpp
     ClassicCompanionLeash.cpp
-    ClassicHirePolicy.cpp
     ClassicMeleeReach.cpp
     ClassicFalseCombatEscape.cpp
     ClassicFollowDrop.cpp
