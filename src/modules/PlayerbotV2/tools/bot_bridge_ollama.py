@@ -346,20 +346,28 @@ def opinion_text(o, player, owner=False):
 def fixed_answer(event):
     if event.get("_moment"):
         # a moment with no model: the fixed line the server would have said (or nothing)
-        return {"say": event["example"]} if event.get("example") else None
+        # (the server's lines are English: a Russian player gets none rather than English)
+        return {"say": event["example"]} if event.get("example") and not wants_russian(event) else None
     text = event.get("text", "").lower()
     who = event.get("from", "there")
     can = event.get("can")
+    # A crowd or a slow PC gives these instead of the model's line: they must be in his language too ("hey Dasha, bit busy
+    # in <Russian city> right now" to a Russian player, GLIPT 2026-11-09).
+    ru = wants_russian(event)
     def allowed(act):
         return can is None or act in can
-    if "follow" in text and allowed("follow"):
-        return {"say": "sure, right behind you", "do": "follow"}
-    if ("wait" in text or "stay" in text) and allowed("stay"):
-        return {"say": "ok, I'll wait here", "do": "stay"}
-    if "attack" in text and event.get("speaker_target_kind") == "hostile" and allowed("attack"):
-        return {"say": "on it", "do": "attack", "target": "speaker_target"}
-    if (text.startswith("hi") or "hello" in text) and allowed("emote"):
-        return {"say": "hey %s" % who, "do": "emote", "emote": "wave"}
+    def has(*words):
+        return any(w in text for w in words)
+    if has("follow", "за мной", "следуй", "иди за") and allowed("follow"):
+        return {"say": "иду за тобой" if ru else "sure, right behind you", "do": "follow"}
+    if has("wait", "stay", "жди", "стой", "подожди") and allowed("stay"):
+        return {"say": "ок, жду тут" if ru else "ok, I'll wait here", "do": "stay"}
+    if has("attack", "атак", "бей") and event.get("speaker_target_kind") == "hostile" and allowed("attack"):
+        return {"say": "щас" if ru else "on it", "do": "attack", "target": "speaker_target"}
+    if (text.startswith("hi") or has("hello", "привет", "здравств", "хай")) and allowed("emote"):
+        return {"say": ("привет, %s" if ru else "hey %s") % who, "do": "emote", "emote": "wave"}
+    if ru:
+        return {"say": "привет, %s, щас немного занят, чуть позже" % who}
     return {"say": "hey %s, bit busy in %s right now" % (who, event.get("zone", "the world"))}
 
 
@@ -485,22 +493,32 @@ def mostly_cyrillic(text):
     return cyr > 0 and cyr >= lat
 
 
-def language_line(text):
+# The language each player last wrote in (True: Russian), for a line or a moment that shows none of its own.
+player_russian = {}
+
+
+def wants_russian(event):
+    """True when the bot should answer this player in Russian: his line is mostly Cyrillic; or it has no letters (a moment,
+    "?", a link) and his last line was Russian, or he has written nothing yet and his game client is Russian ("locale").
+    A Russian player who writes English gets English. GLIPT (Russian client) got English answers, 2026-11-09."""
+    player = event.get("from", "")
+    text = re.sub(r"\|H.*?\|h|\|c\w+:|\|c[0-9a-fA-F]{8}|\|r", "", event.get("text", "") or "")
+    if any(ch.isalpha() for ch in text):
+        russian = mostly_cyrillic(text)
+        if player:
+            player_russian[player] = russian
+        return russian
+    if player in player_russian:
+        return player_russian[player]
+    return str(event.get("locale", "")).lower() == "ruru"
+
+
+def language_line(russian):
     # Small models answer an English prompt in English unless the language is named outright (the realm's own chat
     # model does the same, BotChatModel.cpp LanguageLine).
-    if mostly_cyrillic(text):
+    if russian:
         return "The player writes in Russian: write your \"say\" in Russian, the way Russian players write in game chat."
     return "Answer in the language of the message you answer."
-
-
-def last_line_of(bot, player):
-    """The last thing `player` said to `bot` (from the recent chat), or empty."""
-    with history_lock:
-        past = list(history[(bot, player)])
-    for line in reversed(past):
-        if line.startswith(player + ": "):
-            return line[len(player) + 2:]
-    return ""
 
 
 def time_ago(seconds):
@@ -611,8 +629,8 @@ def build_prompt(event, actions_on, minds, swearing):
     mind = minds.get(bot)
     p = mind["persona"]
     moment = bool(event.get("_moment"))
-    # A moment has no line of the player's: his last line decides the language (a Russian player gets Russian).
-    lang_text = event.get("text", "") or last_line_of(bot, player)
+    # A moment has no line of the player's: his last line, else his game client, decides the language (wants_russian).
+    russian = wants_russian(event)
     facts = event.get("prompt") or ("You are %s, a level %s %s %s in World of Warcraft."
                                     % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", "")))
     owner = bool(event.get("from_is_owner"))
@@ -623,7 +641,7 @@ def build_prompt(event, actions_on, minds, swearing):
     system = static_rules(actions_on, swearing)
     system += ("You are %s, a level %s %s %s. Who you are: %s. How you write: %s. You are %s in chat. %s\n"
                % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", ""),
-                  p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(lang_text)))
+                  p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(russian)))
     # The player who brought this bot (its owner, the leader of its group): orders from him are what the bot is there for. A bot
     # that answered "piss off" to "mount up" and did nothing felt broken (Karrz, 2026-11-08).
     if owner:
@@ -699,7 +717,7 @@ def build_prompt(event, actions_on, minds, swearing):
         lines.append(ask)
     else:
         lines.append("%s (%s): %s" % (player, event.get("channel", "say"), event.get("text", "")))
-    if mostly_cyrillic(lang_text):
+    if russian:
         lines.append("(Answer in Russian.)")
     return system, "\n".join(lines)
 

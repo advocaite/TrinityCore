@@ -1976,6 +1976,15 @@ Player* MomentListener(Player* bot)
     return first;
 }
 
+// The language of the player's game client ("ruRU", "enUS"): the program answers a Russian client in Russian when his line
+// gives no language of its own (a moment, "ok", a link). GLIPT greeted his group in Russian and got English (2026-11-09).
+std::string ClientLocale(Player const* player)
+{
+    WorldSession const* s = player ? player->GetSession() : nullptr;
+    LocaleConstant const l = s ? s->GetSessionDbcLocale() : LOCALE_enUS;
+    return l < TOTAL_LOCALES ? localeNames[l] : "enUS";
+}
+
 void WriteMoment(ConfigReader::BridgeConfig const& cfg, Moment const& m, uint32 now_ms)
 {
     Player* bot = FindBot(m.bot);
@@ -1993,6 +2002,7 @@ void WriteMoment(ConfigReader::BridgeConfig const& cfg, Moment const& m, uint32 
         e.fields.emplace_back("example", m.example);
     e.fields.emplace_back("channel", "party");
     e.fields.emplace_back("to", to->GetName());
+    e.fields.emplace_back("locale", ClientLocale(to));
     bool const owned = Services::Owners().GetOwner(m.bot).account_id != 0;
     e.numbers.emplace_back("to_is_owner", owned && OwnsBot(to, m.bot) ? 1 : 0);
     if (cfg.actions)
@@ -2463,6 +2473,7 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     FillBot(e, bot, 0);
     e.fields.emplace_back("channel", channel);
     e.fields.emplace_back("from", sender->GetName());
+    e.fields.emplace_back("locale", ClientLocale(sender));
     e.numbers.emplace_back("from_is_bot", Services::Registry().has(sender->GetGUID().GetCounter()) ? 1 : 0);
     e.fields.emplace_back("text", text.size() > 500 ? text.substr(0, 500) : text);
     if (Services::Config().bridge().prompt_in_chat && !prompt.empty())
