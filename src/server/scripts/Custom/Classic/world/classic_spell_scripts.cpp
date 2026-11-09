@@ -146,6 +146,28 @@ class classic_spell_ground_area_damage : public AuraScript
     }
 };
 
+// 6785, 6787, 9866, 9867 - Ravage; 9005, 9823, 9827 - Pounce
+// Blizzard hotfix 6 November 2026: "Night Elf: Shadowmelded Druids no longer have access to Ravage and Pounce." Shadowmeld (20580)
+// is a stealth aura, so a druid in Cat Form could open with them from it instead of from Prowl. Live now lists Shadowmeld as an
+// aura the caster must not have (SpellAuraRestrictions.ExcludeCasterAuraSpell 20580, seen in the live spell data of wowsims/forever,
+// MIT); our client data does not have that yet, so the server checks it.
+class classic_spell_dru_not_from_shadowmeld : public SpellScript
+{
+    static constexpr uint32 SPELL_SHADOWMELD = 20580;
+
+    SpellCastResult CheckCast()
+    {
+        if (GetCaster()->HasAura(SPELL_SHADOWMELD))
+            return SPELL_FAILED_CASTER_AURASTATE;
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_dru_not_from_shadowmeld::CheckCast);
+    }
+};
+
 // Classic 1.60 (WoW Forever), Shen'dar Highlands cave, quest 94489 (official beta sniff 70205): clicking an injured druid makes the
 // player cast 1276047 (dummy) on it. Credit "Injured Druids healed" (257964) and the druid's own hidden objective (its entry).
 enum ClassicHealInjuredDruid
@@ -2192,6 +2214,7 @@ class classic_spell_quest_testing_the_wells : public SpellScript
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
+    RegisterSpellScript(classic_spell_dru_not_from_shadowmeld);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
     RegisterSpellScript(classic_spell_undead_touch_of_the_grave);
     RegisterSpellScript(classic_spell_tauren_cultivation);
