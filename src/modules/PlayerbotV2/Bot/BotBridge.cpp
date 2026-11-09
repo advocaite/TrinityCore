@@ -1075,7 +1075,8 @@ std::string FindPlace(Player* bot, std::string const& place, float radius, Posit
 // "trade me some stuff": the bot opens a trade window with the player who asked (its owner, or the player leading its group:
 // CheckActionContext) and puts in what he asked for, or what helps him (TradeShop::PickGifts). The game's own trade does the rest:
 // nothing changes hands until he presses Accept, and the bot accepts once he has (API::trade_with, BotTrade::Decide).
-std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std::string& detail)
+// `speaks_later`: the bot tells him itself how it goes (the conjure order), so the program's line is not said.
+std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std::string& detail, bool& speaks_later)
 {
     if (!speaker)
         return "nobody asked";
@@ -1100,6 +1101,7 @@ std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std
         if (make && bot->GetClass() == CLASS_MAGE)
         {
             ::Playerbot::V2::PlayerCraftOrders::Order(speaker, bot, std::string("craft ") + make + " 20");
+            speaks_later = true;   // the order whispers what it makes (or why it can't), and trades when done
             detail = std::string("no ") + make + " in my bags: conjuring some for " + speaker->GetName() + " (a craft order; it trades when done)";
             return {};
         }
@@ -1140,7 +1142,8 @@ std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std
 // or the program acting by itself) the same intents are queued directly, with shorter holds.
 Petition* CharterOf(Player* player);
 
-std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player* speaker, Action const& a, uint32 now_ms, std::string& detail)
+std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player* speaker, Action const& a, uint32 now_ms, std::string& detail,
+                      bool& speaks_later)
 {
     BotId const id = bot->GetGUID().GetCounter();
     BotAI* ai = Services::Registry().ai(id);
@@ -1516,7 +1519,7 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
             detail = "order \"" + a.order + "\"";
             return order(a.order.c_str());
         case Act::Trade:
-            return RunTrade(bot, speaker, a.items, detail);
+            return RunTrade(bot, speaker, a.items, detail, speaks_later);
         case Act::SignCharter:
         {
             // As his "Request Signature": the same checks and the same result in his charter window (BotSignOfferedCharter).
@@ -1591,10 +1594,17 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
     }
 }
 
+struct ActionOutcome
+{
+    bool ok = false;
+    bool speaks_later = false;   // the action tells the player itself how it goes
+    std::string why;             // refused: why not
+};
+
 // One reply's action: every check, then RunAction, then an action_result event. `ask` is the chat_in it answers (nullptr: the
 // program acts on its own), `read_ms` when the line was read.
-void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::string const& bot_name, uint64 reply_to, ChatAsk const* ask,
-                  Reply const& r, uint32 read_ms, uint32 now_ms)
+ActionOutcome HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::string const& bot_name, uint64 reply_to, ChatAsk const* ask,
+                           Reply const& r, uint32 read_ms, uint32 now_ms)
 {
     Action const& a = r.action;
     auto refuse = [&](std::string why)
@@ -1602,6 +1612,9 @@ void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::stri
         g_act_gate.NoteRefused(bot_id, now_ms);
         TC_LOG_INFO("playerbot.v2", "[bridge] action {} for {} refused: {}", a.act == Act::None ? "?" : ActName(a.act), bot_name, why);
         WriteActionResult(bot_id, bot_name, reply_to, a.act, why, {});
+        ActionOutcome out;
+        out.why = std::move(why);
+        return out;
     };
     if (!cfg.actions)
         return refuse("actions are turned off on this server (Playerbot.Bridge.Actions.Enable)");
@@ -1637,12 +1650,15 @@ void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::stri
         return refuse(why);
 
     std::string detail;
-    std::string const why = RunAction(cfg, bot, speaker, a, now_ms, detail);
+    ActionOutcome out;
+    std::string const why = RunAction(cfg, bot, speaker, a, now_ms, detail, out.speaks_later);
     if (!why.empty())
         return refuse(why);
     TC_LOG_INFO("playerbot.v2", "[bridge] action {} for {}{}: {}", ActName(a.act), bot_name,
                 speaker ? " (asked by " + speaker->GetName() + ")" : std::string(), detail);
     WriteActionResult(bot_id, bot_name, reply_to, a.act, {}, detail);
+    out.ok = true;
+    return out;
 }
 
 // Once a second: a world bot following a player it does not belong to lets go when the time is up, or when the player is gone
@@ -1750,6 +1766,23 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
         }
         if (!Services::HasIntents(bot))
             continue;
+        // The action runs first: the line is said only when it is true (LineAfterAction).
+        if (has_action && !ask.talk_key)
+        {
+            ActionOutcome const done = HandleAction(cfg, bot, bot_name, r.reply_to, answers ? &ask : nullptr, r, read_ms, now_ms);
+            std::string const said = text;
+            text = LineAfterAction(r.action.act, done.ok, done.speaks_later, done.why, text);
+            if (!answers && !done.ok)
+                text.clear();   // a line of the program's own: nobody asked, nobody needs a "sorry"
+            if (text != said)
+                TC_LOG_INFO("playerbot.v2", "[bridge] {}'s line \"{}\" {} (action {})", bot_name, said,
+                            text.empty() ? "not said" : "said as \"" + text + "\"", done.ok ? "speaks for itself" : "refused");
+            if ((channel == "say" || channel == "yell") && !text.empty() && !done.ok && answers && !ask.sender.empty())
+            {
+                channel = "whisper";   // a "sorry" goes to the one who asked, not to the whole street
+                to = ask.sender;
+            }
+        }
         if (!text.empty())
         {
             g_last_line_ms[bot] = now_ms;
@@ -1762,8 +1795,6 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
             }
             Say(bot, channel, to, std::move(text), now_ms, r.delay_ms);
         }
-        if (has_action && !ask.talk_key)
-            HandleAction(cfg, bot, bot_name, r.reply_to, answers ? &ask : nullptr, r, read_ms, now_ms);
     }
     if (g_last_line_ms.size() > 4096)
         std::erase_if(g_last_line_ms, [&](auto const& kv) { return now_ms - kv.second > 600000u; });
@@ -1907,6 +1938,10 @@ std::string CarryText(Player* bot)
     bool const bread = Classic::BestMageConjure(Classic::ConsumableKind::Food, knows) != 0;
     if (water || bread)
         s += std::string("; can conjure: ") + (water ? "water" : "") + (water && bread ? ", " : "") + (bread ? "food" : "");
+    // Gun promised water three times with full bags: a conjure that cannot fit makes nothing (2026-11-09).
+    uint32 const free_slots = bot->GetFreeInventorySlotCount();
+    s += free_slots ? "; free bag slots: " + std::to_string(free_slots)
+                    : std::string("; bags FULL (0 free slots): you can't conjure, make or take anything until you sell or drop something");
     return s;
 }
 

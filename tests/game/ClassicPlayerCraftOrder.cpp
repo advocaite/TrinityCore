@@ -71,6 +71,10 @@ TEST_CASE("PlayerCraftOrder: parsing a craft order", "[playercraft]")
         CHECK(r.item_entry == 1251);
         CHECK(r.name.empty());
         CHECK(r.count == 3);
+        r = ParseRequest("craft |cnIQ1:|Hitem:1251::::::::60::::::::::|h[Linen Bandage]|h|r x3", 20);   // a 12.x client's link
+        CHECK(r.type == Kind::Craft);
+        CHECK(r.item_entry == 1251);
+        CHECK(r.count == 3);
         r = ParseRequest("craft |Hitem:2996::::|h[Bolt of Linen Cloth]|h", 20);
         CHECK(r.item_entry == 2996);
         CHECK(r.count == 1);

@@ -97,6 +97,8 @@ inline Request ParseRequest(std::string_view text, std::uint32_t max_count)
         std::size_t from = h;
         if (h >= 10 && s.compare(h - 10, 2, "|c") == 0)
             from = h - 10;
+        else if (auto const c = s.rfind("|cn", h); c != std::string::npos && s.find(' ', c) > h)
+            from = c;                                                          // the 12.x quality colour: |cnIQ4:
         std::size_t to = s.size();
         if (auto open = s.find("|h", h + 7); open != std::string::npos)         // end of the link target: |h[Name]
             if (auto close = s.find("|h", open + 2); close != std::string::npos)  // end of the visible text

@@ -53,6 +53,9 @@ import urllib.request
 ACTIONS = ["follow", "stay", "resume", "attack", "stop_attack", "flee", "go_to", "accept_quest", "turn_in", "drop_quest",
            "share_quest", "unstuck", "sit", "stand", "mount", "dismount", "emote", "cast", "order", "trade", "step",
            "sign_charter"]
+# When the model twice asks for an action that can't happen: an honest line instead of its promise.
+CANT_LINES = ["can't do that right now, sorry", "hm, can't right now", "sorry, that won't work right now",
+              "no can do right now, sorry"]
 # The orders a reply may give through the bots' own command words (the server checks them again: BotBridgeFormat SafeOrder).
 ORDERS = ["follow", "stay", "hold", "resume", "come", "disengage", "flee", "attack", "assist", "mount", "dismount", "sit", "stand",
           "release", "passive", "defensive", "aggressive", "accept", "accept all", "turn in", "turnin", "share", "quests",
@@ -575,7 +578,10 @@ def static_rules(actions_on, swearing):
               "(\"linen cloth\", \"water\", \"food\", \"potions\", \"bags\", \"gear\"), or leave it out for whatever helps "
               "him. He accepts in the window. Use it when he asks you to trade or give him something. YOUR BAGS below says what "
               "you really carry: never say you give him something that is not there. Water or food you don't have but can "
-              "conjure: trade with \"items\":\"water\" (or \"food\") still works, you conjure it first and then trade.\n"
+              "conjure: trade with \"items\":\"water\" (or \"food\") still works, you conjure it first and then trade. When YOUR "
+              "BAGS says your bags are FULL you can't conjure or make anything: say so; junk is sold at a \"vendor\" "
+              "(go_to \"place\":\"vendor\"), not at the auction house. Your line is read before the action "
+              "happens: say what you are about to do (\"one sec, conjuring\"), not that it is done.\n"
               "cast needs \"spell\" (a name from YOUR SPELLS). damage spells need \"ref\" of a hostile from NEAR or "
               "\"target\":\"speaker_target\"; heal, buff and resurrect go on the player who asks (\"target\":\"speaker\") "
               "or on you (\"target\":\"self\"); a campfire spell needs nothing more. If asked for a spell you don't have, "
@@ -667,6 +673,9 @@ def build_prompt(event, actions_on, minds, swearing):
         lines.append("YOUR LAST CHANNEL POST: %s. If %s answers it: for a sale say he can whisper you \"what do you have\" and "
                      "then \"buy\" with the number, and open a trade with the gold; for a group, tell him to invite you."
                      % (event["your_post"], player))
+    # Not only after a channel post: the model never saw its spells, said "here's your water" and asked for "cast water"
+    # (Gun, 2026-11-09).
+    if actions_on and not moment:
         if spells and can and "cast" in can:
             lines.append("YOUR SPELLS: " + ", ".join("%s (%s)" % (s.get("name"), s.get("kind")) for s in spells))
         if event.get("speaker_target"):
@@ -718,9 +727,36 @@ def to_int(v):
         return None
 
 
-def clean_action(data, event):
-    """The action of the model's answer as reply fields, or {} when it doesn't fit the event."""
-    act = str(data.get("do", "") or "").strip().lower()
+CONJURE_RE = re.compile(r"^conjure (water|food|refreshment|mana \w+ water)?")
+
+
+def find_spell(wanted, spells):
+    """The spell of YOUR SPELLS the model meant: its exact name, else the one spell whose name has all its words ("water" is
+    Conjure Water, "intellect" is Arcane Intellect)."""
+    if not wanted:
+        return None
+    exact = next((s for s in spells if spell_key(s.get("name", "")) == wanted), None)
+    if exact:
+        return exact
+    words = wanted.split()
+    some = [s for s in spells if all(w in spell_key(s.get("name", "")).split() for w in words)]
+    return some[0] if len(some) == 1 else None
+
+
+def clean_action(data, event, why=None):
+    """The action of the model's answer as reply fields, or {} when it doesn't fit the event; then `why` (a list) gets the
+    reason, for the second ask."""
+    def drop(reason):
+        if why is not None:
+            why.append(reason)
+        return {}
+    act = " ".join(str(data.get("do", "") or "").strip().lower().split())
+    # "trade water", "cast frostbolt", "emote wave": the action and its thing in one word (Gun, 2026-11-09)
+    if " " in act and act.split(" ", 1)[0] in ACTIONS:
+        act, rest = act.split(" ", 1)
+        field = {"trade": "items", "cast": "spell", "emote": "emote", "order": "order", "go_to": "place", "step": "dir"}.get(act)
+        if field and not data.get(field):
+            data = dict(data, **{field: rest})
     if act == "cast_spell":
         act = "cast"
     step_dir = ""
@@ -729,8 +765,17 @@ def clean_action(data, event):
     if act in STEP_ALIASES:
         act, step_dir = "step", STEP_ALIASES[act]
     can = event.get("can")
-    if act not in ACTIONS or (can is not None and act not in can):
-        return {}
+    if act not in ACTIONS:
+        return drop("\"%s\" is not an action" % act)
+    if act == "cast":
+        # Conjured water or food for the player only reaches him by trade, and the trade conjures it first when the bags have
+        # none: a cast would make it for the bot and leave him waiting.
+        spell = find_spell(spell_key(data.get("spell", "")), event.get("spells") or [])
+        if spell and CONJURE_RE.match(spell_key(spell.get("name", ""))) and (can is None or "trade" in can):
+            kind = "food" if "food" in spell_key(spell["name"]) else "water"
+            act, data = "trade", dict(data, items=kind)
+    if can is not None and act not in can:
+        return drop("%s is not something you can do for %s now" % (act, event.get("from", "him")))
     near = {n.get("ref"): n for n in (event.get("near") or [])}
     ref = to_int(data.get("ref"))
     target = str(data.get("target", "") or "").lower()
@@ -794,9 +839,9 @@ def clean_action(data, event):
         action["emote"] = emote
     elif act == "cast":
         wanted = spell_key(data.get("spell", ""))
-        spell = next((s for s in (event.get("spells") or []) if spell_key(s.get("name", "")) == wanted), None)
+        spell = find_spell(wanted, event.get("spells") or [])
         if not wanted or not spell:
-            return {}
+            return drop("you have no spell called \"%s\"" % data.get("spell", ""))
         action["spell"] = spell["name"]
         if spell.get("kind") == "damage":
             if ref in near and near[ref].get("kind") == "hostile":
@@ -861,11 +906,29 @@ def answer(event, api, actions_on, minds, opts):
             log("line of %s %s" % (bot, why))
         reply = {"say": say} if say else {}
         if actions_on:
-            reply.update(clean_action(data, event))
+            why = []
+            reply.update(clean_action(data, event, why))
             wanted = str(data.get("do", "") or "").strip()
             if wanted and "do" not in reply:
-                log("%s wanted to %s for %s, but it does not fit (can: %s): only the line is said"
-                    % (bot, wanted, player, ", ".join(event.get("can") or []) or "nothing"))
+                # The line was written for an action that will not happen ("here's your water" three times, no trade: Gun,
+                # 2026-11-09). One more ask with the reason; whatever comes back must not promise what does not happen.
+                reason = why[0] if why else "it does not fit"
+                log("%s wanted to %s for %s, but %s: asking again" % (bot, wanted, player, reason))
+                again = None
+                try:
+                    again = parse_json(api.chat(system, user + "\n(Your last answer wanted to do \"%s\", but %s. Answer again: "
+                                                "use an action from \"You can do now\" that really does it, or say honestly that "
+                                                "you can't, and why.)" % (wanted, reason)))
+                except (OSError, ValueError) as e:
+                    log("second ask failed (%s)" % e)
+                second = clean_action(again, event) if again else {}
+                say2, why2 = check_line(str((again or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200], swearing)
+                if again and say2 and (second or not str(again.get("do", "") or "").strip()) and not why2:
+                    reply = {"say": say2}
+                    reply.update(second)
+                else:
+                    reply = {"say": random.choice(CANT_LINES)}
+                log("%s -> %s second answer: %s%s" % (player, bot, reply.get("say", ""), " {do: %s}" % reply["do"] if "do" in reply else ""))
         now = time.time()
         if event.get("_moment"):
             remember_moment(minds, bot, player, event, now)

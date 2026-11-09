@@ -617,4 +617,27 @@ TEST_CASE("BotBridge: orders and trades are only the owner's or the group leader
     CHECK(CheckActionContext(Act::Order, self) != nullptr);
 }
 
+TEST_CASE("BotBridge: the line with an action is only said when it is true", "[BotBridge]")
+{
+    // done: the program's line as it is
+    CHECK(LineAfterAction(Act::Trade, true, false, {}, "here's your water") == "here's your water");
+    // done, but the conjure order speaks for itself: no "here's your water" next to "My bags are full..." (Gun, 2026-11-09)
+    CHECK(LineAfterAction(Act::Trade, true, true, {}, "here's your water").empty());
+    // refused: why, in the bot's words
+    CHECK(LineAfterAction(Act::Trade, false, false, "come closer so we can trade", "here's your water") == "Sorry, come closer so we can trade.");
+    CHECK(LineAfterAction(Act::Mount, false, false, "I'm already mounted", "mounting up") == "Sorry, I'm already mounted.");
+    // reasons written for the program never reach the player
+    CHECK(LineAfterAction(Act::Attack, false, false, "that ref is unknown, gone or older than 60 seconds", "on it") == "Sorry, I can't do that right now.");
+    CHECK(LineAfterAction(Act::Order, false, false, "too soon after this bot's last action", "ok") == "Sorry, I can't do that right now.");
+    CHECK(LineAfterAction(Act::Cast, false, false, "spells are turned off on this server (Playerbot.Bridge.Actions.Spells)", "sure")
+          == "Sorry, I can't do that here.");
+    CHECK(LineAfterAction(Act::Follow, false, false, "this bot belongs to a player: it only acts when its owner asks", "coming")
+          == "Sorry, I can't do that right now.");
+    // nobody to tell
+    CHECK(LineAfterAction(Act::Follow, false, false, "the player who asked is gone", "coming").empty());
+    // a greeting stays a greeting when only its wave was refused
+    CHECK(LineAfterAction(Act::Emote, false, false, "one emote every 10 seconds", "hey there") == "hey there");
+    CHECK(LineAfterAction(Act::Sit, false, false, "I'm not ready yet", "taking a break") == "taking a break");
+}
+
 #endif // TESTS_HAVE_PLAYERBOT_V2

@@ -215,6 +215,16 @@ char const* CheckActionContext(Act a, ActionContext const& ctx);
 // knows before it answers what this bot may do for this player right now. `allowed` is ParseAllowedActions' result.
 std::string AllowedActsJson(ActionContext const& ctx, std::vector<bool> const& allowed);
 
+// The line a bot says with an action, once the action's result is known. The program writes its line before the action runs
+// ("here's your water"), so the line is only true when the action did what it promised:
+//  - done: `said` as it is; done but the action speaks for itself later (a mage conjures first and its order says how that goes):
+//    nothing, or the bot would say two things at once;
+//  - refused: an emote, sit or stand keeps `said` (a greeting stays a greeting); anything else says why not instead, in the bot's
+//    own words when `why` is written for the player ("Sorry, come closer so we can trade."), else a plain "can't right now";
+//    nothing when the player who asked is gone.
+// Gun said "I couldn't make that (no item came out), sorry." and then "here's your water" with no trade (chris, 2026-11-09).
+std::string LineAfterAction(Act a, bool ok, bool speaks_later, std::string const& why, std::string const& said);
+
 // The list of allowed actions from the config ("follow,stay,..." or "all"); unknown words are ignored.
 std::vector<bool> ParseAllowedActions(std::string const& list);
 

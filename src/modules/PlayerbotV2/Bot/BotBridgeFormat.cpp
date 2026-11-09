@@ -833,6 +833,28 @@ PlaceKind ParsePlace(std::string const& place, std::string& rest)
     return kind;
 }
 
+std::string LineAfterAction(Act a, bool ok, bool speaks_later, std::string const& why, std::string const& said)
+{
+    if (ok)
+        return speaks_later ? std::string() : said;
+    if (a == Act::Emote || a == Act::Sit || a == Act::Stand)
+        return said;
+    if (why.empty() || why == "the player who asked is gone")
+        return {};
+    if (why.find("turned off on this server") != std::string::npos)
+        return "Sorry, I can't do that here.";
+    // Reasons written for the program, not for a player: config keys, refs, rate limits, a moment that passed.
+    static constexpr std::string_view kForProgram[] = { "Playerbot.", "ref", "chat_in", "\"", "too old", "no such action",
+        "too many", "too soon", "every ", "not ready", "not online", "no action", ": ", "(" };
+    for (std::string_view w : kForProgram)
+        if (why.find(w) != std::string::npos)
+            return "Sorry, I can't do that right now.";
+    std::string out = "Sorry, " + why;
+    if (out.back() != '.' && out.back() != '!' && out.back() != '?')
+        out += '.';
+    return out;
+}
+
 char const* CheckActionContext(Act a, ActionContext const& ctx)
 {
     if (a == Act::None || a == Act::Count)

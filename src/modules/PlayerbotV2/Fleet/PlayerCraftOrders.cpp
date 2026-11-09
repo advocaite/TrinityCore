@@ -43,6 +43,7 @@ constexpr std::uint32_t kOrderDeadlineMs = 10u * 60u * 1000u;
 constexpr std::uint32_t kMailWaitMs = 15000;       // for the mail intent to take the items out of the bags
 constexpr std::uint32_t kMaxDismounts = 3;         // a rule that mounts the bot again is not fought for ever
 constexpr std::uint32_t kExtraCasts = 3;           // casts beyond the plan before the order is given up (a cast can fail and be retried)
+constexpr std::uint32_t kRoomWaitMs = 4000;        // for the make-room intent to clear bag rot before a full bag ends the order
 
 enum class Phase : std::uint8_t { Crafting, Mailing };
 
@@ -192,6 +193,13 @@ std::uint32_t ManaCost(Player const* bot, std::uint32_t spell)
     return 0;
 }
 
+// One cast's items fit in the bags now. A cast whose item does not fit is refused before it goes out (CastBlockedByOwnState).
+bool Fits(Player* bot, Job const& j)
+{
+    ItemPosCountVec dest;
+    return bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, j.item, std::max<std::uint32_t>(1, j.yield)) == EQUIP_ERR_OK;
+}
+
 // The order is ready and goes by trade: when the requester stands within reach and neither is trading, the bot opens the window
 // itself as a player would (CMSG_INITIATE_TRADE; the handler makes every check), and TradeShop puts the item in. True: it opened.
 bool OpenTradeWith(Player* bot, Player* requester)
@@ -303,6 +311,7 @@ bool Order(Player* requester, Player* bot, std::string const& text)
 
     // Will the bags take it? A cast whose item does not fit is refused before it goes out (API CastBlockedByOwnState,
     // API_ITEM_AT_LIMIT), and the order used to end in "no item came out" with no reason (Gun's water, 2026-11-08).
+    bool room_first = false;   // the bags are full: the bot clears what it may first, and says only that
     {
         ItemPosCountVec dest;
         InventoryResult const room = bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, o.item, std::max<std::uint32_t>(1, o.yield));
@@ -314,7 +323,8 @@ bool Order(Player* requester, Player* bot, std::string const& text)
             if (room == EQUIP_ERR_INV_FULL || room == EQUIP_ERR_BAG_FULL)
             {
                 Push(bot, MakeBagRoomIntent{ 2 });
-                Say(bot, to, "My bags are full, I'm making some room first.");
+                Say(bot, to, fmt::format("My bags are full, let me make some room first for {}.", ItemLink(t)));
+                room_first = true;
             }
             else
             {
@@ -342,7 +352,8 @@ bool Order(Player* requester, Player* bot, std::string const& text)
     j.started_ms = GameTime::GetGameTimeMS();
     g_jobs.push_back(j);
     char const* const how = by_trade ? "trade it to you" : "mail it to you";
-    Say(bot, to, plan.items > req.count
+    if (!room_first)
+        Say(bot, to, plan.items > req.count
         ? fmt::format("One cast makes {}, so I'm making {} x{} and will hand them over when done.", o.yield, ItemLink(t), plan.items)
         : plan.trimmed
         ? fmt::format("I can make {} of the {} you asked for with my reagents; I'll {} when done.", plan.items, ItemLink(t), how)
@@ -433,7 +444,22 @@ void Tick(std::uint32_t now_ms)
                 }
                 else if (!bot->IsNonMeleeSpellCast(false) && !bot->IsInCombat() && bot->IsAlive() && now_ms - j.last_cast_ms >= kCastGapMs)
                 {
-                    if (pc::WaitForMana(Drinking(bot), bot->GetPower(POWER_MANA), bot->GetMaxPower(POWER_MANA), ManaCost(bot, j.spell)))
+                    if (!Fits(bot, j))
+                    {
+                        // Full bags: every cast would be refused, and the order used to end in "no item came out" after four of
+                        // them (Gun's water, 2026-11-09). The make-room intent had its chance; nothing it may throw away was left.
+                        if (now_ms - j.started_ms >= kRoomWaitMs)
+                        {
+                            ItemTemplate const* t = sObjectMgr->GetItemTemplate(j.item);
+                            TC_LOG_INFO("playerbot.v2", "[craft_order] {} bags full for item {} x{} (free slots {}): order ended before a cast",
+                                        bot->GetName(), j.item, j.yield, bot->GetFreeInventorySlotCount());
+                            Finish(j, bot, fmt::format("My bags are full, so I can't make {}. I need to sell or drop something first.",
+                                                       t ? ItemLink(t) : std::string("that")));
+                            g_jobs.erase(g_jobs.begin() + std::ptrdiff_t(i));
+                            continue;
+                        }
+                    }
+                    else if (pc::WaitForMana(Drinking(bot), bot->GetPower(POWER_MANA), bot->GetMaxPower(POWER_MANA), ManaCost(bot, j.spell)))
                     {
                         // Not a cast: the give-up count stands still while the bot drinks (the order deadline still runs).
                         if (!j.told_mana)
