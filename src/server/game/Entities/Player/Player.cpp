@@ -2990,6 +2990,11 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
         return false;
     }
 
+    // Classic 1.60: Devastate 403196 is only the damage that Sunder Armor triggers with the Rune of Devastate (the client marks it
+    // never learned). Keep it out of the spellbook, also for characters that already have it saved, so it never sits on a bar.
+    if (spellId == 403196)
+        return false;
+
     if (!SpellMgr::IsSpellValid(spellInfo, this, false))
     {
         // do character spell book cleanup (all characters)

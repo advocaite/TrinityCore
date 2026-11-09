@@ -3934,6 +3934,13 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(6); // 100 yards
     });
 
+    // Devastate, the damage part of the Rune of Devastate (Sunder Armor triggers it through 403195)
+    // Classic 1.60: the client gives it 50000 yards, melee like Sunder Armor
+    ApplySpellFix({ 403196 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(2); // combat range
+    });
+
     // They Must Burn Bomb Aura (self)
     ApplySpellFix({ 36350 }, [](SpellInfo* spellInfo)
     {
