@@ -1,0 +1,35 @@
+name: New client build
+description: Blizzard released a new WoW Forever client build and it no longer connects.
+labels: [client-build]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the open issues first: a new build is often reported by several people on the same day.
+  - type: input
+    id: build
+    attributes:
+      label: New client build
+      description: For example 1.60.1.70900 (shown on the login screen or in .build.info).
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Where it stops (login, realm list, character list, entering the world) and any error shown.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs
+      description: The bnetserver and worldserver log lines from your login attempt.
+      render: text
+  - type: input
+    id: commit
+    attributes:
+      label: Server commit or version
+      description: The commit hash or repack version you run.
+    validations:
+      required: true
