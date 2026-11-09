@@ -3445,6 +3445,9 @@ void DispatchInCombat(BotAI& ai,
         // Outside the raid rules a tank in the group's fight picks up its own mobs (GroupFightPick): no wait for a plan's assignment.
         if (th_po.active && th_po.tank_hold && th_po.tank_target.IsEmpty() && snapshot.is_alive() && !(ai.group_fight() && !snapshot.raid_rules()) &&
             !snapshot.is_casting() && snapshot.attackers_count() == 0 &&
+            // ... unless the raid brain sent it onto an enemy (RaidOrder::attack_target: the off-tank taking an idle Son of Hakkar before
+            // Blood Siphon); it walks in and attacks, and the hold would drop that target every tick until the mob hit it ...
+            (!snapshot.raw().raid_order.active || snapshot.raw().raid_order.attack_target.IsEmpty()) &&
             // ... unless a mob nobody was given stands on a group member: that one is this tank's to pick up or taunt, whatever the plan
             // holds it for (n24 mc_garr: Mctankwb sat in tank_hold 7 y from a Firesworn on a healer, taunt ready, for a minute).
             !snapshot.pickup_candidate())

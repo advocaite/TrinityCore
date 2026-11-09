@@ -4,9 +4,12 @@
 //    is low every raider but Hakkar's tank and a Corrupted Blood carrier stands next to it (ZgMechanicsMove), so its death gives them
 //    Poisonous Blood. One [raid_siphon] line opens each kill window (Sons in the fight, idle, dead; who is poisoned) and one says how many
 //    carried the poison when the siphon came, so a run shows whether it worked.
-//  * The Sons stand idle round the room until somebody hits one. When a kill window opens with no Son in the fight, one ranged bot
-//    (a hunter first, then a mage, then a warlock) pulls the idle Son nearest to Hakkar with one ranged shot (ZgMechanicsElect), walking
-//    into reach first (ZgMechanicsMove); the Son runs at it, into the raid, and the window goes on as above.
+//  * The Sons stand idle round the room until somebody hits one. When a kill window opens with no Son in the fight, the off-tank (a bot
+//    tank Hakkar is not on) walks to the idle Son nearest to Hakkar and takes it (RaidOrder::attack_target), so the Son is held next to
+//    the raid while the DPS kill it. Before, a ranged bot pulled it with one shot and the Son ran at the shooter: the hunter fed it to
+//    Feign Death (LooseMobEscape), the Son left the fight, no Son died before a siphon (sweep-zg-1109y: 0 of 19 and 0 of 20 raiders
+//    poisoned at every siphon) and the loose Son killed a healer, a hunter and a rogue. Only with no off-tank alive does a ranged bot (a
+//    hunter first, then a mage, then a warlock) still pull with one shot (ZgMechanicsElect), walking into reach first (ZgMechanicsMove).
 
 #include "RaidBrainInternal.h"
 #include "ZgHakkar.h"
@@ -38,6 +41,7 @@ struct SiphonClock
     ObjectGuid son;            // the Son the DPS are on (kept until it dies or the window closes)
     ObjectGuid pullSon;        // the idle Son being pulled (no Son in the fight yet)
     ObjectGuid puller;         // the bot that pulls it
+    bool pullerIsTank = false; // the puller is the off-tank: it walks in and takes the Son itself, no ranged walk
 };
 
 // The ranged openers of a pull: one shot from range makes the Son run at the shooter.
@@ -174,6 +178,7 @@ Creature* SonToPull(Plan const& plan, SiphonClock& c, Unit* hakkar, uint32_t t)
     {
         c.pullSon = ObjectGuid::Empty;
         c.puller = ObjectGuid::Empty;
+        c.pullerIsTank = false;
         return nullptr;
     }
     std::list<Creature*> sons;
@@ -192,6 +197,7 @@ Creature* SonToPull(Plan const& plan, SiphonClock& c, Unit* hakkar, uint32_t t)
     {
         c.pullSon = best->GetGUID();
         c.puller = ObjectGuid::Empty;
+        c.pullerIsTank = false;
         TC_LOG_INFO("playerbot.v2.raid", "[raid_siphon] group={} no Son of Hakkar in the fight: pulling the idle one {} y from Hakkar ({}), {} s before the siphon",
             plan.groupLow, uint32_t(hakkar->GetExactDist2d(best)), best->GetGUID().GetCounter(), (SiphonDueMs(c.lastSiphon) - t) / 1000u);
     }
@@ -222,7 +228,40 @@ void ZgMechanicsElect(Election& e, uint32_t now)
     Creature* son = SonToPull(e.plan, *c, hakkar, t);
     if (!son)
         return;
-    // The puller: kept while it can still pull, busy or not (its own walk into reach makes it "busy" for the election, which hands every
+    // The off-tank takes the Son: a bot tank Hakkar is not on, the one nearest to the Son (kept while it stays one). It walks in and
+    // attacks; its own taunt and threat keep the Son on it, and the DPS focus (SonToKill) follows once the Son is in the fight.
+    Member* tank = nullptr;
+    for (Member& m : e.plan.members)
+    {
+        if (!m.bot || !m.tank || !m.p->IsAlive() || hakkar->GetVictim() == m.p)
+            continue;
+        if (m.p->GetGUID() == c->puller && c->pullerIsTank)
+        {
+            tank = &m;
+            break;
+        }
+        if (!tank || m.p->GetExactDist2d(son) < tank->p->GetExactDist2d(son))
+            tank = &m;
+    }
+    if (tank)
+    {
+        if (c->puller != tank->p->GetGUID() || !c->pullerIsTank)
+        {
+            c->puller = tank->p->GetGUID();
+            c->pullerIsTank = true;
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_siphon] group={} the off-tank {} takes the Son of Hakkar ({}) from {:.0f} y", e.plan.groupLow,
+                tank->p->GetName(), son->GetGUID().GetCounter(), tank->p->GetExactDist2d(son));
+        }
+        if (RaidOrder* o = e.OrderOf(tank->p))
+        {
+            o->attack_target = son->GetGUID();
+            e.busy.insert(tank->p->GetGUID().GetCounter());
+            e.dump << "  Hakkar: " << tank->p->GetName() << " (off-tank) takes a Son of Hakkar\n";
+        }
+        return;
+    }
+    c->pullerIsTank = false;
+    // No off-tank alive: a ranged bot pulls with one shot. The puller: kept while it can still pull, busy or not (its own walk into reach makes it "busy" for the election, which hands every
     // bot with a move order no job; checking that here swapped the puller each pass, the one walking in lost the job to the other hunter
     // and the other's walk took it back: sweep-zg-1109c, Mchunta and Mchuntb "pull" 122 times in turn, no shot fired). Else the free
     // ranged DPS bot of the first class in the order, nearest to the Son, that is not Hakkar's target and carries no Corrupted Blood (it
@@ -293,7 +332,7 @@ bool ZgMechanicsMove(Plan const& plan, Member const& self, uint32_t now, RaidOrd
         return false;
     Player* bot = self.p;
     // The puller of an idle Son walks into reach and sight of it (the shot itself is the elected job).
-    if (!c->puller.IsEmpty() && c->puller == bot->GetGUID())
+    if (!c->puller.IsEmpty() && c->puller == bot->GetGUID() && !c->pullerIsTank)
         if (Creature* pull = SonToPull(plan, *c, hakkar, t))
         {
             if (bot->IsWithinDistInMap(pull, kPullReach + 2.0f) && bot->IsWithinLOSInMap(pull))
