@@ -6499,6 +6499,20 @@ bool MakeBagRoom(Player* bot, uint32 min_free)
     return cleared >= want;
 }
 
+uint32 CountBagRot(Player* bot)
+{
+    if (!bot) return 0;
+    bool const bags_tight = CountFreeBagSlots(bot) <= 3;   // sell_trash's kTightBagThreshold
+    uint32 n = 0;
+    bot->ForEachItem(ItemSearchLocation::Inventory, [bot, bags_tight, &n](Item* it)
+    {
+        if (IsBagRot(bot, it, it ? it->GetTemplate() : nullptr, bags_tight))
+            ++n;
+        return ItemSearchCallbackResult::Continue;
+    });
+    return n;
+}
+
 Result API::make_room(uint32 min_free)
 {
     if (!p_) return Result::Other;

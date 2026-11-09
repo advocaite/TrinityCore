@@ -59,7 +59,7 @@ CANT_LINES = ["can't do that right now, sorry", "hm, can't right now", "sorry, t
 # The orders a reply may give through the bots' own command words (the server checks them again: BotBridgeFormat SafeOrder).
 ORDERS = ["follow", "stay", "hold", "resume", "come", "disengage", "flee", "attack", "assist", "mount", "dismount", "sit", "stand",
           "release", "passive", "defensive", "aggressive", "accept", "accept all", "turn in", "turnin", "share", "quests",
-          "quest list", "loot", "loot all", "sell grey", "repair", "equip upgrades", "upgrades", "use your best gear",
+          "quest list", "loot", "loot all", "sell grey", "sell junk", "repair", "equip upgrades", "upgrades", "use your best gear",
           "wear your best gear", "gear", "inventory", "stats", "who", "buff", "heal", "jump", "wave", "salute", "dance",
           "pull", "pull back", "pullback", "fall back", "fallback", "back", "rally here", "spread", "spread out", "spaced out",
           "stack", "tight", "close", "max dps", "save mana", "normal"]
@@ -598,8 +598,8 @@ def static_rules(actions_on, swearing):
               "him. He accepts in the window. Use it when he asks you to trade or give him something. YOUR BAGS below says what "
               "you really carry: never say you give him something that is not there. Water or food you don't have but can "
               "conjure: trade with \"items\":\"water\" (or \"food\") still works, you conjure it first and then trade. When YOUR "
-              "BAGS says your bags are FULL you can't conjure or make anything: say so; junk is sold at a \"vendor\" "
-              "(go_to \"place\":\"vendor\"), not at the auction house. Your line is read before the action "
+              "BAGS says your bags are FULL you can't conjure or make anything: say so; to sell your junk use the order "
+              "\"sell junk\" (you walk to the nearest vendor and sell it there), not the auction house. Your line is read before the action "
               "happens: say what you are about to do (\"one sec, conjuring\"), not that it is done.\n"
               "cast needs \"spell\" (a name from YOUR SPELLS). damage spells need \"ref\" of a hostile from NEAR or "
               "\"target\":\"speaker_target\"; heal, buff and resurrect go on the player who asks (\"target\":\"speaker\") "

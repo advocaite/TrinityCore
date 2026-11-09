@@ -158,7 +158,7 @@ from the bot.
 | `stats` | yes | yes | `Raveni: health 3120/3120 (100%), item level 66, armor 2250, str 210 agi 110 sta 290 int 40, crit 4.1%`. Mana is added for mana users. `status` is the older diagnostic dump. |
 | `gear` / `inventory` | yes | yes | `Raveni: 15 pieces worn, avg item level 66, best: Ironfoe, ...; 14 free bag slots; 12g 40s 5c`. `inv` lists bag items; `equipped` lists each worn slot. |
 | `money`, `level`, `xp`, `dur`, `skills`, `recipes`, `rep`, `spec` | yes | no | One-line introspection verbs. |
-| `sell grey` / `sell junk` / `s *` | yes | yes | Sells grey items to the vendor you have selected, else the nearest vendor the bot sees within 60 yards. In reach: `Raveni: selling 7 grey stack(s) to Dolanaar Vendor`. Farther away it walks over and asks you to say it again. No vendor: `no vendor within 60 yards`. Plain `sell` (selected vendor) and `sell <bag> <slot> [n]` also exist. |
+| `sell grey` / `sell junk` / `sell your junk` / `s *` | yes | yes | Sells everything a vendor visit sells (greys, trade goods for no profession of the bot's, gear it can't use, outgrown greens when the bags are tight) to the vendor you have selected, else the nearest friendly vendor within 200 yards. In reach: `Raveni: selling 7 thing(s) to Dolanaar Vendor`. Farther away it walks over and sells when it arrives (`at Dolanaar Vendor, selling 7 thing(s)`; after a minute without getting there it says so). Nothing to sell: `nothing to sell, my bags only hold things I keep (0 free slots)`. No vendor: `no vendor near here`. Plain `sell` (selected vendor) and `sell <bag> <slot> [n]` also exist. |
 | `repair` | yes | yes | Same pattern with a repair vendor: `Raveni: repairing at ...`. |
 | `loot` | yes | yes | Need before greed with the usual etiquette (human gets first claim). `Raveni: need before greed, the usual rules`. |
 | `loot all` | yes | yes | The bot rolls for itself on every drop and takes every corpse item, greys included. `Raveni: looting everything, greys included, and rolling for myself`. Memory only (resets on relog). |
@@ -407,9 +407,9 @@ The module logs nothing unless `Logger.playerbot.v2=3` is set. Grep the server l
 - The ike3 strategy toggles `co`/`nc`/`ss` (+/- strategy lists) are **not implemented**. Trade is: the bot takes
   gifts from its owner or a group mate (see Gifts by trade) and a free world bot buys what you put in. The
   nearest equivalents are `max dps` / `save mana` / `normal`, `aoe`, `hold`/`defensive`/`aggressive`.
-- `sell grey` and `repair` act at once only when the vendor is within interaction reach; from up to 60 yards the
-  bot walks over and you repeat the order. There is no standing "go and sell, then come back" order; the bots'
-  own vendor upkeep (idle vendor visit, bag-full recovery) still runs when they are not in a group.
+- `repair` acts at once only when the vendor is within interaction reach; from up to 60 yards the bot walks over and
+  you repeat the order. `sell junk` walks over and sells by itself. The bot stays by the vendor afterwards ("follow" to
+  bring it back); the bots' own vendor upkeep (idle vendor visit, bag-full recovery) still runs when they are not in a group.
 - `loot all` is held in memory per bot and resets on relog.
 - `defensive` / `aggressive` / `passive` are the three owner stances (BotAI::OwnerStance Passive / Aggressive / NoFight); there
   is no separate attack-stance engine.

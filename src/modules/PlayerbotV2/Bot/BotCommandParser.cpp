@@ -23,6 +23,7 @@
 #include "CcDeny.h"
 #include "OwnerPicks.h"
 #include "../Fleet/PlayerCraftOrders.h"
+#include "../Api/BotTradeShop.h"   // CountBagRot for "sell junk"
 #include "BotAddressResolver.h"
 #include "Placement.h"
 #include "ClassicUpkeep.h"   // Classic::IsMeleeSpec for the Positions tab order
@@ -1372,6 +1373,15 @@ struct VendorPick
     float x = 0.f, y = 0.f, z = 0.f;
 };
 
+// "sell junk" with the vendor further than 5 yards: the bot walks there, and TickVendorRuns sells once it is in reach.
+struct VendorRun { ObjectGuid vendor; std::string to; uint32 started_ms = 0; };
+std::unordered_map<BotId, VendorRun> g_vendor_runs;   // world thread
+
+void NoteVendorRun(BotId bot, ObjectGuid vendor, std::string to)
+{
+    g_vendor_runs[bot] = VendorRun{ vendor, std::move(to), GameTime::GetGameTimeMS() };
+}
+
 VendorPick PickVendor(Player* sender, Player* bot, uint32 flag)
 {
     VendorPick out;
@@ -1550,36 +1560,54 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     }
 
     // ---- sell grey / repair -----------------------------------------------------------------------------------------
-    if (n == "sell grey" || n == "sell gray" || n == "sell junk" || n == "sell trash" || n == "s *")
+    if (n == "sell grey" || n == "sell gray" || n == "sell junk" || n == "sell trash" || n == "s *" || n == "sell your junk")
     {
-        auto snap = Services::Snapshots().latest(bid);
-        uint32 greys = 0;
-        if (snap)
-            for (auto const& it : snap->inventory.bag_items)
-                if (it.quality == 0)
-                    ++greys;
-        VendorPick const v = PickVendor(sender, bot, UNIT_NPC_FLAG_VENDOR);
-        if (v.guid.IsEmpty())
+        // Everything a vendor visit sells (CountBagRot / sell_trash), not only greys: Gun's bags were full of things a vendor
+        // takes and the order said "nothing grey to sell" (2026-11-09).
+        uint32 const junk = ::Playerbot::CountBagRot(bot);
+        if (junk == 0)
         {
-            say(me + ": no vendor within 60 yards - select one and say it again, or walk me to one");
+            say(fmt::format("{}: nothing to sell, my bags only hold things I keep ({} free slots)", me, bot->GetFreeInventorySlotCount()));
             return true;
         }
-        if (greys == 0)
+        VendorPick v = PickVendor(sender, bot, UNIT_NPC_FLAG_VENDOR);
+        if (v.guid.IsEmpty())
         {
-            say(me + ": nothing grey to sell");
+            // Not in the bot's 60 yard scan: the nearest friendly vendor in the town (a bank square, a market street).
+            std::list<Creature*> found;
+            FindCreatureOptions opt;
+            opt.IgnorePhases = false;
+            bot->GetCreatureListWithOptionsInGrid(found, 200.0f, opt);
+            Creature const* best = nullptr;
+            for (Creature const* c : found)
+                if (c->IsAlive() && c->HasNpcFlag(UNIT_NPC_FLAG_VENDOR) && !c->IsHostileTo(bot)
+                    && (!best || bot->GetDistance(c) < bot->GetDistance(best)))
+                    best = c;
+            if (best)
+            {
+                v.guid = best->GetGUID();
+                v.name = best->GetName();
+                v.dist = bot->GetDistance(best);
+                best->GetPosition(v.x, v.y, v.z);
+            }
+        }
+        if (v.guid.IsEmpty())
+        {
+            say(me + ": no vendor near here - select one and say it again, or walk me to one");
             return true;
         }
         if (v.dist > 5.0f)
         {
-            // Walk the last stretch; the sale itself needs the vendor in reach, so ask again once there.
+            // Walk there and sell on arrival (TickVendorRuns): one order is enough.
             Push(bot, MoveToIntent{v.x, v.y, v.z, /*run=*/true});
             if (BotAI* ai = Services::Registry().ai(bid))
                 ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty, GameTime::GetGameTimeMS());
-            say(fmt::format("{}: walking to {} ({:.0f} yards); say 'sell grey' again when I am there", me, v.name, v.dist));
+            NoteVendorRun(bid, v.guid, sender->GetName());
+            say(fmt::format("{}: walking to {} ({:.0f} yards) to sell {} thing(s)", me, v.name, v.dist, junk));
             return true;
         }
         Push(bot, VendorSellTrashIntent{v.guid});
-        say(fmt::format("{}: selling {} grey stack(s) to {}", me, greys, v.name));
+        say(fmt::format("{}: selling {} thing(s) to {}", me, junk, v.name));
         return true;
     }
     if (n == "repair")
@@ -2308,6 +2336,37 @@ static void ConfirmWhisperOrder(Player* sender, Player* bot, std::string const& 
     else
         text = fmt::format("{}: {} ok", me, n);
     Push(bot, WhisperIntent{sender->GetName(), std::move(text)});
+}
+
+void BotCommandParser::TickVendorRuns(uint32 now_ms)
+{
+    for (auto it = g_vendor_runs.begin(); it != g_vendor_runs.end();)
+    {
+        BotId const id = it->first;
+        VendorRun const& run = it->second;
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
+        Creature* vendor = bot && bot->IsInWorld() ? ObjectAccessor::GetCreature(*bot, run.vendor) : nullptr;
+        bool done = false;
+        if (!bot || !bot->IsAlive() || !vendor || !Services::HasIntents(id))
+            done = true;
+        else if (bot->IsWithinDistInMap(vendor, INTERACTION_DISTANCE))
+        {
+            uint32 const junk = ::Playerbot::CountBagRot(bot);
+            Push(bot, VendorSellTrashIntent{vendor->GetGUID()});
+            Push(bot, WhisperIntent{run.to, fmt::format("{}: at {}, selling {} thing(s)", bot->GetName(), vendor->GetName(), junk)});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} reached {}: sells {} bag stack(s)", bot->GetName(), vendor->GetName(), junk);
+            done = true;
+        }
+        else if (now_ms - run.started_ms > 60000u)
+        {
+            Push(bot, WhisperIntent{run.to, fmt::format("{}: I couldn't get to {}, walk me closer and ask again", bot->GetName(),
+                                                        vendor->GetName())});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} did not reach {} in a minute ({:.0f} yards left)", bot->GetName(),
+                        vendor->GetName(), bot->GetDistance(vendor));
+            done = true;
+        }
+        it = done ? g_vendor_runs.erase(it) : std::next(it);
+    }
 }
 
 bool BotCommandParser::ControlsForGroupOrder(Player const* sender, Player const* bot)

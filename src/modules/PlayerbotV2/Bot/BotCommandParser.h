@@ -65,6 +65,9 @@ public:
     // who is its controller in the group they share (GroupControl.h): the group leader when human, else the first human
     // member. An invited world bot obeys the leader exactly like a companion.
     static bool ControlsForGroupOrder(Player const* sender, Player const* bot_player);
+    // World thread, once a second: a bot walking to a vendor for "sell junk" sells there once it arrives (or gives up after a
+    // minute), so the owner does not have to say it again.
+    static void TickVendorRuns(uint32 now_ms);
 
     // The bot's role as its owner set it (`.bot add <class> tank`, setrole), else as its spec reads.
     static Role BotRole(Player* bot_player);

@@ -2755,7 +2755,10 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     {
         last_player_craft_at_ = player_craft_total_;
         if (Services::Initialized())
+        {
             ::Playerbot::V2::PlayerCraftOrders::Tick(GameTime::GetGameTimeMS());
+            BotCommandParser::TickVendorRuns(GameTime::GetGameTimeMS());   // "sell junk": sells on arrival
+        }
     }
 
     // 3. Schedule tick for due bots.

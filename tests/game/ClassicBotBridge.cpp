@@ -459,6 +459,8 @@ TEST_CASE("BotBridge: an order is one of the safe parser words", "[BotBridge]")
     CHECK(SafeOrder("/drop quest  Wolves", norm, why));
     CHECK(norm == "drop quest wolves");
     CHECK(SafeOrder("use altar", norm, why));
+    CHECK(SafeOrder("Sell junk", norm, why));   // walks to a vendor and sells everything a vendor takes
+    CHECK(norm == "sell junk");
     CHECK_FALSE(SafeOrder("use", norm, why));
     CHECK(SafeOrder("Craft water 20", norm, why));
     CHECK(norm == "craft water 20");

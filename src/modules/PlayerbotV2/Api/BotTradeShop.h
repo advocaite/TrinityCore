@@ -79,4 +79,7 @@ Result Step(Player* bot, TradeData* mine, TradeData* his, bool gift_ok);
 namespace Playerbot {
 // Clears bag rot until `min_free` slots are free (defined with API::make_room).
 bool MakeBagRoom(Player* bot, uint32 min_free);
+// The bag stacks a vendor visit would sell (API::sell_trash: greys, trade goods for no profession of the bot's, gear it can't use,
+// outgrown greens when the bags are tight).
+uint32 CountBagRot(Player* bot);
 }

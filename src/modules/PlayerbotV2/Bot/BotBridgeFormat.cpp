@@ -753,7 +753,7 @@ bool SafeOrder(std::string const& raw, std::string& norm, std::string& why)
     static constexpr std::string_view kExact[] = {
         "follow", "stay", "hold", "resume", "come", "disengage", "flee", "attack", "assist", "mount", "dismount", "sit", "stand",
         "release", "passive", "defensive", "aggressive", "accept", "accept all", "turn in", "turnin", "share", "quests",
-        "quest list", "loot", "loot all", "sell grey", "repair", "equip upgrades", "upgrades", "use your best gear",
+        "quest list", "loot", "loot all", "sell grey", "sell junk", "repair", "equip upgrades", "upgrades", "use your best gear",
         "wear your best gear", "gear", "inventory", "stats", "who", "buff", "heal", "jump", "wave", "salute", "dance",
         // The fight's group words: the tank's pull and pull back, falling back to (and setting) the rally point, the group's spacing,
         // and ike3's tactics.
