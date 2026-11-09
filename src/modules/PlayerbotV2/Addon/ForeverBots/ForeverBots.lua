@@ -2352,7 +2352,14 @@ local function BuildBotPanel()
     local close = CreateFrame("Button", nil, p, "UIPanelCloseButton")
     close:SetSize(22, 22)
     close:SetPoint("TOPRIGHT", -2, -2)
-    close:SetScript("OnClick", function() botForced = nil; botPanel:Hide() end)   -- until the next target change
+    -- The X turns the panel off for good: it used to hide only until the next target change, so it came back each time a bot was
+    -- clicked and could not be got rid of (Discord 2026-11-09). /fb bot on, or "Open the bot panel" in a bot's menu, brings it back.
+    close:SetScript("OnClick", function()
+        botForced = nil
+        ForeverBotsDB.botPanel = false
+        botPanel:Hide()
+        Print(L["bot panel is %s."]:format(L["off"]) .. " /fb bot on")
+    end)
 
     for i = 1, 8 do
         local ib = CreateFrame("Button", nil, p)
