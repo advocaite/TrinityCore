@@ -323,7 +323,9 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
             if (Pet* pet = mp->GetPet(); pet && pet->IsInWorld())
             {
                 m.pet_guid   = pet->GetGUID();
-                m.pet_alive  = pet->IsAlive();
+                // A pet at 0 health is dead, whatever its death state still says: no heal can land on it (bwl_nefarian sweep-bwl-1109y
+                // run 1: five healers cast 47 heals in 26 s on unit 5 at 0 of 877 health, most likely a pet, while two tanks fell).
+                m.pet_alive  = pet->IsAlive() && pet->GetHealth() > 0;
                 m.pet_hp     = static_cast<int32>(pet->GetHealth());
                 m.pet_max_hp = static_cast<int32>(pet->GetMaxHealth());
                 m.pet_x      = pet->GetPositionX();

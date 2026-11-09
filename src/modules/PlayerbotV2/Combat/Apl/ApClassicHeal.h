@@ -677,7 +677,8 @@ inline Patient PickPatient(BotSnapshotView const& s, GroupSnapshotView const& g,
                 consider(SelfPatient(s, g), focus == m.guid, HealGroupHas(own_groups, m.subgroup));
                 continue;
             }
-            if (!m.online || !m.is_alive || m.max_hp <= 0 || m.map_id != s.map_id()) continue;
+            // A member at 0 health is no patient either (as a pet at 0 health, GroupSnapshotBuilder pet_alive): no heal lands on it.
+            if (!m.online || !m.is_alive || m.hp <= 0 || m.max_hp <= 0 || m.map_id != s.map_id()) continue;
             if (Dist2(m.x, m.y, m.z, bx, by, bz) > range * range) continue;
             bool const tank = IsTank(s, m);
             int32 const pct = m.hp_pct();
