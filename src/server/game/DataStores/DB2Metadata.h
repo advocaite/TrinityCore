@@ -21119,7 +21119,6 @@ struct SpellDispelTypeMeta
 
 struct SpellDurationMeta
 {
-    // Classic 1.60.1.70790: DurationPerLevel is back as the second field (vanilla's layout); layout hash 0xA931BD2B -> 0x4FDF0951
     static constexpr DB2MetaField Fields[4] =
     {
         { .Type = FT_INT,                  .ArraySize =  1, .IsSigned =  true },

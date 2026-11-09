@@ -20,8 +20,14 @@
 // Talent rank values come from the trait curves, so every amount is read from the talent aura effect, never hardcoded.
 
 #include "ScriptMgr.h"
+#include "CellImpl.h"
+#include "Containers.h"
 #include "GameTime.h"
+#include "GridNotifiersImpl.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
+#include "Random.h"
+#include "DB2Stores.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -29,6 +35,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include <cmath>
 
 namespace
 {
@@ -64,7 +71,9 @@ enum ClassicPriestTalents
     SPELL_PRI_DIVINE_AEGIS_ABSORB       = 431624,
     SPELL_PRI_POWER_IN_LIGHT            = 1309969,
     SPELL_PRI_EARLY_DEMISE              = 1310076,
-    SPELL_PRI_LITANY_OF_LIGHT_ENERGIZE  = 1317007
+    SPELL_PRI_LITANY_OF_LIGHT_ENERGIZE  = 1317007,
+    SPELL_PRI_IMPROVED_MIND_FLAY        = 1225139,
+    SPELL_PRI_DEVOURING_CONTAGION       = 1309950
 };
 
 // 14892 - Inspiration: "Your non-periodic critical heals increase your target's Armor by X% for 15 sec." Critical direct heals cast
@@ -626,6 +635,83 @@ class classic_spell_pri_contingency_plan : public AuraScript
     }
 };
 
+// Mind Flay (15407, 17311, 17312, 17313, 17314, 18807) with 1225139 Improved Mind Flay: "Each instance of damage of Mind Flay deals $s1% more
+// damage than its previous instance of damage." The talent is a dummy aura; each tick is $s1% more than the tick before (tick n: x(1+$s1%)^(n-1)).
+class classic_spell_pri_mind_flay : public AuraScript
+{
+    void CalculateDamage(AuraEffect const* aurEff, Unit const* /*victim*/, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        Unit const* priest = GetCaster();
+        if (!priest)
+            return;
+
+        AuraEffect const* talent = priest->GetAuraEffect(SPELL_PRI_IMPROVED_MIND_FLAY, EFFECT_0);
+        if (!talent || talent->GetAmount() <= 0)
+            return;
+
+        // GetTickNumber is already counted for the tick being calculated (first tick = 1)
+        uint32 const tick = std::max<uint32>(aurEff->GetTickNumber(), 1);
+        pctMod *= std::pow(1.0f + float(talent->GetAmount()) / 100.0f, float(tick - 1));
+    }
+
+    void Register() override
+    {
+        DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_pri_mind_flay::CalculateDamage, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// 1309950 - Devouring Contagion (70532): "Targets that die while Devouring Plague is active spreads it, jumping to $s3 nearby enemies within
+// $s2 yds for the remaining duration." Effects 1 and 2 are dummies. When a target with a priest's Devouring Plague (priest family flag
+// word 3 0x10, the talent's own cost mask) dies, the priest's plague goes to up to $s3 random enemies of the priest within $s2 yards of the
+// corpse that do not have it yet, with the dying plague's remaining duration.
+class classic_unit_pri_devouring_contagion : public UnitScript
+{
+public:
+    classic_unit_pri_devouring_contagion() : UnitScript("classic_unit_pri_devouring_contagion") { }
+
+    void OnUnitDeath(Unit* victim, Unit* /*killer*/) override
+    {
+        std::vector<std::pair<ObjectGuid, std::pair<uint32, int32>>> plagues;
+        for (AuraEffect const* leech : victim->GetAuraEffectsByType(SPELL_AURA_PERIODIC_LEECH))
+        {
+            SpellInfo const* spellInfo = leech->GetSpellInfo();
+            if (spellInfo->SpellFamilyName != SPELLFAMILY_PRIEST || !(spellInfo->SpellFamilyFlags[3] & 0x10))
+                continue;
+
+            plagues.emplace_back(leech->GetCasterGUID(), std::make_pair(spellInfo->Id, leech->GetBase()->GetDuration()));
+        }
+
+        for (auto const& [casterGuid, plague] : plagues)
+        {
+            auto const& [spellId, remaining] = plague;
+            Unit* priest = ObjectAccessor::GetUnit(*victim, casterGuid);
+            if (!priest || remaining <= 0)
+                continue;
+
+            AuraEffect const* radius = priest->GetAuraEffect(SPELL_PRI_DEVOURING_CONTAGION, EFFECT_1);
+            AuraEffect const* count = priest->GetAuraEffect(SPELL_PRI_DEVOURING_CONTAGION, EFFECT_2);
+            if (!radius || !count || radius->GetAmount() <= 0 || count->GetAmount() <= 0)
+                continue;
+
+            float const range = float(radius->GetAmount());
+            std::list<Unit*> enemies;
+            Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(victim, priest, range);
+            Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(victim, enemies, check);
+            Cell::VisitAllObjects(victim, searcher, range);
+
+            enemies.remove_if([&](Unit* enemy)
+            {
+                return enemy == victim || enemy == priest || !priest->IsValidAttackTarget(enemy) || enemy->HasAura(spellId, casterGuid);
+            });
+            Trinity::Containers::RandomResize(enemies, uint32(count->GetAmount()));
+
+            for (Unit* enemy : enemies)
+                if (Aura* spread = priest->AddAura(spellId, enemy))
+                    spread->SetDuration(std::min(remaining, spread->GetMaxDuration()));
+        }
+    }
+};
+
 /*######
 ## Paladin
 ######*/
@@ -642,7 +728,9 @@ enum ClassicPaladinTalents
     SPELL_PAL_IMPROVED_SEAL_OF_FURY         = 1314103,
     SPELL_PAL_IMPROVED_SEAL_OF_FURY_ENERGIZE= 1314104,
     SPELL_PAL_SACRED_SHIELD_ABSORB          = 412018,
-    SPELL_PAL_SACRED_SHIELD_FLASH_OF_LIGHT  = 412020
+    SPELL_PAL_SACRED_SHIELD_FLASH_OF_LIGHT  = 412020,
+    SPELL_PAL_RECKONING_STORED              = 1326084,  // dummy aura, one stack per stored extra attack
+    SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA     = 415058
 };
 
 // 9799 - Eye for an Eye: "All critical strikes against you cause 15% of the damage taken to the attacker as well. The damage caused by Eye
@@ -675,6 +763,105 @@ class classic_spell_pal_eye_for_an_eye : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_pal_eye_for_an_eye::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_pal_eye_for_an_eye::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 20177 - Reckoning (70532): "Gives you a $m1% chance after Blocking and a ${$m1*2.5}% chance after receiving a non-periodic critical strike
+// to gain an extra attack. Stores up to $1326084u extra attacks." The talent is a dummy aura, so nothing was gained. Behaviour from vMaNGOS
+// (GPL-2.0, Reckoning 20178 extra attacks kept until the next swing): a block or a critical hit taken adds a stack of 1326084 (its stack
+// limit is the store), the next melee swing of the paladin uses them all. The talent's client proc data has a 1.5 sec proc cooldown.
+class classic_spell_pal_reckoning : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_RECKONING_STORED });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_HARMFUL_PERIODIC | PROC_FLAG_DEAL_HARMFUL_PERIODIC))
+            return false;
+
+        float chance = 0.0f;
+        if (eventInfo.GetHitMask() & PROC_HIT_BLOCK)
+            chance = float(aurEff->GetAmount());
+        else if (eventInfo.GetHitMask() & PROC_HIT_CRITICAL)
+            chance = float(aurEff->GetAmount()) * 2.5f;
+
+        return chance > 0.0f && roll_chance(chance);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        Unit* paladin = GetTarget();
+        if (Aura* stored = paladin->GetAura(SPELL_PAL_RECKONING_STORED, paladin->GetGUID()))
+        {
+            if (stored->GetStackAmount() < stored->CalcMaxStackAmount())
+                stored->ModStackAmount(1);
+            else
+                stored->RefreshDuration();
+        }
+        else
+            paladin->CastSpell(paladin, SPELL_PAL_RECKONING_STORED, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pal_reckoning::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 1326084 - Reckoning (stored extra attacks): the next melee swing of the paladin, whatever its outcome, uses every stack as an extra attack.
+class classic_spell_pal_reckoning_stored : public AuraScript
+{
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        uint8 const attacks = GetStackAmount();
+        Unit* paladin = GetTarget();
+        Remove();
+        paladin->AddExtraAttacks(attacks);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning_stored::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 415059 - Guarded by the Light (70532): "You gain $415058m1% of your maximum mana every $415058t1 sec for $415058d after Blocking a melee
+// attack. This effect is cancelled by casting Flash of Light, Holy Light, or Holy Shock." The talent is a dummy aura; a blocked melee attack
+// (spell_proc HitMask BLOCK on the client's taken melee proc flags) casts the mana aura 415058.
+class classic_spell_pal_guarded_by_the_light : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        GetTarget()->CastSpell(GetTarget(), SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_guarded_by_the_light::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Flash of Light (19750, 19939-19943), Holy Light (635, 639, 647, 1026, 1042, 3472, 10328, 10329, 25292) and Holy Shock (20473, 20929, 20930,
+// 1311606) cancel the Guarded by the Light mana aura 415058.
+class classic_spell_pal_guarded_by_the_light_cancel : public SpellScript
+{
+    void HandleCast()
+    {
+        GetCaster()->RemoveAurasDueToSpell(SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_spell_pal_guarded_by_the_light_cancel::HandleCast);
     }
 };
 
@@ -1090,6 +1277,31 @@ class classic_spell_pal_holy_light_flash_of_light : public SpellScript
     }
 };
 
+// Holy Strike (679, 678, 1866, 680, 2495, 5569, 10332, 10333): "An instant strike that causes $m2% weapon damage plus an additional $s1 as
+// Holy damage." Effect 0 (normalized weapon damage) holds the flat $s1, effect 1 the weapon percent. The core adds the flat part to the weapon
+// roll before the percent, so only half of $s1 was dealt and spell power (effect 0 bonus coefficient) was ignored. The missing part of $s1
+// and the spell power share are added back to the final weapon effect; the spell is Holy school in the client data.
+class classic_spell_pal_holy_strike : public SpellScript
+{
+    void HandleCalcDamage(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        if (spellEffectInfo.EffectIndex != EFFECT_1)
+            return;
+
+        Unit* caster = GetCaster();
+        SpellEffectInfo const& holyEffect = GetEffectInfo(EFFECT_0);
+        int32 const holy = holyEffect.CalcValue(caster);
+        int32 const weaponPct = spellEffectInfo.CalcValue(caster);
+        flatMod += holy - CalculatePct(holy, weaponPct);
+        flatMod += int32(caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY) * holyEffect.BonusCoefficient);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_pal_holy_strike::HandleCalcDamage);
+    }
+};
+
 // 412019 - Sacred Shield: "Each time the target takes damage they gain a Sacred Shield, absorbing [36 * (38.258376 + 0.904195 * L + 0.161311 *
 // L * L) / 100] damage and increasing the Paladin's chance to critically hit with Flash of Light by 50% for up to 6 sec. In addition, causes
 // your Flash of Light to heal targets with Sacred Shield for an additional 100% over 12 sec. They cannot gain this effect more than once
@@ -1159,8 +1371,140 @@ class classic_spell_pal_sacred_shield : public AuraScript
     TimePoint _nextShield = TimePoint::min();
 };
 
+// Divine Shield (642, 1020), Blessing of Protection (1022, 5599, 10278), Lay on Hands (633, 2800, 10310): vanilla puts Forbearance (1 minute) on the
+// target and refuses these spells on a target that has it. The retail Forbearance scripts check the retail marker spell in the spell data and
+// are bound to rank 1 only, so a Classic cast either never applied it or, on the higher ranks, never did. Applying it again on rank 1 only
+// refreshes the aura.
+class classic_spell_pal_forbearance : public SpellScript
+{
+    static constexpr uint32 SPELL_PALADIN_FORBEARANCE_DEBUFF = 25771;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PALADIN_FORBEARANCE_DEBUFF });
+    }
+
+    SpellCastResult CheckTarget()
+    {
+        Unit* target = GetExplTargetUnit() ? GetExplTargetUnit() : GetCaster();
+        if (target->HasAura(SPELL_PALADIN_FORBEARANCE_DEBUFF))
+            return SPELL_FAILED_TARGET_AURASTATE;
+        return SPELL_CAST_OK;
+    }
+
+    void TriggerForbearance() const
+    {
+        GetCaster()->CastSpell(GetHitUnit(), SPELL_PALADIN_FORBEARANCE_DEBUFF, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
+            .TriggeringSpell = GetSpell()
+        });
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_pal_forbearance::CheckTarget);
+        AfterHit += SpellHitFn(classic_spell_pal_forbearance::TriggerForbearance);
+    }
+};
+
+// Rank of a talent: Forever's talents are trait nodes with one spell, the ranks are held on the node entry of the active spec's trait config.
+// Returns 0 when the player does not have the talent.
+static int32 GetClassicTalentRank(Player const* player, uint32 spellId)
+{
+    UF::TraitConfig const* config = player->GetClassicSpecGroupConfig(player->GetActiveTalentGroup() == 1);
+    if (!config)
+        return 0;
+
+    for (UF::TraitEntry const& entry : config->Entries)
+    {
+        TraitNodeEntryEntry const* nodeEntry = sTraitNodeEntryStore.LookupEntry(entry.TraitNodeEntryID);
+        TraitDefinitionEntry const* definition = nodeEntry ? sTraitDefinitionStore.LookupEntry(nodeEntry->TraitDefinitionID) : nullptr;
+        if (definition && uint32(definition->SpellID) == spellId)
+            return entry.Rank + entry.GrantedRanks + entry.BonusRanks;
+    }
+    return 0;
+}
+
+// 20210 - Illumination: "After getting a critical effect from your Flash of Light, Holy Light, or Holy Shock heal spell, gives you a 20% chance
+// per rank to gain mana equal to the base cost of the spell." The client aura procs the dummy-only spell 18350, so nothing returned mana. VMaNGOS
+// casts the energize 20272 on the paladin with the mana cost of the spell as the amount; the chance is 20% x the talent rank (read from the node).
+// The cost of the heal is read from the cast; the Holy Shock heals are triggered with no cost of their own and give nothing here.
+class classic_spell_pal_illumination : public AuraScript
+{
+    static constexpr uint32 SPELL_PALADIN_ILLUMINATION_ENERGIZE = 20272;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PALADIN_ILLUMINATION_ENERGIZE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* spell = eventInfo.GetProcSpell();
+        Player const* paladin = GetTarget()->ToPlayer();
+        return spell && paladin && spell->GetPowerTypeCostAmount(POWER_MANA).value_or(0) > 0
+            && roll_chance(20 * std::max(1, GetClassicTalentRank(paladin, GetId())));
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(*eventInfo.GetProcSpell()->GetPowerTypeCostAmount(POWER_MANA));
+        GetTarget()->CastSpell(GetTarget(), SPELL_PALADIN_ILLUMINATION_ENERGIZE, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pal_illumination::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_illumination::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 1328569 - Holy Binding (Forever priest talent): "Each time you heal a target other than yourself with Flash Heal, you are healed
+// for $s1% as much. This healing generates no threat." Bound to the Flash Heal ranks; the self heal is 1328570 (no threat, SpellMgr).
+class classic_spell_pri_holy_binding : public SpellScript
+{
+    static constexpr uint32 SPELL_PRI_HOLY_BINDING      = 1328569;
+    static constexpr uint32 SPELL_PRI_HOLY_BINDING_HEAL = 1328570;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PRI_HOLY_BINDING, SPELL_PRI_HOLY_BINDING_HEAL });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* priest = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!priest || !target || target == priest || GetHitHeal() <= 0)
+            return;
+
+        AuraEffect const* talent = priest->GetAuraEffect(SPELL_PRI_HOLY_BINDING, EFFECT_0);
+        if (!talent)
+            return;
+
+        int32 const amount = CalculatePct(GetHitHeal(), talent->GetAmount());
+        if (amount <= 0)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, amount);
+        priest->CastSpell(priest, SPELL_PRI_HOLY_BINDING_HEAL, args);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_pri_holy_binding::HandleAfterHit);
+    }
+};
+
+void AddSC_classic_spells_priest();
+
 void AddSC_classic_talents_priest_paladin()
 {
+    AddSC_classic_spells_priest();
+    RegisterSpellScript(classic_spell_pri_holy_binding);
     // Priest
     RegisterSpellScript(classic_spell_pri_inspiration);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
@@ -1176,9 +1520,16 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_early_demise);
     RegisterSpellScript(classic_spell_pri_litany_of_light);
     RegisterSpellScript(classic_spell_pri_contingency_plan);
+    RegisterSpellScript(classic_spell_pri_mind_flay);
+    new classic_unit_pri_devouring_contagion();
 
     // Paladin
     RegisterSpellScript(classic_spell_pal_eye_for_an_eye);
+    RegisterSpellScript(classic_spell_pal_reckoning);
+    RegisterSpellScript(classic_spell_pal_reckoning_stored);
+    RegisterSpellScript(classic_spell_pal_guarded_by_the_light);
+    RegisterSpellScript(classic_spell_pal_guarded_by_the_light_cancel);
+    RegisterSpellScript(classic_spell_pal_holy_strike);
     RegisterSpellScript(classic_spell_pal_redoubt);
     RegisterSpellScript(classic_spell_pal_infusion_of_light);
     RegisterSpellScript(classic_spell_pal_consecrated_ground);
@@ -1191,4 +1542,6 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_improved_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_holy_light_flash_of_light);
     RegisterSpellScript(classic_spell_pal_sacred_shield);
+    RegisterSpellScript(classic_spell_pal_forbearance);
+    RegisterSpellScript(classic_spell_pal_illumination);
 }

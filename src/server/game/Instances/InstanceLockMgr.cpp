@@ -164,6 +164,31 @@ void InstanceLockMgr::Load()
 
         } while (result->NextRow());
     }
+
+    // Persisted raid respawn times (Instance.PersistRaidTrash) belong to a lockout; once the lockout is gone or expired
+    // the rows must go too, or a recycled instance id would inherit dead creatures
+    CharacterDatabasePreparedStatement* orphanStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ORPHAN_INSTANCE_RESPAWNS);
+    orphanStmt->setUInt64(0, uint64(time(nullptr)));
+    if (PreparedQueryResult orphans = CharacterDatabase.Query(orphanStmt))
+    {
+        do
+        {
+            Field* fields = orphans->Fetch();
+            uint32 mapId = fields[0].GetUInt16();
+            uint32 instanceId = fields[1].GetUInt32();
+
+            // faction-split world maps use small non-zero instance ids and are not instance locks
+            MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
+            if (!mapEntry || !mapEntry->IsDungeon())
+                continue;
+
+            CharacterDatabasePreparedStatement* delStmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ALL_RESPAWNS);
+            delStmt->setUInt16(0, mapId);
+            delStmt->setUInt32(1, instanceId);
+            CharacterDatabase.Execute(delStmt);
+            TC_LOG_INFO("instance.locks", "Removed stale respawn times of map {} instance {} (no active lockout)", mapId, instanceId);
+        } while (orphans->NextRow());
+    }
 }
 
 void InstanceLockMgr::Unload()

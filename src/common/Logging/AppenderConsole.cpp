@@ -16,6 +16,7 @@
  */
 
 #include "AppenderConsole.h"
+#include "CliManager.h"
 #include "LogMessage.h"
 #include "SmartEnum.h"
 #include "StringConvert.h"
@@ -176,6 +177,10 @@ void AppenderConsole::Print(std::string const& prefix, std::string const& text, 
 
 void AppenderConsole::_write(LogMessage const* message)
 {
+    // takes the "TC> " prompt (and whatever is typed after it) off the screen while the log line is printed
+    // and draws it again, with the typed text, below the log line
+    CliManager::OutputGuard promptGuard;
+
     bool stdout_stream = !(message->level == LOG_LEVEL_ERROR || message->level == LOG_LEVEL_FATAL);
 
     if (_colored)

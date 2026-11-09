@@ -43,6 +43,10 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
 
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
 
+        // Path builds to the target that failed in a row (NoPath); 0 after one that built. A playerbot drops a target it cannot
+        // path to instead of standing still beside the fight.
+        uint8 GetNoPathStreak() const { return _noPathStreak; }
+
     private:
         static constexpr uint32 RANGE_CHECK_INTERVAL = 100; // time (ms) until we attempt to recalculate
 
@@ -54,6 +58,8 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
         TimeTracker _rangeCheckTimer;
         bool _movingTowards = true;
         bool _mutualChase = true;
+        bool _throttleRepath = false;   // owner is a playerbot, or a pet / guardian of a player: see Update
+        uint8 _noPathStreak = 0;
 };
 
 #endif

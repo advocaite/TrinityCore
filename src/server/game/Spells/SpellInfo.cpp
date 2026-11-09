@@ -374,14 +374,14 @@ std::array<SpellImplicitTargetInfo::StaticData, TOTAL_SPELL_TARGETS> SpellImplic
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 125 TARGET_DEST_CASTER_GROUND_2
     {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_NONE,   TARGET_SELECT_CATEGORY_NYI,     TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 126 TARGET_UNIT_CASTER_AREA_ENEMY_CLUMP
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_NONE,   TARGET_SELECT_CATEGORY_NYI,     TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 127 TARGET_DEST_CASTER_ENEMY_CLUMP_CENTROID
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_CONE,    TARGET_CHECK_ALLY,     TARGET_DIR_FRONT},       // 128 TARGET_UNIT_RECT_CASTER_ALLY
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_CONE,    TARGET_CHECK_ENEMY,    TARGET_DIR_FRONT},       // 129 TARGET_UNIT_RECT_CASTER_ENEMY
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_CONE,    TARGET_CHECK_DEFAULT,  TARGET_DIR_FRONT},       // 130 TARGET_UNIT_RECT_CASTER
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_ALLY,     TARGET_DIR_FRONT},       // 128 TARGET_UNIT_RECT_CASTER_ALLY
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_ENEMY,    TARGET_DIR_FRONT},       // 129 TARGET_UNIT_RECT_CASTER_ENEMY
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_DEFAULT,  TARGET_DIR_FRONT},       // 130 TARGET_UNIT_RECT_CASTER
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 131 TARGET_DEST_SUMMONER
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_TARGET, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_ALLY,     TARGET_DIR_NONE},        // 132 TARGET_DEST_TARGET_ALLY
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_LINE,    TARGET_CHECK_ALLY,     TARGET_DIR_NONE},        // 133 TARGET_UNIT_LINE_CASTER_TO_DEST_ALLY
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_LINE,    TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 134 TARGET_UNIT_LINE_CASTER_TO_DEST_ENEMY
-    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_LINE,    TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 135 TARGET_UNIT_LINE_CASTER_TO_DEST
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_ALLY,     TARGET_DIR_NONE},        // 133 TARGET_UNIT_RECT_CASTER_TO_DEST_ALLY
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_ENEMY,    TARGET_DIR_NONE},        // 134 TARGET_UNIT_RECT_CASTER_TO_DEST_ENEMY
+    {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_RECT,    TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 135 TARGET_UNIT_RECT_CASTER_TO_DEST
     {TARGET_OBJECT_TYPE_UNIT, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_CONE,    TARGET_CHECK_ALLY,     TARGET_DIR_FRONT},       // 136 TARGET_UNIT_CONE_CASTER_TO_DEST_ALLY
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_CASTER, TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 137 TARGET_DEST_CASTER_MOVEMENT_DIRECTION
     {TARGET_OBJECT_TYPE_DEST, TARGET_REFERENCE_TYPE_DEST,   TARGET_SELECT_CATEGORY_DEFAULT, TARGET_CHECK_DEFAULT,  TARGET_DIR_NONE},        // 138 TARGET_DEST_DEST_GROUND
@@ -514,6 +514,18 @@ uint32 SpellEffectInfo::GetPeriodicTickCount() const
     return totalTicks;
 }
 
+// Classic 1.60: the vanilla (1.12) dice of an effect of a legacy spell, whoever casts it (ClassicSpellValue.h). The client's flat
+// values differ from vanilla for part of the legacy spells (Evoker Flamestrike 11829: 479, vanilla 76..88; player Shadow Bolt
+// rank 10 25307: 257, vanilla 482..538).
+static ClassicSpellValue::Value const* GetClassicValue(WorldObject const* caster, uint32 spellId, uint32 effectIndex)
+{
+    if (!caster)
+        return nullptr;
+    if (!ClassicSpellValue::AppliesToSpell(spellId))
+        return nullptr;
+    return sSpellMgr->GetClassicSpellValue(spellId, effectIndex);
+}
+
 int32 SpellEffectInfo::CalcValueAsInt(WorldObject const* caster /*= nullptr*/, SpellEffectValue const* basePoints /*= nullptr*/, Unit const* target /*= nullptr*/, float* variance /*= nullptr*/, uint32 castItemId /*= 0*/, int32 itemLevel /*= -1*/) const
 {
     return int32(CalcValue(caster, basePoints, target, variance, castItemId, itemLevel));
@@ -525,6 +537,14 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     SpellEffectValue value = bp ? *bp : basePoints;
     SpellEffectValue basePointsPerLevel = RealPointsPerLevel;
     SpellEffectValue comboDamage = PointsPerResource;
+    float scalingVariance = Scaling.Variance;
+    ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex);
+    if (vanilla)
+    {
+        basePointsPerLevel = vanilla->PointsPerLevel;
+        scalingVariance = ClassicSpellValue::Variance(*vanilla);
+        comboDamage = vanilla->PointsPerCombo;      // vanilla points per combo point (the client's PointsPerResource differs for part of the finishers)
+    }
 
     Unit const* casterUnit = nullptr;
     if (caster)
@@ -558,9 +578,9 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
         }
     }
 
-    if (Scaling.Variance)
+    if (scalingVariance)
     {
-        float delta = fabs(Scaling.Variance * 0.5f);
+        float delta = fabs(scalingVariance * 0.5f);
         float valueVariance = frand(-delta, delta);
         value += basePoints * valueVariance;
 
@@ -569,12 +589,12 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     }
 
     // base amount modification based on spell lvl vs caster lvl
-    if (Scaling.Coefficient != 0.0f)
+    if (Scaling.Coefficient != 0.0f && !vanilla)
     {
         if (Scaling.ResourceCoefficient)
             comboDamage = value * Scaling.ResourceCoefficient;
     }
-    else if (GetScalingExpectedStat() == ExpectedStatType::None || UsesClassicFlatBasePoints(caster))
+    else if (vanilla || GetScalingExpectedStat() == ExpectedStatType::None || UsesClassicFlatBasePoints(caster))
     {
         // Classic 1.60 (vanilla): spells cast by a player's object (hunter traps: Explosive Trap, Immolation Trap) scale with the
         // owner's level
@@ -603,6 +623,12 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
             if (int32 comboPoints = casterUnit->GetPower(POWER_COMBO_POINTS))
                 value += comboDamage * comboPoints;
     }
+
+    // Classic 1.60 (vanilla): a legacy creature spell flagged "scales with creature level" carries the numbers of its spell level
+    // (Scarlet Initiate Fireball 20793: 74..98 at spell level 20). The caster's level scales them by the vanilla creature melee
+    // damage of the two levels (VMaNGOS SpellCaster::CalculateSpellEffectValue), so the level 3 Initiate hits for 7..9.
+    if (vanilla && casterUnit && !casterUnit->IsPlayer())
+        value *= ClassicCreatureLevelSpellScale(casterUnit->GetLevel());
 
     if (_spellInfo->HasAttribute(SPELL_ATTR8_MASTERY_AFFECTS_POINTS))
         if (Player const* playerCaster = Object::ToPlayer(caster))
@@ -685,8 +711,51 @@ bool SpellEffectInfo::UsesClassicFlatBasePoints(WorldObject const* caster) const
     return _spellInfo->Id < CLASSIC_FIRST_SCALED_SPELL_ID;
 }
 
+// Vanilla melee damage of a warrior-class creature at levels 1..63 (VMaNGOS creature_classlevelstats, class 1)
+static constexpr std::array<float, 63> ClassicCreatureMeleeDamageByLevel =
+{
+    1.57945f, 2.31493f, 3.25816f, 4.50155f, 6.0127f, 8.00805f, 10.3671f, 12.0481f, 13.8113f,
+    15.2392f, 17.199f, 19.6717f, 21.4254f, 23.6166f, 25.7096f, 27.1742f, 29.1278f, 30.5059f,
+    32.3644f, 34.2057f, 35.4908f, 37.1973f, 38.4533f, 40.1049f, 41.657f, 42.9703f, 44.696f,
+    45.9923f, 47.6437f, 49.3875f, 50.6313f, 52.1686f, 53.4785f, 55.0217f, 56.5113f, 57.8888f,
+    59.7047f, 61.252f, 63.1787f, 65.1712f, 68.2851f, 72.5719f, 77.4149f, 83.8275f, 87.9851f,
+    89.791f, 92.043f, 93.8584f, 96.0594f, 98.4032f, 100.32f, 102.77f, 104.738f, 107.125f,
+    109.366f, 111.526f, 113.879f, 116.063f, 118.431f, 120.906f, 123.205f, 125.504f, 127.722f
+};
+
+static float ClassicCreatureMeleeDamage(uint32 level)
+{
+    return ClassicCreatureMeleeDamageByLevel[std::clamp<uint32>(level, 1, ClassicCreatureMeleeDamageByLevel.size()) - 1];
+}
+
+// Classic.CreatureSpellLevelScaling: 0 off, 1 only lower casters, 2 vanilla both ways (default)
+float SpellEffectInfo::ClassicCreatureLevelSpellScale(uint8 casterLevel) const
+{
+    uint32 mode = sWorld->getIntConfig(CONFIG_CLASSIC_CREATURE_SPELL_LEVEL_SCALING);
+    if (!mode || !_spellInfo->SpellLevel || casterLevel == _spellInfo->SpellLevel)
+        return 1.0f;
+
+    if (!_spellInfo->HasAttribute(SPELL_ATTR0_SCALES_WITH_CREATURE_LEVEL))
+        return 1.0f;
+
+    if (Effect == SPELL_EFFECT_WEAPON_PERCENT_DAMAGE || Effect == SPELL_EFFECT_KNOCK_BACK)
+        return 1.0f;
+
+    if (Effect == SPELL_EFFECT_APPLY_AURA && ApplyAuraName == SPELL_AURA_MOD_DECREASE_SPEED)
+        return 1.0f;
+
+    float scale = ClassicCreatureMeleeDamage(casterLevel) / ClassicCreatureMeleeDamage(_spellInfo->SpellLevel);
+    if (mode == 1)
+        scale = std::min(scale, 1.0f);
+
+    return scale;
+}
+
 SpellEffectValue SpellEffectInfo::CalcBaseValue(WorldObject const* caster, Unit const* target, uint32 itemId, int32 itemLevel) const
 {
+    if (ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex))
+        return ClassicSpellValue::Mean(*vanilla);
+
     if (Scaling.Coefficient != 0.0f)
     {
         uint32 level = _spellInfo->SpellLevel;
@@ -2135,6 +2204,7 @@ bool SpellInfo::IsAuraExclusiveBySpecificWith(SpellInfo const* spellInfo) const
         case SPELL_SPECIFIC_WARRIOR_ENRAGE:
         case SPELL_SPECIFIC_MAGE_ARCANE_BRILLANCE:
         case SPELL_SPECIFIC_PRIEST_DIVINE_SPIRIT:
+        case SPELL_SPECIFIC_TRACKER: // Classic: one form of tracking at a time (Find Herbs and Find Minerals included)
             return spellSpec1 == spellSpec2;
         case SPELL_SPECIFIC_FOOD:
             return spellSpec2 == SPELL_SPECIFIC_FOOD
@@ -2163,6 +2233,8 @@ bool SpellInfo::IsAuraExclusiveBySpecificPerCasterWith(SpellInfo const* spellInf
         case SPELL_SPECIFIC_CURSE:
         case SPELL_SPECIFIC_BANE:
         case SPELL_SPECIFIC_ASPECT:
+        case SPELL_SPECIFIC_BLESSING:
+        case SPELL_SPECIFIC_JUDGEMENT:
             return spellSpec == spellInfo->GetSpellSpecific();
         default:
             return false;
@@ -2808,7 +2880,10 @@ void SpellInfo::_LoadAuraState()
         {
             case 1064: // Dazed
                 return AURA_STATE_DAZED;
+            case 1310726: // Expose Prey (Classic 1.60): "allow an activation of Mongoose Bite", as after a dodge
+                return AURA_STATE_DEFENSIVE;
             case 32216: // Victorious
+            case 402975: // Victorious, Classic 1.60: Victory Rush 402927 needs caster aura state 10 (32216 isn't in the 70707 client)
                 return AURA_STATE_VICTORIOUS;
             case 71465: // Divine Surge
             case 50241: // Evasive Charges
@@ -2930,11 +3005,14 @@ void SpellInfo::_LoadSpellSpecific()
             case SPELLFAMILY_MAGE:
             {
                 // family flags 18(Molten), 25(Frost/Ice), 28(Mage)
-                if (SpellFamilyFlags[0] & 0x12040000)
+                // Classic: bit 18 is also on Arcane Missiles, Counterspell, Polymorph, Sleep and Arcane Explosion, so only a
+                // positive aura that isn't a channel counts (Arcane Missiles removed Frost Armor, Polymorph lost its own group)
+                if ((SpellFamilyFlags[0] & 0x12040000) && IsPositive() && !IsChanneled())
                     return SPELL_SPECIFIC_MAGE_ARMOR;
 
                 // Arcane brillance and Arcane intelect (normal check fails because of flags difference)
-                if (SpellFamilyFlags[0] & 0x400)
+                // Classic: Fury of Ragnaros and Arcane Might carry the same flag but raise damage, not intellect
+                if ((SpellFamilyFlags[0] & 0x400) && HasAura(SPELL_AURA_MOD_STAT))
                     return SPELL_SPECIFIC_MAGE_ARCANE_BRILLANCE;
 
                 if ((SpellFamilyFlags[0] & 0x1000000) && GetEffect(EFFECT_0).IsAura(SPELL_AURA_MOD_CONFUSE))
@@ -2951,8 +3029,9 @@ void SpellInfo::_LoadSpellSpecific()
             }
             case SPELLFAMILY_WARLOCK:
             {
-                // Warlock (Bane of Doom | Bane of Agony | Bane of Havoc)
-                if (Id == 603 || Id ==  980 || Id == 80240)
+                // Warlock (Bane of Havoc). Classic 603 and 980 are Curse of Doom and Curse of Agony rank 1 (the client names
+                // them Bane, but they dispel as curses): as banes they stacked with the warlock's other curse.
+                if (Id == 80240)
                     return SPELL_SPECIFIC_BANE;
 
                 // only warlock curses have this
@@ -2982,6 +3061,22 @@ void SpellInfo::_LoadSpellSpecific()
                 if (SpellFamilyFlags & flag128(0x00200000, 0x00000000, 0x00001010, 0x00000000))
                     return SPELL_SPECIFIC_ASPECT;
 
+                // Classic 1.60 (70532 SpellClassOptions): Monkey 0x80000 and Hawk 0x100000 in word 0, Viper 0x40000 in word 1;
+                // Aspect of the Wild and Aspect of the Falcon have no family flags. No other hunter spell uses these flags.
+                // Without this every one of them stacked with any other aspect, as in vanilla they never did.
+                if (SpellFamilyFlags & flag128(0x00180000, 0x00040000, 0x00000000, 0x00000000))
+                    return SPELL_SPECIFIC_ASPECT;
+
+                switch (Id)
+                {
+                    case 20043:  // Aspect of the Wild, rank 1
+                    case 20190:  // Aspect of the Wild, rank 2
+                    case 469145: // Aspect of the Falcon
+                        return SPELL_SPECIFIC_ASPECT;
+                    default:
+                        break;
+                }
+
                 break;
             }
             case SPELLFAMILY_PALADIN:
@@ -2989,6 +3084,20 @@ void SpellInfo::_LoadSpellSpecific()
                 // Collection of all the seal family flags. No other paladin spell has any of those.
                 if (SpellFamilyFlags[1] & 0xA2000800)
                     return SPELL_SPECIFIC_SEAL;
+
+                // Classic 1.60 (70532 word 0 matches the vanilla masks, VMaNGOS SPELL_BLESSING / SPELL_JUDGEMENT): every blessing,
+                // Greater Blessings and Protection, Freedom, Salvation and Sacrifice included, and every judgement debuff is one
+                // per paladin on a target. Without this one paladin kept Might, Wisdom and Kings (or Light, Wisdom and the
+                // Crusader judgements) on the same target at once.
+                if ((SpellFamilyFlags[0] & 0x10000100) && HasEffect(SPELL_EFFECT_APPLY_AURA))
+                    return SPELL_SPECIFIC_BLESSING;
+
+                // Judgement debuffs are the auras put on the enemy; the caster's own proc auras (25752, 25757, 25942) share the
+                // bits. Going by the target keeps this independent of the positivity pass and of the aura's base points.
+                if (SpellFamilyFlags[0] & 0x20180000)
+                    for (SpellEffectInfo const& effect : GetEffects())
+                        if (effect.IsEffect(SPELL_EFFECT_APPLY_AURA) && effect.TargetA.GetTarget() == TARGET_UNIT_TARGET_ENEMY)
+                            return SPELL_SPECIFIC_JUDGEMENT;
 
                 if (SpellFamilyFlags[0] & 0x00002190)
                     return SPELL_SPECIFIC_HAND;
@@ -3008,6 +3117,7 @@ void SpellInfo::_LoadSpellSpecific()
                         case 19876: case 19895: case 19896: // Shadow Resistance
                         case 19888: case 19897: case 19898: // Frost Resistance
                         case 19891: case 19899: case 19900: // Fire Resistance
+                        case 20218: // Sanctity Aura (stacked with the paladin's other aura)
                             return SPELL_SPECIFIC_AURA;
                         default:
                             break;
@@ -3116,6 +3226,7 @@ void SpellInfo::_LoadSpellDiminishInfo()
             case 23694:                                                 // Improved Hamstring
             case 19229:                                                 // Improved Wing Clip
             case 19185:                                                 // Entrapment
+            case 19306: case 20909: case 20910:                         // Counterattack (WoW Forever launch notes 2026-11-03: proc roots diminish)
                 return DIMINISHING_TRIGGER_ROOT;
             default:
                 break;
@@ -4236,8 +4347,17 @@ Optional<SpellPowerCost> SpellInfo::CalcPowerCost(SpellPowerEntry const* power, 
     if (!optionalCost)
     {
         powerCost = power->ManaCost;
+        // Classic 1.60: the vanilla mana cost of a legacy spell (classic_spell_cost: flat plus percent of the base mana) replaces the
+        // client's; the cost modifiers below (talents, auras) still apply to it
+        bool usesVanillaCost = false;
+        if (power->PowerType == POWER_MANA && ClassicSpellValue::AppliesToSpell(Id))
+            if (ClassicSpellValue::Cost const* vanillaCost = sSpellMgr->GetClassicSpellCost(Id))
+            {
+                powerCost = ClassicSpellValue::ManaCost(*vanillaCost, int32(unitCaster->GetCreateMana()));
+                usesVanillaCost = true;
+            }
         // PCT cost from total amount
-        if (power->PowerCostPct)
+        if (power->PowerCostPct && !usesVanillaCost)
         {
             switch (power->PowerType)
             {

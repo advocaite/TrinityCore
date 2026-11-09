@@ -232,11 +232,15 @@ enum BattlegroundPlayerPositionConstants
 
 enum class BattlegroundQueueIdType : uint8
 {
-    Battleground    = 0,
-    Arena           = 1,
-    Wargame         = 2,
-    Cheat           = 3,
-    ArenaSkirmish   = 4
+    Battleground        = 0,
+    Arena               = 1,
+    Wargame             = 2,
+    Cheat               = 3,
+    ArenaSkirmish       = 4,
+    SoloShuffle         = 6,
+    RatedSoloShuffle    = 7,
+    SoloRBG             = 8,
+    RatedSoloRBG        = 9
 };
 
 enum class BattlegroundPointCaptureStatus
@@ -271,6 +275,7 @@ class TC_GAME_API Battleground
         /* Battleground */
         // Get methods:
         char const* GetName() const;
+        BattlegroundQueueTypeId GetQueueID() const { return m_QueueID; }
         BattlegroundTypeId GetTypeID() const;
         BattlegroundBracketId GetBracketId() const;
         uint32 GetInstanceID() const        { return m_InstanceID; }
@@ -289,21 +294,20 @@ class TC_GAME_API Battleground
         uint32 GetMinPlayersPerTeam() const;
 
         int32 GetStartDelayTime() const     { return m_StartDelayTime; }
-        uint8 GetArenaType() const          { return m_ArenaType; }
+        uint8 GetArenaType() const          { return m_QueueID.TeamSize; }
         PvPTeamId GetWinner() const { return _winnerTeamId; }
         uint32 GetScriptId() const;
         uint32 GetBonusHonorFromKill(uint32 kills) const;
 
         // Set methods:
         //here we can count minlevel and maxlevel for players
+        void SetQueueId(BattlegroundQueueTypeId queueId) { m_QueueID = queueId; }
         void SetBracket(PVPDifficultyEntry const* bracketEntry);
         void SetInstanceID(uint32 InstanceID) { m_InstanceID = InstanceID; }
         void SetStatus(BattlegroundStatus Status) { m_Status = Status; }
         void SetClientInstanceID(uint32 InstanceID) { m_ClientInstanceID = InstanceID; }
         void SetElapsedTime(uint32 Time)        { m_StartTime = Time; }
         void SetRemainingTime(uint32 Time)      { m_EndTime = Time; }
-        void SetRated(bool state)           { m_IsRated = state; }
-        void SetArenaType(uint8 type)       { m_ArenaType = type; }
         void SetWinner(PvPTeamId winnerTeamId) { _winnerTeamId = winnerTeamId; }
         std::unordered_set<uint32> const* GetPvpStatIds() const { return _pvpStatIds; }
 
@@ -314,6 +318,8 @@ class TC_GAME_API Battleground
         void RemoveFromBGFreeSlotQueue();                   //this method could delete whole BG instance, if another free is available
         void RemoveFromBGFreeSlotQueueOnShutdown() { m_InBGFreeSlotQueue = false; }
 
+        // a player who entered without being invited counts as invited from then on (his leaving decrements it)
+        void RaiseInvitedCountTo(Team team, uint32 n) { uint32& c = (team == ALLIANCE) ? m_InvitedAlliance : m_InvitedHorde; if (c < n) c = n; }
         // never below zero: a player who entered without a queue invitation was never counted, a wrapped counter closes the team for good
         void DecreaseInvitedCount(Team team)      { uint32& invited = (team == ALLIANCE) ? m_InvitedAlliance : m_InvitedHorde; invited = AfterLeave(invited); }
         static constexpr uint32 AfterLeave(uint32 invited) { return invited ? invited - 1 : 0; }
@@ -322,10 +328,67 @@ class TC_GAME_API Battleground
         uint32 GetInvitedCount(Team team) const   { return (team == ALLIANCE) ? m_InvitedAlliance : m_InvitedHorde; }
         bool HasFreeSlots() const;
         uint32 GetFreeSlotsForTeam(Team team) const;
+        // The level of a bot created on demand for a bracket: always inside [bracketMin, bracketMax] (capped at the realm's top level), spread
+        // over the bracket by `roll`, so a 10-19 queue is filled with level 10-19 bots, a twink queue as full as a level 60 one.
+        // Without a bracket range the fallback level is used.
+        static constexpr uint32 BracketLevelFor(uint32 bracketMin, uint32 bracketMax, uint32 realmCap, uint32 fallback, uint32 roll)
+        {
+            if (bracketMin == 0 || bracketMax < bracketMin) return fallback;
+            uint32 const hi = bracketMax < realmCap ? bracketMax : realmCap;
+            uint32 const lo = bracketMin < hi ? bracketMin : hi;
+            return lo + roll % (hi - lo + 1);
+        }
+        // Where a real player is put when several instances of a battleground are running: the instance with the most real players first,
+        // then the one with the most bots on the player's team (more bots to swap out). Fewer instances, more real players in each.
+        static constexpr bool PlacementBetter(uint32 humansA, uint32 teamBotsA, uint32 humansB, uint32 teamBotsB)
+        {
+            return humansA != humansB ? humansA > humansB : teamBotsA > teamBotsB;
+        }
+        // Order in which live instances of one battleground draw from the queue (more real players first, then the emptiest)
+        static constexpr bool FillsBefore(uint32 humansA, uint32 playersA, uint32 humansB, uint32 playersB)
+        {
+            return humansA != humansB ? humansA > humansB : playersA < playersB;
+        }
+        // The balance gate behind GetFreeSlotsForTeam: how many more of "this" team may join. Players already inside count as invited.
+        static uint32 BalancedFreeSlots(uint32 thisTeamInvitedCount, uint32 otherTeamInvitedCount, uint32 thisTeamPlayersCount, uint32 otherTeamPlayersCount,
+            uint32 maxPlayersPerTeam, uint32 minPlayersPerTeam);
+        // How many bots a running or preparing match asks for per top-up cycle for one team. The balance gate only lets one more join at a
+        // time when the sides are level, but the queue invites both sides in turn, so the whole shortfall is asked for. Nothing is asked
+        // for a team that is full.
+        // Places a team still has when the balance gate is ignored (a real player is waiting): team size minus those inside or invited.
+        static constexpr uint32 PhysicalRoom(uint32 insideOrInvited, uint32 maxPlayersPerTeam)
+        {
+            return insideOrInvited < maxPlayersPerTeam ? maxPlayersPerTeam - insideOrInvited : 0u;
+        }
+        // Bots that must leave so `need` real players fit: the shortfall, plus whatever the team is already over its size.
+        static constexpr uint32 PlacesToMake(uint32 taken, uint32 maxPlayersPerTeam, uint32 need)
+        {
+            return PhysicalRoom(taken, maxPlayersPerTeam) >= need ? 0u
+                 : need - PhysicalRoom(taken, maxPlayersPerTeam) + (taken > maxPlayersPerTeam ? taken - maxPlayersPerTeam : 0u);
+        }
+        static constexpr uint32 TopUpRequest(uint32 thisTeamPlayers, uint32 maxPlayersPerTeam)
+        {
+            return thisTeamPlayers < maxPlayersPerTeam ? maxPlayersPerTeam - thisTeamPlayers : 0u;
+        }
+        // A waiting real player's team is full of bots but none can leave this moment (all in combat or carrying a flag): the player waits
+        // for one to become free instead of a second instance being opened. False when the places can be made now, or when the team is
+        // mostly real players and there is nobody to swap.
+        static constexpr bool WaitForBotToFree(uint32 placesToMake, uint32 evictableNow, uint32 botsOnTeam)
+        {
+            return placesToMake > evictableNow && botsOnTeam >= placesToMake;
+        }
+        // The shortfall minus the bots an earlier top-up already created or reused for this side that have not queued yet (their setup is
+        // still running). WSG 2026-10-21: one player's queue opened ten instances, because every 20 s prep tick asked again for places
+        // the bots in setup were about to take, and the surplus formed new battlegrounds.
+        static constexpr uint32 TopUpAfterInFlight(uint32 thisTeamPlayers, uint32 maxPlayersPerTeam, uint32 inFlight)
+        {
+            uint32 const request = TopUpRequest(thisTeamPlayers, maxPlayersPerTeam);
+            return request > inFlight ? request - inFlight : 0u;
+        }
 
         bool isArena() const;
         bool isBattleground() const;
-        bool isRated() const        { return m_IsRated; }
+        bool isRated() const        { return m_QueueID.Rated; }
 
         typedef std::map<ObjectGuid, BattlegroundPlayer> BattlegroundPlayerMap;
         BattlegroundPlayerMap const& GetPlayers() const { return m_Players; }
@@ -349,6 +412,25 @@ class TC_GAME_API Battleground
 
         WorldSafeLocsEntry const* GetTeamStartPosition(TeamId teamId) const;
 
+        // The closed start doors of a team, read from the spawned door objects (not from a position table): the centroid of the
+        // doors that close the team's start room and the unit vector from it into the room. Valid only while at least one such
+        // door is closed. Cached for 2 s per team; `searcher` must be near the team's start (a player of that team).
+        struct StartGateInfo
+        {
+            bool Valid = false;
+            float X = 0.0f, Y = 0.0f, Z = 0.0f;       // centroid of the closing doors
+            float InX = 0.0f, InY = 0.0f;             // unit vector from the doors into the start room
+            uint8 Doors = 0;
+            uint32 StampMs = 0;
+        };
+        StartGateInfo const& GetStartGate(TeamId teamId, WorldObject const* searcher) const;
+
+        // The single rule for mounting in a battleground: nullptr when a mount is allowed, otherwise the reason it is refused
+        // (the start doors are closed / the area is indoors). Spell.cpp and the playerbot API both ask this.
+        char const* GetMountRefusal(Player const* player) const;
+        // Why the terrain data says "indoors" at the player's position (wmo group flags, the WMOAreaTable row that applied, the
+        // area flags): the evidence for a wrong indoor answer. Diagnostics only; not cheap, call from throttled logs.
+        std::string DescribeIndoors(Player const* player) const;
         // Classic.MountIndoorsRules: mounting is refused in an enclosed start area while the doors are closed (checkStartArea) and indoors
         bool IsMountRefused(Player const* player, bool checkStartArea) const;
         // Warsong Gulch starts in the closed flag rooms, the Arathi Basin and Alterac Valley start areas are open ground
@@ -531,6 +613,7 @@ class TC_GAME_API Battleground
 
     private:
         // Battleground
+        BattlegroundQueueTypeId m_QueueID;
         uint32 m_InstanceID;                                // Battleground Instance's GUID!
         BattlegroundStatus m_Status;
         uint32 m_ClientInstanceID;                          // the instance-id which is sent to the client and without any other internal use
@@ -538,13 +621,11 @@ class TC_GAME_API Battleground
         uint32 m_ResetStatTimer;
         uint32 m_ValidStartPositionTimer;
         int32 m_EndTime;                                    // it is set to 120000 when bg is ending and it decreases itself
-        uint8  m_ArenaType;                                 // 2=2v2, 3=3v3, 5=5v5
         bool   m_InBGFreeSlotQueue;                         // used to make sure that BG is only once inserted into the BattlegroundMgr.BGFreeSlotQueue[bgTypeId] deque
         bool   m_SetDeleteThis;                             // used for safe deletion of the bg after end / all players leave
 
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;
-        bool   m_IsRated;                                   // is this battle rated?
         bool   m_PrematureCountDown;
         uint32 m_LastPlayerPositionBroadcast;
 
@@ -567,6 +648,7 @@ class TC_GAME_API Battleground
 
         // Start location
         BattlegroundMap* m_Map;
+        mutable StartGateInfo _startGate[2];
         Position StartPosition[PVP_TEAMS_COUNT];
 
         BattlegroundTemplate const* _battlegroundTemplate;

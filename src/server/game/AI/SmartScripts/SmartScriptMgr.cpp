@@ -359,6 +359,14 @@ void SmartAIMgr::LoadSmartAIFromDB()
                     temp.entryOrGuid, temp.GetScriptType(), temp.event_id);
             }
             break;
+        case SMART_EVENT_VICTIM_ROOTED:
+            if (temp.event.victimRooted.repeatMin == 0 && temp.event.victimRooted.repeatMax == 0 && !(temp.event.event_flags & SMART_EVENT_FLAG_NOT_REPEATABLE) && temp.source_type != SMART_SCRIPT_TYPE_TIMED_ACTIONLIST)
+            {
+                temp.event.event_flags |= SMART_EVENT_FLAG_NOT_REPEATABLE;
+                TC_LOG_ERROR("sql.sql", "SmartAIMgr::LoadSmartAIFromDB: Entry {} SourceType {}, Event {}, Missing Repeat flag.",
+                    temp.entryOrGuid, temp.GetScriptType(), temp.event_id);
+            }
+            break;
         default:
             break;
         }
@@ -846,6 +854,7 @@ bool SmartAIMgr::CheckUnusedEventParams(SmartScriptHolder const& e)
             case SMART_EVENT_ON_SPELL_START: return sizeof(SmartEvent::spellCast);
             case SMART_EVENT_ON_AURA_APPLIED: return sizeof(SmartEvent::spellCast);
             case SMART_EVENT_ON_AURA_REMOVED: return sizeof(SmartEvent::spellCast);
+            case SMART_EVENT_VICTIM_ROOTED: return sizeof(SmartEvent::victimRooted);
             case SMART_EVENT_ON_DESPAWN: return NO_PARAMS;
             case SMART_EVENT_SEND_EVENT_TRIGGER: return NO_PARAMS;
             case SMART_EVENT_AREATRIGGER_EXIT: return NO_PARAMS;
@@ -1037,6 +1046,7 @@ bool SmartAIMgr::CheckUnusedActionParams(SmartScriptHolder const& e)
             case SMART_ACTION_EXIT_VEHICLE: return NO_PARAMS;
             case SMART_ACTION_RESUME_MOVEMENT: return sizeof(SmartAction::resumeMovement);
             case SMART_ACTION_FALL: return sizeof(SmartAction::fall);
+            case SMART_ACTION_MOVE_AWAY_FROM_TARGET: return sizeof(SmartAction::moveAwayFromTarget);
             default:
                 TC_LOG_WARN("sql.sql", "SmartAIMgr: Entry {} SourceType {} Event {} Action {} is using an action with no unused params specified in SmartAIMgr::CheckUnusedActionParams(), please report this.",
                     e.entryOrGuid, e.GetScriptType(), e.event_id, e.GetActionType());
@@ -1269,6 +1279,10 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
                     return false;
                 break;
             }
+            case SMART_EVENT_VICTIM_ROOTED:
+                if (!IsMinMaxValid(e, e.event.victimRooted.repeatMin, e.event.victimRooted.repeatMax))
+                    return false;
+                break;
             case SMART_EVENT_OOC_LOS:
             case SMART_EVENT_IC_LOS:
                 if (!IsMinMaxValid(e, e.event.los.cooldownMin, e.event.los.cooldownMax))
@@ -2450,6 +2464,14 @@ bool SmartAIMgr::IsEventValid(SmartScriptHolder& e)
         case SMART_ACTION_EXIT_VEHICLE:
         case SMART_ACTION_RESUME_MOVEMENT:
         case SMART_ACTION_FALL:
+            break;
+        case SMART_ACTION_MOVE_AWAY_FROM_TARGET:
+            if (!e.action.moveAwayFromTarget.distance || e.action.moveAwayFromTarget.minManaPct > 100)
+            {
+                TC_LOG_ERROR("sql.sql", "SmartAIMgr: Entry {} SourceType {} Event {} Action {} uses invalid distance {} or mana percent {}, skipped.",
+                    e.entryOrGuid, e.GetScriptType(), e.event_id, e.GetActionType(), e.action.moveAwayFromTarget.distance, e.action.moveAwayFromTarget.minManaPct);
+                return false;
+            }
             break;
         case SMART_ACTION_BECOME_PERSONAL_CLONE_FOR_PLAYER:
         {

@@ -1099,6 +1099,7 @@ class TC_GAME_API ObjectMgr
         std::pair<uint8, uint8> const* GetCreatureClassicLevel(uint32 entry) const;
         ClassicCreatureStats const* GetCreatureClassicStats(uint32 entry) const;
         ClassicCreatureClassLevelStats const* GetCreatureClassicClassLevelStats(uint8 level, uint8 unitClass) const;
+        int8 const* GetSpellClassicSummonLevelOffset(uint32 spellId) const;
         void LoadItemClassicBlock();
         uint32 GetItemClassicBlock(uint32 entry) const;
         void LoadShop();
@@ -1281,6 +1282,16 @@ class TC_GAME_API ObjectMgr
         void LoadCreatureLocales();
         void LoadCreatureTemplates();
         void LoadCreatureClassicLevels();
+        void LoadCreatureClassicMelee();
+        // Classic 1.60: vanilla (VMaNGOS) melee hit and swing time of a creature, nullptr when it has none
+        struct CreatureClassicMelee
+        {
+            float DamageMin = 0.0f;     // per hit, VMaNGOS dmg_min x dmg_multiplier
+            float DamageMax = 0.0f;
+            uint32 AttackMs = 0;        // base_attack_time, 0 = keep the template's
+            uint32 RangedAttackMs = 0;
+        };
+        CreatureClassicMelee const* GetCreatureClassicMelee(uint32 entry) const;
         void LoadCreatureTemplateAddons();
         void LoadCreatureTemplateSparring();
         void LoadCreatureTemplate(Field* fields);
@@ -1312,6 +1323,7 @@ class TC_GAME_API ObjectMgr
         void LoadInstanceSpawnGroups();
         void LoadItemTemplates();
         void LoadItemTemplateAddon();
+        void LoadClassicItemDurability();
         void LoadItemScriptNames();
         void LoadQuestTemplateLocale();
         void LoadQuestObjectivesLocale();
@@ -1610,6 +1622,7 @@ class TC_GAME_API ObjectMgr
         bool DeleteGameTele(std::string_view name);
 
         Trainer::Trainer const* GetTrainer(uint32 trainerId) const;
+        std::unordered_map<uint32, Trainer::Trainer> const& GetTrainers() const { return _trainers; }
         uint32 GetCreatureDefaultTrainer(uint32 creatureId) const
         {
             if (uint32 trainerId = GetCreatureTrainerForGossipOption(creatureId, 0, 0))
@@ -1862,6 +1875,7 @@ class TC_GAME_API ObjectMgr
         void BuildPlayerLevelInfo(uint8 race, uint8 class_, uint8 level, PlayerLevelInfo* plinfo) const;
 
         std::unordered_map<std::pair<Races, Classes>, std::unique_ptr<PlayerInfo>> _playerInfo;
+        std::unordered_map<uint32, uint32> _classicBaseMana;   // Classic 1.60: (class << 8 | level) -> VMaNGOS base mana
 
         typedef std::vector<uint32> PlayerXPperLevel;       // [level]
         PlayerXPperLevel _playerXPperLevel;
@@ -1884,6 +1898,8 @@ class TC_GAME_API ObjectMgr
         std::unordered_map<uint32, std::pair<uint8, uint8>> _creatureClassicLevelStore;
         std::unordered_map<uint32, ClassicCreatureStats> _creatureClassicStatsStore;
         std::unordered_map<uint16, ClassicCreatureClassLevelStats> _creatureClassicClassLevelStatsStore;
+        std::unordered_map<uint32, int8> _spellClassicSummonLevelOffsetStore;
+        std::unordered_map<uint32, CreatureClassicMelee> _creatureClassicMeleeStore;
         std::unordered_map<uint32, uint32> _itemClassicBlockStore;
         std::map<uint32, ShopGroup> _shopGroupStore;
         std::map<uint32, ShopProduct> _shopProductStore;

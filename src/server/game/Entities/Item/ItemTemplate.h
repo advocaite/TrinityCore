@@ -340,6 +340,12 @@ enum ItemFlags4
     ITEM_FLAG4_DONT_REPORT_LOOT_LOG_TO_SELF                     = 0x10000000,
 };
 
+enum ItemFlags5
+{
+    // Classic 1.60: set on exactly the soul, herb, enchanting, mining and skinning bags; they also fit the reagent bag slot
+    ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT                    = 0x00000040,
+};
+
 enum ItemFlagsCustom
 {
     ITEM_FLAGS_CU_UNUSED                = 0x0001,
@@ -946,6 +952,11 @@ struct TC_GAME_API ItemTemplate
     bool IsVellum() const { return HasFlag(ITEM_FLAG3_CAN_STORE_ENCHANTS); }
     bool IsConjuredConsumable() const { return GetClass() == ITEM_CLASS_CONSUMABLE && HasFlag(ITEM_FLAG_CONJURED); }
     bool IsCraftingReagent() const { return HasFlag(ITEM_FLAG2_USED_IN_A_TRADESKILL); }
+    bool FitsReagentBagSlot() const
+    {
+        return GetClass() == ITEM_CLASS_CONTAINER
+            && (GetSubClass() == ITEM_SUBCLASS_REAGENT_CONTAINER || HasFlag(ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT));
+    }
     bool HasSignature() const;
 
     bool IsWeapon() const { return GetClass() == ITEM_CLASS_WEAPON; }
@@ -962,6 +973,7 @@ struct TC_GAME_API ItemTemplate
             case ITEM_SUBCLASS_WEAPON_GUN:
             case ITEM_SUBCLASS_WEAPON_CROSSBOW:
             case ITEM_SUBCLASS_WEAPON_WAND:
+            case ITEM_SUBCLASS_WEAPON_THROWN:   // Classic 1.60: thrown weapons sit in the ranged slot and feed Throw (2764)
                 return true;
             default:
                 break;
@@ -973,6 +985,7 @@ struct TC_GAME_API ItemTemplate
     inline bool HasFlag(ItemFlags2 flag) const { return (ExtendedData->Flags[1] & flag) != 0; }
     inline bool HasFlag(ItemFlags3 flag) const { return (ExtendedData->Flags[2] & flag) != 0; }
     inline bool HasFlag(ItemFlags4 flag) const { return (ExtendedData->Flags[3] & flag) != 0; }
+    inline bool HasFlag(ItemFlags5 flag) const { return (ExtendedData->Flags[4] & flag) != 0; }
     inline bool HasFlag(ItemFlagsCustom customFlag) const { return (FlagsCu & customFlag) != 0; }
 
     char const* GetDefaultLocaleName() const;

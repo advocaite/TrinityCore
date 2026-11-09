@@ -1,0 +1,32 @@
+-- Forever talents Holy Binding (priest, 1328569) and Bloom (druid, 1328621) do what their tooltips say.
+-- C++: classic_spell_pri_holy_binding (Flash Heal ranks) in talents/classic_talents_priest_paladin.cpp,
+-- classic_spell_dru_bloom (Rejuvenation and Regrowth ranks) in talents/classic_talents_warlock_druid.cpp. Safe to run again.
+DELETE FROM `spell_script_names` WHERE `ScriptName` IN ('classic_spell_pri_holy_binding', 'classic_spell_dru_bloom');
+INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
+(2061, 'classic_spell_pri_holy_binding'),
+(9472, 'classic_spell_pri_holy_binding'),
+(9473, 'classic_spell_pri_holy_binding'),
+(9474, 'classic_spell_pri_holy_binding'),
+(10915, 'classic_spell_pri_holy_binding'),
+(10916, 'classic_spell_pri_holy_binding'),
+(10917, 'classic_spell_pri_holy_binding'),
+(774, 'classic_spell_dru_bloom'),
+(1058, 'classic_spell_dru_bloom'),
+(1430, 'classic_spell_dru_bloom'),
+(2090, 'classic_spell_dru_bloom'),
+(2091, 'classic_spell_dru_bloom'),
+(3627, 'classic_spell_dru_bloom'),
+(8910, 'classic_spell_dru_bloom'),
+(9839, 'classic_spell_dru_bloom'),
+(9840, 'classic_spell_dru_bloom'),
+(9841, 'classic_spell_dru_bloom'),
+(25299, 'classic_spell_dru_bloom'),
+(8936, 'classic_spell_dru_bloom'),
+(8938, 'classic_spell_dru_bloom'),
+(8939, 'classic_spell_dru_bloom'),
+(8940, 'classic_spell_dru_bloom'),
+(8941, 'classic_spell_dru_bloom'),
+(9750, 'classic_spell_dru_bloom'),
+(9856, 'classic_spell_dru_bloom'),
+(9857, 'classic_spell_dru_bloom'),
+(9858, 'classic_spell_dru_bloom');

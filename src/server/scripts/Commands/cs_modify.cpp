@@ -316,7 +316,7 @@ public:
     }
 
     //Edit Player TP
-    static bool HandleModifyTalentCommand(ChatHandler* /*handler*/, char const* /*args*/)
+    static bool HandleModifyTalentCommand(ChatHandler* handler, char const* /*args*/)
     {
         /* TODO: 6.x remove this
         if (!*args)
@@ -359,6 +359,10 @@ public:
 
         handler->SendSysMessage(LANG_NO_CHAR_SELECTED);
         handler->SetSentErrorMessage(true);*/
+        // Classic 1.60 talents are trait currency the client works out itself from the DB2 rows, so points cannot be handed to
+        // one character; say so instead of doing nothing.
+        handler->SendSysMessage("Talent points cannot be given to one character here. Set Rate.Talent in zz-9-local.conf (2 = two points a level) and restart the server.");
+        handler->SetSentErrorMessage(true);
         return false;
     }
 
@@ -415,6 +419,9 @@ public:
             target->SetSpeedRate(MOVE_RUN, allSpeed);
             target->SetSpeedRate(MOVE_SWIM, allSpeed);
             target->SetSpeedRate(MOVE_FLIGHT, allSpeed);
+            target->SetSpeedRate(MOVE_RUN_BACK, allSpeed);
+            target->SetSpeedRate(MOVE_SWIM_BACK, allSpeed);
+            target->SetSpeedRate(MOVE_FLIGHT_BACK, allSpeed);
             return true;
         }
         return false;

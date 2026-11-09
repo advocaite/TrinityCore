@@ -21,6 +21,7 @@
 
 #include "ScriptMgr.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "ObjectAccessor.h"
 #include "Pet.h"
 #include "Player.h"
@@ -45,6 +46,9 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_SHADOW_BOLT          = 17793,
     SPELL_CWD_SHADOW_VULNERABILITY          = 17794,    // SPELL_AURA_MOD_SCHOOL_MASK_DAMAGE_FROM_CASTER, shadow, 12 sec
     SPELL_CWD_SOUL_SIPHON                   = 17804,
+    SPELL_CWD_NIGHTFALL                     = 18094,
+    SPELL_CWD_PYROCLASM_STUN                = 18093,    // stun, 3 sec
+    SPELL_CWD_SHADOW_TRANCE                 = 17941,    // next Shadow Bolt instant, 10 sec
     SPELL_CWD_MASTER_DEMONOLOGIST           = 23785,
     SPELL_CWD_MD_IMP                        = 23759,    // area aura pet: fire damage done
     SPELL_CWD_MD_VOIDWALKER                 = 23760,    // area aura pet: physical damage taken
@@ -71,9 +75,12 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_DECIMATION                    = 440870,
+    SPELL_CWD_DECIMATION_BUFF               = 440873,   // Soul Fire cast time (bp0) and no Soul Shard, 10 sec
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
+    SPELL_CWD_PREDATORY_STRIKES             = 16972,
     SPELL_CWD_THICK_HIDE_ARMOR              = 9970701,  // serverside: SPELL_AURA_MOD_BASE_RESISTANCE armor (bp = armor)
     SPELL_CWD_BLOOD_FRENZY                  = 16958,
     SPELL_CWD_BLOOD_FRENZY_RAGE             = 16959,
@@ -86,6 +93,15 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_KING_OF_THE_JUNGLE            = 417046,
     SPELL_CWD_KING_OF_THE_JUNGLE_ENERGIZE   = 417045,
     SPELL_CWD_REND_AND_TEAR                 = 1223246,
+    SPELL_CWD_LEADER_OF_THE_PACK            = 17007,
+    SPELL_CWD_LEADER_OF_THE_PACK_AURA       = 24932,    // area aura party, 45 yd: +3% critical strike chance; Cat, Bear and Dire Bear Form only
+    SPELL_CWD_HEART_OF_THE_WILD             = 17003,
+    SPELL_CWD_HEART_OF_THE_WILD_BEAR        = 24899,    // total stat percentage (stamina), bp = amount
+    SPELL_CWD_HEART_OF_THE_WILD_CAT         = 24900,    // total stat percentage (strength), bp = amount
+    SPELL_CWD_FERAL_SWIFTNESS               = 17002,    // effect 0: dodge, effect 1: Cat Form movement speed (dummy)
+    SPELL_CWD_FERAL_SWIFTNESS_CAT           = 24867,    // movement speed, bp = amount
+    SPELL_CWD_NATURAL_REACTION_RAGE         = 417053,   // energize rage (rage x10)
+    SPELL_CWD_OVERGROWTH                    = 17245,    // effect 0: extra Entangling Roots targets (dummy)
 };
 
 enum ClassicWarlockDruidTalentMisc
@@ -99,6 +115,8 @@ enum ClassicWarlockDruidTalentMisc
     NPC_CWD_SUCCUBUS                        = 1863,
     NPC_CWD_INCUBUS                         = 185317,
     NPC_CWD_FELGUARD                        = 213450,
+
+    CWD_STARFIRE_FAMILY_FLAG_0              = 0x4,      // druid SpellFamilyFlags[0] bit of every Starfire rank
 };
 
 namespace ClassicTalentsWarlockDruid
@@ -314,6 +332,22 @@ namespace ClassicTalentsWarlockDruid
 
         druid->CastSpell(druid, SPELL_CWD_THICK_HIDE_ARMOR, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(armor));
     }
+
+    // 16972 - Predatory Strikes: "Increases your melee attack power in Cat, Bear and Dire Bear Form by $s1% of your level." The client
+    // aura has the percent on effect 0 and an attack power effect 1 with no value; the attack power is filled in here, for the forms only.
+    void UpdatePredatoryStrikes(Unit* druid, bool leavingForm = false)
+    {
+        AuraEffect* percent = druid->GetAuraEffect(SPELL_CWD_PREDATORY_STRIKES, EFFECT_0);
+        AuraEffect* attackPower = druid->GetAuraEffect(SPELL_CWD_PREDATORY_STRIKES, EFFECT_1);
+        if (!percent || !attackPower)
+            return;
+
+        ShapeshiftForm const form = druid->GetShapeshiftForm();
+        bool const feral = !leavingForm && (form == FORM_CAT_FORM || form == FORM_BEAR_FORM || form == FORM_DIRE_BEAR_FORM);
+        SpellEffectValue const amount = feral ? std::floor(percent->GetAmount() * druid->GetLevel() / 100.0) : 0.0;
+        if (attackPower->GetAmount() != amount)
+            attackPower->ChangeAmount(amount);
+    }
 }
 
 using namespace ClassicTalentsWarlockDruid;
@@ -465,6 +499,94 @@ class classic_talent_warl_improved_shadow_bolt : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_talent_warl_improved_shadow_bolt::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_talent_warl_improved_shadow_bolt::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 980, 1014, 6217, 11711, 11712, 11713 - Curse of Agony: the damage per tick ramps up in three stages of four ticks, half, full and one and a
+// half of the listed tick (the total over the 12 ticks stays the listed damage). Behaviour from vMaNGOS (GPL-2.0), Aura::HandlePeriodicDamage:
+// fdamage += (-1 + (tick - 1) / 4) * (base / 2). The tick amount itself still comes from the client spell data.
+class classic_spell_warl_curse_of_agony : public AuraScript
+{
+    static constexpr uint32 TICKS_PER_STAGE = 4;
+
+    void CalculateDamage(AuraEffect const* aurEff, Unit const* /*victim*/, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        // GetTickNumber is already counted for the tick being calculated (first tick = 1)
+        uint32 const tick = std::max<uint32>(aurEff->GetTickNumber(), 1);
+        uint32 const stage = (tick - 1) / TICKS_PER_STAGE;
+        pctMod *= 0.5f + 0.5f * float(std::min<uint32>(stage, 2));
+    }
+
+    void Register() override
+    {
+        DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_warl_curse_of_agony::CalculateDamage, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// 18094 - Nightfall: "Gives you a $s1% chance to get a Shadow Trance after dealing damage with Corruption or Drain Life." The client spell is a
+// dummy aura, nothing cast 17941 Shadow Trance, so the talent never procced. Each tick is one roll (vanilla: periodic damage of the two spells).
+class classic_talent_warl_nightfall : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_SHADOW_TRANCE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        // Corruption: warlock family flag 0x2, Drain Life: 0x8
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && (spellInfo->SpellFamilyFlags[0] & 0xA);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+
+        if (!roll_chance(float(aurEff->GetAmount())))
+            return;
+
+        GetTarget()->CastSpell(GetTarget(), SPELL_CWD_SHADOW_TRANCE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringAura(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_nightfall::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_nightfall::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 18073 - Pyroclasm: "Gives your Rain of Fire, Hellfire and Soul Fire spells a $s1% chance to stun the target for 3 sec." Effect 0 is a dummy
+// with the chance, effect 1 triggers 18350 (a spell with only a dummy effect that nothing handled), so the stun 18093 was never cast.
+// Soul Fire and Hellfire share the warlock family flag 0x40, Rain of Fire is 0x20 (the spell_proc row disables effect 1).
+class classic_talent_warl_pyroclasm : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_PYROCLASM_STUN });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && (spellInfo->SpellFamilyFlags[0] & 0x60)
+            && eventInfo.GetActionTarget();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        if (!roll_chance(float(aurEff->GetAmount())))
+            return;
+
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_CWD_PYROCLASM_STUN, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringAura(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_pyroclasm::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_pyroclasm::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -666,6 +788,98 @@ class classic_talent_warl_conflagrate : public SpellScript
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(classic_talent_warl_conflagrate::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 412758, 1293812, 1293813 - Incinerate (70532): "Deals $s1 Fire damage to your target and an additional $m2% damage if the target is
+// afflicted by Immolate." Effect 1 is the bonus as a dummy. The Immolate is the warlock's own (warlock family flag 0x4), as for Conflagrate.
+class classic_spell_warl_incinerate : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !victim)
+            return;
+
+        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_WARLOCK, flag128(0x4, 0, 0, 0), caster->GetGUID()))
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValue(caster));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warl_incinerate::HandleCalcDamage);
+    }
+};
+
+// 440870 - Decimation (70532): "When you cast Shadow Bolt or Searing Pain on an enemy below $m3% health, they deal $m4% increased damage, and
+// for the next $440873d your Soul Fire spell has its cast time reduced by $m1% and costs no Soul Shards." Effect 3 is a damage spell modifier
+// on Shadow Bolt and Searing Pain that the client data applies at any health, so the talent keeps it at 0 and the bonus is given per target by
+// classic_spell_warl_decimation. Effects 0 and 2 (cast time, health threshold) are dummies.
+class classic_talent_warl_decimation : public AuraScript
+{
+    void CalculateAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& /*canBeRecalculated*/)
+    {
+        amount = 0;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_talent_warl_decimation::CalculateAmount, EFFECT_3, SPELL_AURA_ADD_PCT_MODIFIER);
+    }
+};
+
+// Shadow Bolt (686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661, 25307) and Searing Pain (5676, 17919, 17920, 17921, 17922, 17923) with
+// Decimation: on a target below $m3% health, +$m4% damage and 440873 (Soul Fire cast time -$m1%, no Soul Shard) on the warlock.
+class classic_spell_warl_decimation : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_CWD_DECIMATION, EFFECT_3 } }) && ValidateSpellInfo({ SPELL_CWD_DECIMATION_BUFF });
+    }
+
+    // the talent's health threshold, or 0 when the warlock does not have it
+    static int32 GetThreshold(Unit const* caster)
+    {
+        AuraEffect const* threshold = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_2);
+        return threshold ? threshold->GetAmountAsInt() : 0;
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        int32 const threshold = GetThreshold(caster);
+        if (!victim || threshold <= 0 || !victim->HealthBelowPct(threshold))
+            return;
+
+        // effect 3 of the talent at the warlock's rank (the aura itself is kept at 0)
+        SpellInfo const* talentInfo = sSpellMgr->AssertSpellInfo(SPELL_CWD_DECIMATION, DIFFICULTY_NONE);
+        AddPct(pctMod, talentInfo->GetEffect(EFFECT_3).CalcValue(caster));
+    }
+
+    void HandleBeforeHit(SpellMissInfo missInfo)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        int32 const threshold = GetThreshold(caster);
+        if (missInfo != SPELL_MISS_NONE || !target || threshold <= 0 || !target->HealthBelowPct(threshold))
+            return;
+
+        AuraEffect const* castTime = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_0);
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        if (castTime && castTime->GetAmount() > 0)
+            args.AddSpellBP0(-castTime->GetAmountAsInt());
+        caster->CastSpell(caster, SPELL_CWD_DECIMATION_BUFF, args);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warl_decimation::HandleCalcDamage);
+        BeforeHit += BeforeSpellHitFn(classic_spell_warl_decimation::HandleBeforeHit);
     }
 };
 
@@ -978,6 +1192,84 @@ namespace ClassicFurorCat
     }
 }
 
+// 17007 - Leader of the Pack: "While in Cat Form, Bear Form or Dire Bear Form, the Leader of the Pack increases ranged and melee critical strike
+// chance of all party members within 45 yards by 3%." The client talent is a dummy aura; the effect is the passive party area aura 24932, which
+// nothing cast, so no party ever got the critical strike chance. Behaviour from vMaNGOS (GPL-2.0): the aura is cast on the druid when a
+// feral form is entered with the talent known and removed when the form ends.
+static void UpdateLeaderOfThePack(Unit* druid, ShapeshiftForm form)
+{
+    bool const feral = form == FORM_CAT_FORM || form == FORM_BEAR_FORM || form == FORM_DIRE_BEAR_FORM;
+    if (feral && druid->HasAura(SPELL_CWD_LEADER_OF_THE_PACK))
+    {
+        if (!druid->HasAura(SPELL_CWD_LEADER_OF_THE_PACK_AURA))
+            druid->CastSpell(druid, SPELL_CWD_LEADER_OF_THE_PACK_AURA, TRIGGERED_FULL_MASK);
+    }
+    else
+        druid->RemoveAurasDueToSpell(SPELL_CWD_LEADER_OF_THE_PACK_AURA);
+}
+
+// 17003 - Heart of the Wild: "Increases your Intellect by $s1%. In addition, while in Bear or Dire Bear Form your Stamina is increased by $s2% and
+// while in Cat Form your Strength is increased by $s3%." The client talent holds the intellect aura and two dummy effects with the form
+// amounts; the form auras 24899 (bear, stamina) and 24900 (cat, strength) are in the client data but nothing cast them, so the form bonus
+// never applied. Behaviour from vMaNGOS (GPL-2.0, Aura::HandleAuraModShapeshift): the form aura is cast with the talent amount of the form
+// when the form is entered and removed when it ends.
+static void UpdateHeartOfTheWild(Unit* druid, ShapeshiftForm form)
+{
+    uint32 wanted = 0;
+    SpellEffIndex amountIndex = EFFECT_0;
+    if (form == FORM_BEAR_FORM || form == FORM_DIRE_BEAR_FORM)
+    {
+        wanted = SPELL_CWD_HEART_OF_THE_WILD_BEAR;
+        amountIndex = EFFECT_1;
+    }
+    else if (form == FORM_CAT_FORM)
+    {
+        wanted = SPELL_CWD_HEART_OF_THE_WILD_CAT;
+        amountIndex = EFFECT_2;
+    }
+
+    for (uint32 formAura : { SPELL_CWD_HEART_OF_THE_WILD_BEAR, SPELL_CWD_HEART_OF_THE_WILD_CAT })
+        if (formAura != wanted)
+            druid->RemoveAurasDueToSpell(formAura);
+
+    if (!wanted)
+        return;
+
+    AuraEffect const* talent = druid->GetAuraEffect(SPELL_CWD_HEART_OF_THE_WILD, amountIndex);
+    int32 const amount = talent ? talent->GetAmountAsInt() : 0;
+    if (Aura* current = druid->GetAura(wanted))
+    {
+        AuraEffect const* currentEffect = current->GetEffect(EFFECT_0);
+        if (amount > 0 && currentEffect && currentEffect->GetAmountAsInt() == amount)
+            return;
+
+        druid->RemoveAurasDueToSpell(wanted);
+    }
+
+    if (amount > 0)
+        druid->CastSpell(druid, wanted, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(amount));
+}
+
+// 17002 - Feral Swiftness (70532): "Increases your movement speed while in Cat Form by $m2%, and increases your chance to Dodge by $m1%."
+// Effect 0 is the dodge aura; effect 1 is the Cat Form speed as a dummy, so the speed never applied. Behaviour from vMaNGOS (GPL-2.0,
+// Aura::HandleAuraModShapeshift): the speed aura 24867 is cast in Cat Form and removed when the form ends; here with the talent amount.
+static void UpdateFeralSwiftness(Unit* druid, ShapeshiftForm form)
+{
+    AuraEffect const* talent = form == FORM_CAT_FORM ? druid->GetAuraEffect(SPELL_CWD_FERAL_SWIFTNESS, EFFECT_1) : nullptr;
+    int32 const amount = talent ? talent->GetAmountAsInt() : 0;
+    if (Aura* current = druid->GetAura(SPELL_CWD_FERAL_SWIFTNESS_CAT))
+    {
+        AuraEffect const* currentEffect = current->GetEffect(EFFECT_0);
+        if (amount > 0 && currentEffect && currentEffect->GetAmountAsInt() == amount)
+            return;
+
+        druid->RemoveAurasDueToSpell(SPELL_CWD_FERAL_SWIFTNESS_CAT);
+    }
+
+    if (amount > 0)
+        druid->CastSpell(druid, SPELL_CWD_FERAL_SWIFTNESS_CAT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(amount));
+}
+
 // 768 - Cat Form, 5487 - Bear Form, 9634 - Dire Bear Form, 24858 - Moonkin Form
 // 16929 - Thick Hide: base armor while in these forms (UpdateThickHide).
 // 17056 - Furor: "Gives you a $m1% chance to gain 10 Rage when shapeshifting into Bear Form or Dire Bear Form." (17057: 10 rage), and the
@@ -986,15 +1278,20 @@ class classic_talent_dru_form_talents : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_CWD_THICK_HIDE_ARMOR, SPELL_CWD_FUROR_RAGE });
+        return ValidateSpellInfo({ SPELL_CWD_THICK_HIDE_ARMOR, SPELL_CWD_FUROR_RAGE, SPELL_CWD_LEADER_OF_THE_PACK_AURA,
+            SPELL_CWD_HEART_OF_THE_WILD_BEAR, SPELL_CWD_HEART_OF_THE_WILD_CAT, SPELL_CWD_FERAL_SWIFTNESS_CAT });
     }
 
     void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
     {
         Unit* druid = GetTarget();
         UpdateThickHide(druid);
+        UpdatePredatoryStrikes(druid);
 
         ShapeshiftForm const form = ShapeshiftForm(aurEff->GetMiscValue());
+        UpdateLeaderOfThePack(druid, form);
+        UpdateHeartOfTheWild(druid, form);
+        UpdateFeralSwiftness(druid, form);
         if (form == FORM_BEAR_FORM || form == FORM_DIRE_BEAR_FORM)
         {
             ClassicFurorCat::EnteredBearForm(druid);
@@ -1010,6 +1307,11 @@ class classic_talent_dru_form_talents : public AuraScript
     {
         Unit* druid = GetTarget();
         druid->RemoveAurasDueToSpell(SPELL_CWD_THICK_HIDE_ARMOR);
+        UpdatePredatoryStrikes(druid, true);
+        // the unit already stands in the next form (or none) when this runs
+        UpdateLeaderOfThePack(druid, druid->GetShapeshiftForm());
+        UpdateHeartOfTheWild(druid, druid->GetShapeshiftForm());
+        UpdateFeralSwiftness(druid, druid->GetShapeshiftForm());
 
         ShapeshiftForm const form = ShapeshiftForm(aurEff->GetMiscValue());
         if (form == FORM_CAT_FORM)
@@ -1022,6 +1324,135 @@ class classic_talent_dru_form_talents : public AuraScript
     {
         AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_form_talents::HandleApply, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
         AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_form_talents::HandleRemove, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 17007 - Leader of the Pack: the talent learned or lost while in a feral form
+class classic_talent_dru_leader_of_the_pack : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_LEADER_OF_THE_PACK_AURA });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        UpdateLeaderOfThePack(GetTarget(), GetTarget()->GetShapeshiftForm());
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_CWD_LEADER_OF_THE_PACK_AURA);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_leader_of_the_pack::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_leader_of_the_pack::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 17003 - Heart of the Wild: the talent learned, ranked up or lost while in a form (the first effect is the intellect aura, the form
+// amounts are the dummy effects 1 and 2)
+class classic_talent_dru_heart_of_the_wild : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_HEART_OF_THE_WILD_BEAR, SPELL_CWD_HEART_OF_THE_WILD_CAT }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        UpdateHeartOfTheWild(GetTarget(), GetTarget()->GetShapeshiftForm());
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_CWD_HEART_OF_THE_WILD_BEAR);
+        GetTarget()->RemoveAurasDueToSpell(SPELL_CWD_HEART_OF_THE_WILD_CAT);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_heart_of_the_wild::HandleApply, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_heart_of_the_wild::HandleRemove, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 417051 - Natural Reaction (70532): "Increases your dodge chance by $m1%, and gives you a $m2% chance to gain ${$417053m1/10} Rage each time you
+// dodge." Effect 0 is the dodge aura; the rage chance ($m2) is effect 1, a dummy aura with no proc data, so a dodge gave nothing. A dodged melee
+// attack rolls the chance and casts 417053.
+class classic_talent_dru_natural_reaction : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_NATURAL_REACTION_RAGE }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        return (eventInfo.GetHitMask() & PROC_HIT_DODGE) && roll_chance(aurEff->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        GetTarget()->CastSpell(GetTarget(), SPELL_CWD_NATURAL_REACTION_RAGE, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_talent_dru_natural_reaction::CheckProc, EFFECT_1, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_talent_dru_natural_reaction::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// 17002 - Feral Swiftness: the talent learned or lost while in Cat Form
+class classic_talent_dru_feral_swiftness : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_FERAL_SWIFTNESS_CAT }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        UpdateFeralSwiftness(GetTarget(), GetTarget()->GetShapeshiftForm());
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_CWD_FERAL_SWIFTNESS_CAT);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_feral_swiftness::HandleApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_feral_swiftness::HandleRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 16850 - Improved Starfire: "Reduces the cast time of your Starfire spell by $s1 sec and gives you a $s2% chance to stun the target for 3 sec."
+// Effect 0 is the cast time modifier; effect 1 is a proc trigger spell (stun 16922) with a proc chance of 100 and the talent rank in its amount,
+// so it stunned on every Starfire that reached it, or never. The chance is rolled here (Starfire: druid family flag 0x4).
+class classic_spell_dru_improved_starfire : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        AuraEffect const* chance = GetEffect(EFFECT_1);
+        Unit* target = eventInfo.GetActionTarget();
+        if (!spellInfo || !chance || !target || target == GetTarget() || !target->IsAlive())
+            return false;
+
+        if (spellInfo->SpellFamilyName != SPELLFAMILY_DRUID || !(spellInfo->SpellFamilyFlags[0] & 0x00000004))
+            return false;
+
+        return roll_chance(chance->GetAmountAsInt());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_dru_improved_starfire::CheckProc);
     }
 };
 
@@ -1053,6 +1484,35 @@ class classic_talent_dru_thick_hide : public AuraScript
         AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_thick_hide::HandleApplyOrRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
         AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_thick_hide::HandleApplyOrRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
         OnHeartbeat += AuraHeartbeatFn(classic_talent_dru_thick_hide::HandleHeartbeat);
+    }
+};
+
+// 16972 - Predatory Strikes: keeps the feral attack power up to date (talent learned while shapeshifted, level up)
+class classic_talent_dru_predatory_strikes : public AuraScript
+{
+    void Refresh()
+    {
+        Unit* druid = GetUnitOwner();
+        if (!druid || !druid->IsInWorld())
+            return;
+
+        druid->m_Events.AddEventAtOffset([druid]() { UpdatePredatoryStrikes(druid); }, 0ms);
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Refresh();
+    }
+
+    void HandleHeartbeat()
+    {
+        Refresh();
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_predatory_strikes::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnHeartbeat += AuraHeartbeatFn(classic_talent_dru_predatory_strikes::HandleHeartbeat);
     }
 };
 
@@ -1187,21 +1647,62 @@ class classic_talent_dru_eclipse : public AuraScript
     }
 };
 
-// 408255 - Eclipse (buff): the client data has a proc charge on any harmful spell; the Starfire script consumes the stacks instead
+// 408255 - Eclipse (buff): the client data has a proc charge on any harmful spell; the Starfire script consumes the stacks instead.
+// Effect 0 is a plain dummy (-500 ms per Starfire), so the client did not know about it: the cast bar showed 2.5 sec (the
+// server sends the real cast time) but the Starfire button tooltip stayed at 3.0 sec. While the buff is up a player gets a
+// flat cast time spell modifier on the Starfire class flag (druid family flag 0x4), which the client also uses for the
+// tooltip. The server applies the same modifier to the real cast time, so the Starfire script no longer subtracts it.
 class classic_talent_dru_eclipse_buff : public AuraScript
 {
+public:
+    ~classic_talent_dru_eclipse_buff()
+    {
+        delete _castTimeMod;
+    }
+
+private:
     bool CheckProc(ProcEventInfo& /*eventInfo*/)
     {
         return false;
     }
 
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player || _castTimeMod)
+            return;
+
+        SpellFlatModifierByClassMask* mod = new SpellFlatModifierByClassMask(SpellModOp::ChangeCastTime, GetId(), GetAura(),
+            flag128(CWD_STARFIRE_FAMILY_FLAG_0, 0, 0, 0));
+        mod->value = aurEff->GetAmountAsInt();
+        _castTimeMod = mod;
+        player->AddSpellMod(_castTimeMod, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (!_castTimeMod)
+            return;
+
+        if (Player* player = GetTarget()->ToPlayer())
+            player->AddSpellMod(_castTimeMod, false);
+
+        delete _castTimeMod;
+        _castTimeMod = nullptr;
+    }
+
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(classic_talent_dru_eclipse_buff::CheckProc);
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_eclipse_buff::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_eclipse_buff::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
+
+    SpellModifier* _castTimeMod = nullptr;
 };
 
-// 2912, 8949, 8950, 8951, 9875, 9876, 25298 - Starfire: one 408255 Eclipse charge reduces the cast time
+// 2912, 8949, 8950, 8951, 9875, 9876, 25298 - Starfire: one 408255 Eclipse charge reduces the cast time. For players the
+// reduction comes from the buff's cast time spell modifier (see classic_talent_dru_eclipse_buff); other casters get it here.
 class classic_talent_dru_eclipse_starfire : public SpellScript
 {
     int32 CalcCastTime(int32 castTime) override
@@ -1210,7 +1711,8 @@ class classic_talent_dru_eclipse_starfire : public SpellScript
         if (AuraEffect const* buff = caster->GetAuraEffect(SPELL_CWD_ECLIPSE_BUFF, EFFECT_0, caster->GetGUID()))
         {
             _usesCharge = true;
-            castTime = std::max(0, castTime + int32(buff->GetBaseAmount()));
+            if (!caster->IsPlayer())
+                castTime = std::max(0, castTime + int32(buff->GetBaseAmount()));
         }
         return castTime;
     }
@@ -1285,6 +1787,235 @@ class classic_talent_dru_king_of_the_jungle : public SpellScript
     }
 };
 
+// 22568, 22827, 22828, 22829, 31018 - Ferocious Bite: "Finishing move that causes damage per combo point and converts each extra point of
+// energy into ($f1+$AP/410) additional damage." The client spell has the damage effect (base points per combo point) and a dummy effect 1
+// holding the energy factor in percent (100 / 150 / 200 / 250 / 270); nothing read it, so the extra energy was never converted into damage
+// and stayed in the pool. Added to the damage effect before the damage bonuses: the energy left after the 35 energy cost times the factor,
+// plus attack power * 3% per combo point; the energy is used up. Behaviour from vMaNGOS (GPL-2.0, src/scripts/spells/spell_druid.cpp,
+// DruidFerociousBiteScript: patch 1.12 "AP * 3% * combo + energy * factor + damage"). The retail script bound to the first rank needs a
+// retail spell.
+class classic_spell_dru_ferocious_bite : public SpellScript
+{
+    static constexpr float ATTACK_POWER_PER_COMBO_POINT = 0.03f;    // vMaNGOS: 3% of attack power per combo point (patch 1.12)
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } }) && spellInfo->GetEffect(EFFECT_1).Effect == SPELL_EFFECT_DUMMY;
+    }
+
+    void HandleLaunchDamage(SpellEffIndex /*effIndex*/)
+    {
+        Unit* druid = GetCaster();
+        // the combo points are spent after the effects (Spell::SpendPendingComboPoints), so they are still on the druid here
+        int32 const comboPoints = druid->GetPower(POWER_COMBO_POINTS);
+        int32 const energy = druid->GetPower(POWER_ENERGY);
+        SpellEffectValue bonus = druid->GetTotalAttackPowerValue(BASE_ATTACK) * comboPoints * ATTACK_POWER_PER_COMBO_POINT;
+        bonus += energy * (GetEffectInfo(EFFECT_1).CalcValue(druid) / 100.0);
+        TC_LOG_INFO("scripts.classic", "Ferocious Bite {}: combo points {}, energy left {}, energy factor {}%, attack power {}, base damage {}, bonus {}",
+            GetSpellInfo()->Id, comboPoints, energy, GetEffectInfo(EFFECT_1).CalcValue(druid), druid->GetTotalAttackPowerValue(BASE_ATTACK),
+            GetEffectValue(), bonus);
+        SetEffectValue(GetEffectValue() + bonus);
+        druid->SetPower(POWER_ENERGY, 0);
+    }
+
+    void Register() override
+    {
+        OnEffectLaunchTarget += SpellEffectFn(classic_spell_dru_ferocious_bite::HandleLaunchDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 1079, 9492, 9493, 9752, 9894, 9896 - Rip: patch 1.12 "now increases in potency with greater attack power". Behaviour from vMaNGOS
+// (GPL-2.0, src/game/Spells/SpellAuras.cpp, periodic damage, SPELLFAMILY_DRUID Rip): every tick deals attack power * combo points / 100 more,
+// the combo points counting up to 4 (a fifth adds nothing). The combo points are those the cast spends, read when the aura is created.
+class classic_spell_dru_rip : public AuraScript
+{
+    static constexpr int32 MAX_COMBO_POINTS_FOR_ATTACK_POWER = 4;   // vMaNGOS caps the attack power part at 4 combo points
+
+    void CalculateAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+        Unit* druid = GetCaster();
+        if (!druid || !druid->IsPlayer())
+            return;
+
+        int32 const comboPoints = std::min<int32>(druid->GetPower(POWER_COMBO_POINTS), MAX_COMBO_POINTS_FOR_ATTACK_POWER);
+        amount += druid->GetTotalAttackPowerValue(BASE_ATTACK) * comboPoints / 100.0;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_dru_rip::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// Entangling Roots (339, 1062, 5195, 5196, 9852, 9853) with 17245 Overgrowth (70532): "You may $?s17245[have up to ${$17245m1+1} targets][only
+// have 1 target] Rooted at a time." Nothing limited the targets. Each druid's rooted targets are kept in order of rooting; when a new one is
+// rooted beyond 1 + the Overgrowth amount, the Roots on the oldest is removed. Nature's Grasp roots (19970-19975) do not have the limit.
+class classic_spell_dru_entangling_roots_limit : public AuraScript
+{
+    struct RootedTarget
+    {
+        ObjectGuid Target;
+        uint32 SpellId;
+    };
+
+    static std::mutex _lock;
+    static std::unordered_map<ObjectGuid, std::vector<RootedTarget>> _rootedByCaster;
+
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* druid = GetCaster();
+        if (!druid)
+            return;
+
+        uint32 limit = 1;
+        if (AuraEffect const* overgrowth = druid->GetAuraEffect(SPELL_CWD_OVERGROWTH, EFFECT_0))
+            limit += uint32(std::max(overgrowth->GetAmountAsInt(), 0));
+
+        ObjectGuid const targetGuid = GetTarget()->GetGUID();
+        std::vector<RootedTarget> released;
+        {
+            std::lock_guard<std::mutex> guard(_lock);
+            std::vector<RootedTarget>& rooted = _rootedByCaster[druid->GetGUID()];
+            std::erase_if(rooted, [&](RootedTarget const& entry) { return entry.Target == targetGuid; });
+            rooted.push_back({ targetGuid, GetId() });
+            while (rooted.size() > limit)
+            {
+                released.push_back(rooted.front());
+                rooted.erase(rooted.begin());
+            }
+        }
+
+        // removing them runs their AfterRemove (which takes the lock), so outside of it
+        for (RootedTarget const& entry : released)
+            if (Unit* oldTarget = ObjectAccessor::GetUnit(*druid, entry.Target))
+                oldTarget->RemoveAurasDueToSpell(entry.SpellId, druid->GetGUID());
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        ObjectGuid const targetGuid = GetTarget()->GetGUID();
+        uint32 const spellId = GetId();
+        std::lock_guard<std::mutex> guard(_lock);
+        auto itr = _rootedByCaster.find(GetCasterGUID());
+        if (itr == _rootedByCaster.end())
+            return;
+
+        std::erase_if(itr->second, [&](RootedTarget const& entry) { return entry.Target == targetGuid && entry.SpellId == spellId; });
+        if (itr->second.empty())
+            _rootedByCaster.erase(itr);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_dru_entangling_roots_limit::AfterApply, EFFECT_0, SPELL_AURA_MOD_ROOT, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_entangling_roots_limit::AfterRemove, EFFECT_0, SPELL_AURA_MOD_ROOT, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+std::mutex classic_spell_dru_entangling_roots_limit::_lock;
+std::unordered_map<ObjectGuid, std::vector<classic_spell_dru_entangling_roots_limit::RootedTarget>> classic_spell_dru_entangling_roots_limit::_rootedByCaster;
+
+// 18562 - Swiftmend: "Consumes a Rejuvenation or Regrowth effect on a friendly target to instantly heal them an amount equal to 12 sec of
+// Rejuvenation or 18 sec of Regrowth." The client spell is a plain heal of 1 and consumed nothing. The heal is now the periodic effect's
+// base amount times the ticks of 12 / 18 sec, the effect is removed, and the cast needs one of the two from the druid on the target.
+class classic_spell_dru_swiftmend : public SpellScript
+{
+    static constexpr uint32 FAMILY_REJUVENATION = 0x10;
+    static constexpr uint32 FAMILY_REGROWTH = 0x40;
+
+    // vMaNGOS (GPL-2.0, src/scripts/spells/spell_druid.cpp, DruidSwiftmendScript): the Rejuvenation or Regrowth with the shortest duration
+    // left is consumed, the heal is its tick amount times 4 ticks ("12 sec of Rejuvenation") or 6 ticks ("18 sec of Regrowth")
+    static constexpr int32 TICKS_REJUVENATION = 4;
+    static constexpr int32 TICKS_REGROWTH = 6;
+
+    static AuraEffect const* FindHot(Unit const* druid, Unit const* target)
+    {
+        AuraEffect const* best = nullptr;
+        for (AuraEffect const* effect : target->GetAuraEffectsByType(SPELL_AURA_PERIODIC_HEAL))
+        {
+            SpellInfo const* info = effect->GetSpellInfo();
+            if (effect->GetCasterGUID() == druid->GetGUID() && info->SpellFamilyName == SPELLFAMILY_DRUID
+                && (info->SpellFamilyFlags[0] & (FAMILY_REJUVENATION | FAMILY_REGROWTH))
+                && (!best || effect->GetBase()->GetDuration() < best->GetBase()->GetDuration()))
+                best = effect;
+        }
+        return best;
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* target = GetExplTargetUnit();
+        if (!target || !FindHot(GetCaster(), target))
+            return SPELL_FAILED_BAD_TARGETS;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleLaunchHeal(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        AuraEffect const* hot = target ? FindHot(GetCaster(), target) : nullptr;
+        if (!hot)
+            return;
+
+        int32 ticks = (hot->GetSpellInfo()->SpellFamilyFlags[0] & FAMILY_REJUVENATION) ? TICKS_REJUVENATION : TICKS_REGROWTH;
+        SetEffectValue(hot->GetAmount() * ticks);
+        _consumedSpell = hot->GetId();
+    }
+
+    void HandleHitHeal(SpellEffIndex /*effIndex*/)
+    {
+        if (_consumedSpell)
+            if (Unit* target = GetHitUnit())
+                target->RemoveAurasDueToSpell(_consumedSpell, GetCaster()->GetGUID());
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_dru_swiftmend::CheckCast);
+        OnEffectLaunchTarget += SpellEffectFn(classic_spell_dru_swiftmend::HandleLaunchHeal, EFFECT_0, SPELL_EFFECT_HEAL);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_dru_swiftmend::HandleHitHeal, EFFECT_0, SPELL_EFFECT_HEAL);
+    }
+
+private:
+    uint32 _consumedSpell = 0;
+};
+
+// 22842 - Frenzied Regeneration: "Converts up to 10 rage per second into health for 10 sec. Each point of rage is converted into 10 health."
+// The client aura is a periodic trigger spell effect (1 s) without a trigger spell, so it never did anything; the heal spell 22845
+// exists (heal effect, base points 0). Every tick takes up to 10 rage and casts 22845 for 10 health per rage point (power values are in
+// tenths). The vanilla rule is flat health per rage (the percent of maximum health came with a later patch).
+class classic_spell_dru_frenzied_regeneration : public AuraScript
+{
+    static constexpr int32 RAGE_PER_TICK = 100;     // 10 rage
+    static constexpr int32 HEALTH_PER_RAGE = 10;
+    static constexpr uint32 SPELL_FRENZIED_REGENERATION_HEAL = 22845;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_FRENZIED_REGENERATION_HEAL });
+    }
+
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+
+        Unit* druid = GetTarget();
+        int32 rage = std::min<int32>(RAGE_PER_TICK, druid->GetPower(POWER_RAGE));
+        if (rage <= 0)
+            return;
+
+        druid->ModifyPower(POWER_RAGE, -rage);
+        int32 heal = (rage / 10) * HEALTH_PER_RAGE;
+        druid->CastSpell(druid, SPELL_FRENZIED_REGENERATION_HEAL, CastSpellExtraArgs(aurEff).AddSpellBP0(heal));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_dru_frenzied_regeneration::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Damage hooks without a client aura effect
 ######*/
@@ -1348,18 +2079,75 @@ public:
     }
 };
 
+// 1328621 - Bloom (Forever druid talent): "When your Rejuvenation or Regrowth spell expires due to its duration, the target is
+// instantly healed for an amount equal to $s1% of your Spirit. If either spell expires due to being dispelled, the target is healed
+// for $s2% of your Spirit instead." Bound to the Rejuvenation and Regrowth ranks; the heal is 1328622.
+class classic_spell_dru_bloom : public AuraScript
+{
+    static constexpr uint32 SPELL_DRU_BLOOM      = 1328621;
+    static constexpr uint32 SPELL_DRU_BLOOM_HEAL = 1328622;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_DRU_BLOOM, EFFECT_1 } }) && ValidateSpellInfo({ SPELL_DRU_BLOOM_HEAL });
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        AuraRemoveMode const removeMode = GetTargetApplication()->GetRemoveMode();
+        SpellEffIndex talentEffect;
+        if (removeMode == AURA_REMOVE_BY_EXPIRE)
+            talentEffect = EFFECT_0;
+        else if (removeMode == AURA_REMOVE_BY_ENEMY_SPELL)
+            talentEffect = EFFECT_1;
+        else
+            return;
+
+        Unit* druid = GetCaster();
+        Unit* target = GetTarget();
+        if (!druid || !target->IsAlive())
+            return;
+
+        AuraEffect const* talent = druid->GetAuraEffect(SPELL_DRU_BLOOM, talentEffect);
+        if (!talent)
+            return;
+
+        int32 const amount = int32(CalculatePct(druid->GetStat(STAT_SPIRIT), talent->GetAmount()));
+        if (amount <= 0)
+            return;
+
+        // the heal spell targets its caster, so the target casts it on itself with the druid as the original caster
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, amount);
+        args.SetOriginalCaster(druid->GetGUID());
+        target->CastSpell(target, SPELL_DRU_BLOOM_HEAL, args);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_bloom::HandleRemove, EFFECT_ALL, SPELL_AURA_PERIODIC_HEAL, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_classic_talents_warlock_druid()
 {
+    RegisterSpellScript(classic_spell_dru_bloom);
     // warlock
     RegisterSpellScript(classic_talent_warl_life_tap);
     RegisterSpellScript(classic_talent_warl_demonic_energies);
     RegisterSpellScript(classic_talent_warl_improved_shadow_bolt);
+    RegisterSpellScript(classic_talent_warl_nightfall);
+    RegisterSpellScript(classic_talent_warl_pyroclasm);
+    RegisterSpellScript(classic_spell_warl_curse_of_agony);
     RegisterSpellScript(classic_talent_warl_soul_siphon);
     RegisterSpellScript(classic_talent_warl_soul_harvest);
     RegisterSpellScript(classic_talent_warl_demon_talent_sync);
     RegisterSpellScript(classic_talent_warl_summon_demon);
     RegisterSpellScript(classic_talent_warl_demonic_sacrifice);
     RegisterSpellScript(classic_talent_warl_conflagrate);
+    RegisterSpellScript(classic_spell_warl_incinerate);
+    RegisterSpellScript(classic_talent_warl_decimation);
+    RegisterSpellScript(classic_spell_warl_decimation);
     RegisterSpellScript(classic_talent_warl_shadowburn);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
@@ -1368,12 +2156,23 @@ void AddSC_classic_talents_warlock_druid()
     // druid
     RegisterSpellScript(classic_talent_dru_form_talents);
     RegisterSpellScript(classic_talent_dru_thick_hide);
+    RegisterSpellScript(classic_talent_dru_leader_of_the_pack);
+    RegisterSpellScript(classic_talent_dru_heart_of_the_wild);
+    RegisterSpellScript(classic_talent_dru_feral_swiftness);
+    RegisterSpellScript(classic_talent_dru_natural_reaction);
+    RegisterSpellScript(classic_spell_dru_improved_starfire);
     RegisterSpellScript(classic_talent_dru_blood_frenzy);
     RegisterSpellScript(classic_talent_dru_eclipse);
     RegisterSpellScript(classic_talent_dru_eclipse_buff);
     RegisterSpellScript(classic_talent_dru_eclipse_starfire);
     RegisterSpellScript(classic_talent_dru_dreamstate);
     RegisterSpellScript(classic_talent_dru_king_of_the_jungle);
+    RegisterSpellScript(classic_spell_dru_ferocious_bite);
+    RegisterSpellScript(classic_spell_dru_frenzied_regeneration);
+    RegisterSpellScript(classic_spell_dru_swiftmend);
+    RegisterSpellScript(classic_spell_dru_rip);
+    RegisterSpellScript(classic_spell_dru_entangling_roots_limit);
+    RegisterSpellScript(classic_talent_dru_predatory_strikes);
 
     new classic_unit_talent_warlock_druid();
 }

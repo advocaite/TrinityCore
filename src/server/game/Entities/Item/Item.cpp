@@ -255,6 +255,14 @@ bool ItemCanGoIntoBag(ItemTemplate const* pProto, ItemTemplate const* pBagProto)
     switch (pBagProto->GetClass())
     {
         case ITEM_CLASS_CONTAINER:
+            // Classic 1.60: a profession bag lists the families it holds in its own BagFamily. The skinning satchel (277114,
+            // a leatherworking container) holds family 0x2000000, which is on every leather, hide and scale and on the
+            // skinning tools, while the old leatherworking bit 0x8 is only on a few of them. So when the bag names its
+            // families, the item has to share one of them (the herb, mining, enchanting and soul bags name the same bit as below).
+            if (pBagProto->GetSubClass() != ITEM_SUBCLASS_CONTAINER && pBagProto->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER
+                && pBagProto->GetBagFamily())
+                return (pProto->GetBagFamily() & pBagProto->GetBagFamily()) != 0;
+
             switch (pBagProto->GetSubClass())
             {
                 case ITEM_SUBCLASS_CONTAINER:
@@ -599,6 +607,50 @@ void Item::UpdateDuration(Player* owner, uint32 diff)
     SetState(ITEM_CHANGED, owner);                          // save new time in database
 }
 
+// The client reads an effect's charges from SpellCharges[LegacySlotIndex], the item's old spell slot. Classic items keep their vanilla
+// slots: every healthstone and mana gem has its one use effect in slot 1, so a charge written to slot 0 showed them as 0 and grey on the
+// action bar. Each effect takes its own slot: the first effect naming a slot gets it, and an effect without a usable slot of its own
+// takes the lowest slot no other effect has. In the 70790 data one item, 239695, has two effects in slot 1 (charges -1 and 0); giving
+// the second one slot 1 as well wrote its 0 over the first one's charge when the item was made, and the item could not be used.
+static uint32 GetSpellChargesSlotForEffect(BonusData const& bonusData, uint32 effectIndex)
+{
+    static constexpr uint32 MaxSpellChargesSlot = UF::size<decltype(UF::ItemData::SpellCharges)>();
+    if (effectIndex >= MaxSpellChargesSlot)
+        return effectIndex;
+
+    uint32 const count = std::min<uint32>(uint32(bonusData.EffectCount), MaxSpellChargesSlot);
+    std::array<uint32, MaxSpellChargesSlot> slots;
+    std::array<bool, MaxSpellChargesSlot> taken = { };
+    slots.fill(MaxSpellChargesSlot);
+    for (uint32 i = 0; i < count; ++i)
+    {
+        ItemEffectEntry const* effect = bonusData.Effects[i];
+        if (effect && effect->LegacySlotIndex < MaxSpellChargesSlot && !taken[effect->LegacySlotIndex])
+        {
+            slots[i] = effect->LegacySlotIndex;
+            taken[slots[i]] = true;
+        }
+    }
+
+    for (uint32 i = 0; i < count; ++i)
+    {
+        if (slots[i] != MaxSpellChargesSlot)
+            continue;
+
+        for (uint32 slot = 0; slot < MaxSpellChargesSlot; ++slot)
+        {
+            if (!taken[slot])
+            {
+                slots[i] = slot;
+                taken[slot] = true;
+                break;
+            }
+        }
+    }
+
+    return effectIndex < count ? slots[effectIndex] : effectIndex;
+}
+
 static uint32 FindSpellChargesSlot(BonusData const& bonusData, ItemEffectEntry const* effect)
 {
     static constexpr uint32 MaxSpellChargesSlot = UF::size<decltype(UF::ItemData::SpellCharges)>();
@@ -608,14 +660,14 @@ static uint32 FindSpellChargesSlot(BonusData const& bonusData, ItemEffectEntry c
         // return fist effect that has charges
         for (uint32 i = 0; i < bonusData.EffectCount && i < MaxSpellChargesSlot; ++i)
             if (bonusData.Effects[i] && bonusData.Effects[i]->Charges != 0)
-                return i;
+                return GetSpellChargesSlotForEffect(bonusData, i);
 
         return MaxSpellChargesSlot;
     }
 
     for (uint32 i = 0; i < bonusData.EffectCount && i < MaxSpellChargesSlot; ++i)
         if (bonusData.Effects[i] == effect)
-            return i;
+            return GetSpellChargesSlotForEffect(bonusData, i);
 
     return MaxSpellChargesSlot;
 }
@@ -657,8 +709,9 @@ void Item::SaveToDB(CharacterDatabaseTransaction trans)
             stmt->setUInt32(++index, m_itemData->Expiration);
 
             std::ostringstream ssSpells;
+            // saved in effect order, as before; only the slot the client reads differs
             for (uint8 i = 0; i < m_itemData->SpellCharges.size() && i < _bonusData.EffectCount; ++i)
-                ssSpells << m_itemData->SpellCharges[i] << ' ';
+                ssSpells << m_itemData->SpellCharges[GetSpellChargesSlotForEffect(_bonusData, i)] << ' ';
             stmt->setString(++index, ssSpells.str());
 
             stmt->setUInt32(++index, m_itemData->DynamicFlags);
@@ -1002,7 +1055,8 @@ bool Item::LoadFromDB(ObjectGuid::LowType guid, ObjectGuid ownerGuid, Field* fie
     // load charges after bonuses, they can add more item effects
     std::vector<std::string_view> tokens = Trinity::Tokenize(fields[6].GetStringView(), ' ', false);
     for (uint8 i = 0; i < m_itemData->SpellCharges.size() && i < _bonusData.EffectCount && i < tokens.size(); ++i)
-        SetUpdateFieldValue(m_values.ModifyValue(&Item::m_itemData).ModifyValue(&UF::ItemData::SpellCharges, i), Trinity::StringTo<int32>(tokens[i]).value_or(0));
+        SetUpdateFieldValue(m_values.ModifyValue(&Item::m_itemData).ModifyValue(&UF::ItemData::SpellCharges, GetSpellChargesSlotForEffect(_bonusData, i)),
+            Trinity::StringTo<int32>(tokens[i]).value_or(0));
 
     SetModifier(ITEM_MODIFIER_TRANSMOG_APPEARANCE_ALL_SPECS, fields[20].GetUInt32());
     SetModifier(ITEM_MODIFIER_TRANSMOG_APPEARANCE_SPEC_1, fields[21].GetUInt32());
@@ -2259,30 +2313,11 @@ uint32 Item::GetSellPrice(Player const* owner, bool forVendor /*= false*/) const
     return price;
 }
 
-uint32 Item::GetSellPrice(ItemTemplate const* proto, uint32 quality, uint32 itemLevel)
+uint32 Item::GetSellPrice(ItemTemplate const* proto, uint32 /*quality*/, uint32 /*itemLevel*/)
 {
-    if (proto->HasFlag(ITEM_FLAG2_OVERRIDE_GOLD_COST))
-        return proto->GetSellPrice();
-    else
-    {
-        bool standardPrice;
-        uint32 cost = Item::GetBuyPrice(proto, quality, itemLevel, standardPrice);
-
-        if (standardPrice)
-        {
-            if (ItemClassEntry const* classEntry = sDB2Manager.GetItemClassByOldEnum(proto->GetClass()))
-            {
-                uint32 buyCount = std::max(proto->GetBuyCount(), 1u);
-                return cost * classEntry->PriceModifier / buyCount;
-            }
-
-            return 0;
-        }
-        else
-            return proto->GetSellPrice();
-    }
-
-    return 0;
+    // Classic: always the item's own sell price, the one its tooltip shows. 919 client items have no gold-cost override flag
+    // and got the retail item level formula instead (a different price, or money for items the game marks as unsellable)
+    return proto->GetSellPrice();
 }
 
 uint32 Item::GetItemLevel(Player const* owner) const
@@ -2420,6 +2455,9 @@ Optional<uint32> Item::GetDisenchantLootId() const
     if (_bonusData.DisenchantLootId)
         return _bonusData.DisenchantLootId;
 
+    if (HasOwnDisenchantLoot(GetTemplate()))
+        return GetEntry();
+
     // ignore temporary item level scaling (pvp or timewalking)
     uint32 itemLevel = GetItemLevel(GetTemplate(), _bonusData, _bonusData.RequiredLevel, GetModifier(ITEM_MODIFIER_TIMEWALKER_LEVEL), 0, 0, 0, false, 0, 0);
 
@@ -2428,6 +2466,14 @@ Optional<uint32> Item::GetDisenchantLootId() const
         return {};
 
     return disenchantLoot->ID;
+}
+
+// Classic 1.60: WoW Forever flags a few items ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE: the enchanting lesson items (Hexed Pendant,
+// Crude Wax Effigy), which no ItemDisenchantLoot row covers (trade goods), and some Hyjal epics. Such an item disenchants into
+// its own disenchant_loot_template entry, keyed by its item id, when it has one; without one it keeps the ItemDisenchantLoot table.
+bool Item::HasOwnDisenchantLoot(ItemTemplate const* itemTemplate)
+{
+    return itemTemplate->HasFlag(ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE) && LootTemplates_Disenchant.HaveLootFor(itemTemplate->GetId());
 }
 
 Optional<uint16> Item::GetDisenchantSkillRequired() const
@@ -2440,7 +2486,13 @@ Optional<uint16> Item::GetDisenchantSkillRequired() const
 
     ItemDisenchantLootEntry const* disenchantLoot = GetBaseDisenchantLoot(GetTemplate(), GetQuality(), itemLevel);
     if (!disenchantLoot)
+    {
+        // an item with a loot entry of its own needs only the Disenchant spell
+        if (HasOwnDisenchantLoot(GetTemplate()))
+            return 0;
+
         return {};
+    }
 
     return disenchantLoot->SkillRequired;
 }

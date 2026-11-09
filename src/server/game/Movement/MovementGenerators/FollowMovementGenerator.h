@@ -45,6 +45,9 @@ class FollowMovementGenerator : public MovementGenerator, public AbstractFollowe
 
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
 
+        float GetRange() const { return _range; }
+        Optional<ChaseAngle const> const& GetAngle() const { return _angle; }
+
     private:
         static constexpr uint32 CHECK_INTERVAL = 100;
 
@@ -58,6 +61,7 @@ class FollowMovementGenerator : public MovementGenerator, public AbstractFollowe
         Optional<TimeTracker> _duration;
         std::unique_ptr<PathGenerator> _path;
         Optional<Position> _lastTargetPosition;
+        bool _throttleRepath = false;   // owner is a playerbot, or a pet / guardian of a player: see Update
 };
 
 #endif

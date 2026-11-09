@@ -47,14 +47,19 @@ class TC_GAME_API PlayerTaxi
         void InitTaxiNodesForLevel(uint32 race, uint32 chrClass, uint8 level);
         bool LoadTaxiMask(std::string const& data);
 
+        // Node indexes are 1-based. A node past the end of the mask (or 0) is not a node: it is never known and cannot be set.
         bool IsTaximaskNodeKnown(uint32 nodeidx) const
         {
+            if (nodeidx == 0 || (nodeidx - 1) / (sizeof(TaxiMask::value_type) * 8) >= m_taximask.size())
+                return false;
             uint32 field = uint32((nodeidx - 1) / (sizeof(TaxiMask::value_type) * 8));
             TaxiMask::value_type submask = TaxiMask::value_type(1 << ((nodeidx - 1) % (sizeof(TaxiMask::value_type) * 8)));
             return (m_taximask[field] & submask) != 0;
         }
         bool SetTaximaskNode(uint32 nodeidx)
         {
+            if (nodeidx == 0 || (nodeidx - 1) / (sizeof(TaxiMask::value_type) * 8) >= m_taximask.size())
+                return false;
             uint32 field = uint32((nodeidx - 1) / (sizeof(TaxiMask::value_type) * 8));
             TaxiMask::value_type submask = TaxiMask::value_type(1 << ((nodeidx - 1) % (sizeof(TaxiMask::value_type) * 8)));
             if ((m_taximask[field] & submask) == 0)

@@ -27,6 +27,7 @@
 #include "GroupReference.h"
 #include "Hash.h"
 #include "ItemDefines.h"
+#include "IteratorPair.h"
 #include "ItemEnchantmentMgr.h"
 #include "MapReference.h"
 #include "PetDefines.h"
@@ -63,6 +64,7 @@ struct MapEntry;
 struct PvpTalentEntry;
 struct QuestPackageItemEntry;
 struct RewardPackEntry;
+struct SkillLineEntry;
 struct SkillRaceClassInfoEntry;
 struct SpellCastRequest;
 struct TalentEntry;
@@ -1212,6 +1214,7 @@ private:
 
 uint32 constexpr PLAYER_MAX_HONOR_LEVEL = 500;
 uint8 constexpr PLAYER_LEVEL_MIN_HONOR = 10;
+uint32 constexpr CURRENCY_HONOR_CLASSIC = 1792; // Classic 1.60: Honor currency spent at the PvP quartermasters
 uint32 constexpr SPELL_PVP_RULES_ENABLED = 134735;
 float constexpr MAX_AREA_SPIRIT_HEALER_RANGE = 20.0f;
 
@@ -1344,6 +1347,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool GetCommandStatus(uint32 command) const { return (_activeCheats & command) != 0; }
         void SetCommandStatusOn(uint32 command) { _activeCheats |= command; }
         void SetCommandStatusOff(uint32 command) { _activeCheats &= ~command; }
+
+        // PlayerbotV2 pacing: aura-free multiplier on this bot's cast times and GCD
+        // (1.0 = none, <1 faster). Set on the world thread, read by map threads.
+        // See WorldObject::ModSpellCastTime and Spell::TriggerGlobalCooldown.
+        float GetBotCastSpeedMod() const { return _botCastSpeedMod.load(std::memory_order_relaxed); }
+        void SetBotCastSpeedMod(float mod) { _botCastSpeedMod.store(mod, std::memory_order_relaxed); }
 
         // Played Time Stuff
         time_t m_logintime;
@@ -1662,7 +1671,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Item* GetItemFromBuyBackSlot(uint32 slot);
         void RemoveItemFromBuyBackSlot(uint32 slot, bool del);
         void SendEquipError(InventoryResult msg, Item const* item1 = nullptr, Item const* item2 = nullptr, uint32 itemId = 0) const;
-        void SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32 param) const;
+        void SendBuyError(BuyResult msg, Creature const* creature, uint32 vendorslot) const;
         void SendSellError(SellResult msg, Creature* creature, ObjectGuid guid) const;
         void AddWeaponProficiency(uint32 newflag) { m_WeaponProficiency |= newflag; }
         void AddArmorProficiency(uint32 newflag) { m_ArmorProficiency |= newflag; }
@@ -1684,7 +1693,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Player* GetTrader() const;
         TradeData* GetTradeData() const { return m_trade; }
         void TradeCancel(bool sendback, TradeStatus status = TRADE_STATUS_CANCELLED);
+        // Closes a trade that can no longer finish: the partner is gone, left the map or walked out of range, or the two sides
+        // disagree about being in it. Called every Update, free when no trade is open.
         void UpdateTradeState();
+        void InitiateTrade(Player* trader); // PlayerBot integration: minimal core hook
 
         CinematicMgr* GetCinematicMgr() const { return _cinematicMgr.get(); }
 
@@ -2053,6 +2065,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         UF::TraitConfig const* GetClassicSpecGroupConfig(bool secondary) const;   // Classic 1.60 dual spec
         bool ActivateClassicSpecGroup(bool secondary);
         bool PurchaseClassicDualSpec();
+        bool UntrainClassicPet(int64 cost);
         static bool IsClassicDualSpecGossipOption(int32 gossipOptionId);
         TalentLearnResult LearnTalent(uint32 talentId, int32* spellOnCooldown);
         bool AddTalent(TalentEntry const* talent, uint8 spec, bool learning);
@@ -2287,6 +2300,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 GetClassicSpellPenetration(uint32 schoolMask) const;
         int32 GetClassicAttackPowerVersus(uint32 creatureTypeMask) const;
         int32 GetClassicSpellDamageVersus(uint32 creatureTypeMask) const;
+        // Classic 1.60 item stats ITEM_MOD_SPELL_HEALING_DONE / ITEM_MOD_SPELL_DAMAGE_DONE ("Increases healing done by up to X and damage
+        // done by up to Y for all magical spells and effects"): healing only / damage of every magic school only
+        int32 GetClassicSpellHealingDoneBonus() const { return m_classicSpellHealingDone; }
+        int32 GetClassicSpellDamageDoneBonus() const { return m_classicSpellDamageDone; }
         uint32 GetClassicShieldBlockValue() const override;
 
         bool CanApplyResilience() const override { return true; }
@@ -2319,6 +2336,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         LootRoll* GetLootRoll(ObjectGuid const& lootObjectGuid, uint8 lootListId);
         void AddLootRoll(LootRoll* roll);
         void RemoveLootRoll(LootRoll* roll);
+        // Read-only access to in-flight loot rolls. Lets external systems
+        // (Playerbot V2) enumerate pending rolls without going through
+        // the per-roll GetLootRoll lookup.
+        std::vector<LootRoll*> const& GetLootRolls() const { return m_lootRolls; }
 
         void RemovedInsignia(Player* looterPlr);
 
@@ -2449,6 +2470,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         static uint32 GetClassicProfessionSkill(uint32 skill);
         void SyncClassicProfessionChildSkills(uint32 skill);
         void UpdateClassicLegacyUnlock();
+        void UpdateClassicPvPRank();
         void UpdateClassicProfessionTitles();
         static bool IsClassicCertificationSkill(uint32 skillId);
         // Classic 1.60 Legacy perks (Legacy trait trees 1187 Professions, 1188 Adventure, 1189 Progression)
@@ -2621,6 +2643,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void ApplyAllAzeriteEmpoweredItemMods(bool apply);
         void _ApplyItemBonuses(Item* item, uint8 slot, bool apply);
         void _ApplyClassicItemMod(int32 statType, int32 val, bool apply);
+        void _ApplyClassicSpellHealingOrDamageMod(int32 statType, int32 val, bool apply);
         void _ApplyWeaponDamage(uint8 slot, Item* item, bool apply);
         bool EnchantmentFitsRequirements(uint32 enchantmentcondition, int8 slot) const;
         void ToggleMetaGemsActive(uint8 exceptslot, bool apply);
@@ -2821,6 +2844,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetTemporaryUnsummonedPetNumber() const { return m_temporaryUnsummonedPetNumber; }
         void SetTemporaryUnsummonedPetNumber(uint32 petnumber) { m_temporaryUnsummonedPetNumber = petnumber; }
         void DelayPetResummon(uint32 ms) { m_petResummonDelay = ms; }
+        void ParkPetForTravel();
+        void UpdateParkedPet(uint32 diff);
         Optional<ReactStates> GetTemporaryPetReactState() const { return m_temporaryPetReactState; }
         void DisablePetControlsOnMount(ReactStates reactState, CommandStates commandState);
         void EnablePetControlsOnDismount();
@@ -3316,6 +3341,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_ExtraFlags;
         bool m_preferDrawableAmmo = false;
 
+        std::atomic<float> _botCastSpeedMod{ 1.0f };
+
         QuestStatusMap m_QuestStatus;
         QuestObjectiveStatusMap m_questObjectiveStatus;
         QuestStatusSaveMap m_QuestStatusSave;
@@ -3349,6 +3376,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 m_spellPenetrationItemMod;
         std::array<int32, 140 - 83> m_classicItemMods = { };   // ItemModType 83 .. 139 (ITEM_MOD_CLASSIC_*), from equipped items
         int32 m_classicBlockValueBonus = 0;                    // ITEM_MOD_BLOCK_VALUE of equipped items
+        int32 m_classicSpellHealingDone = 0;                   // ITEM_MOD_SPELL_HEALING_DONE of equipped items and enchantments
+        int32 m_classicSpellDamageDone = 0;                    // ITEM_MOD_SPELL_DAMAGE_DONE of equipped items and enchantments
         mutable TimePoint _classicFreeHelpfulSpellsUntil;            // Legacy perk The Quick and the Dead: free helpful spells after resurrection
 
         SpellModContainer m_spellMods;
@@ -3478,7 +3507,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // Temporary removed pet cache
         uint32 m_temporaryUnsummonedPetNumber;
+        uint32 m_botSheathIdleMs = 0;                       // bot only: ms with weapons drawn and no fight
         uint32 m_petResummonDelay;                          // ms until the pet remembered at login is summoned (0 = none pending)
+        bool m_petParkedForTravel;                          // pet put away because it could not follow the owner (boat, taxi, teleport)
+        uint32 m_petParkedCheckTimer;
         Optional<ReactStates> m_temporaryPetReactState;
         uint32 m_oldpetspell;
         ObjectGuid m_temporaryUnsummonedBattlePet;

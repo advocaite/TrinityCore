@@ -1,0 +1,93 @@
+-- Classic 1.60: vendor and trainer rows from official Forever sniffs (beta builds 70245-70450)
+-- Data source: Azeroth project, Sakhwoow/WoWForever (GPL-2).
+
+-- PvP quartermasters Lady Palanseer 12792, Sergeant Thunderhorn 14581, Brave Stonehide 12793 and others: items they sell on Forever
+DELETE FROM `npc_vendor` WHERE `entry`=4553 AND `type`=1 AND `item` IN (4470,4471,4536,10284,11291);
+DELETE FROM `npc_vendor` WHERE `entry`=4555 AND `type`=1 AND `item` IN (11291);
+DELETE FROM `npc_vendor` WHERE `entry`=4561 AND `type`=1 AND `item` IN (4536);
+DELETE FROM `npc_vendor` WHERE `entry`=4775 AND `type`=1 AND `item` IN (4536);
+DELETE FROM `npc_vendor` WHERE `entry`=12792 AND `type`=1 AND `item` IN (272477,272478,272479,272480,272481,272579,272637,273324,275229,275238,275239,275240,275241,275242,275243,275244);
+DELETE FROM `npc_vendor` WHERE `entry`=12793 AND `type`=1 AND `item` IN (272578,272589,274444,274968);
+DELETE FROM `npc_vendor` WHERE `entry`=12795 AND `type`=1 AND `item` IN (21177);
+DELETE FROM `npc_vendor` WHERE `entry`=14581 AND `type`=1 AND `item` IN (272452,272591,272592,272593,272594,272595,272596,272597,272598,272599,272600,272601,272602,272603,272604,272681,272682,272683,272684,272685,272686,278469);
+DELETE FROM `npc_vendor` WHERE `entry`=257422 AND `type`=1 AND `item` IN (11303);
+INSERT INTO `npc_vendor` (`entry`, `slot`, `item`, `maxcount`, `incrtime`, `ExtendedCost`, `type`, `BonusListIDs`, `PlayerConditionID`, `IgnoreFiltering`, `VerifiedBuild`) VALUES (4553,11,4470,0,0,0,1,NULL,0,0,70338),
+(4553,10,4471,0,0,0,1,NULL,0,0,70338),
+(4553,14,4536,0,0,0,1,NULL,0,0,70338),
+(4553,9,10284,0,0,0,1,NULL,0,0,70338),
+(4553,12,11291,0,0,0,1,NULL,0,0,70338),
+(4555,101,11291,0,0,0,1,NULL,0,0,70338),
+(4561,48,4536,0,0,0,1,NULL,0,0,70338),
+(4775,28,4536,0,0,0,1,NULL,0,0,70338),
+(12792,105,272477,0,0,11583,1,'13899',0,0,70338),
+(12792,107,272478,0,0,11580,1,'13899',0,0,70338),
+(12792,108,272479,0,0,11578,1,'13899',0,0,70338),
+(12792,101,272480,0,0,11575,1,'13899',0,0,70338),
+(12792,104,272481,0,0,11582,1,'13899',0,0,70338),
+(12792,106,272579,0,0,11579,1,'13899',0,0,70338),
+(12792,102,272637,0,0,11576,1,'13899',0,0,70338),
+(12792,103,273324,0,0,11581,1,'13899',0,0,70338),
+(12792,114,275229,0,0,11585,1,NULL,0,0,70338),
+(12792,116,275238,0,0,11587,1,NULL,0,0,70338),
+(12792,112,275239,0,0,11589,1,NULL,0,0,70338),
+(12792,109,275240,0,0,11588,1,NULL,0,0,70338),
+(12792,115,275241,0,0,11584,1,NULL,0,0,70338),
+(12792,113,275242,0,0,11591,1,NULL,0,0,70338),
+(12792,111,275243,0,0,11592,1,NULL,0,0,70338),
+(12792,110,275244,0,0,11590,1,NULL,0,0,70338),
+(12793,8,272578,0,0,11577,1,NULL,0,0,70338),
+(12793,7,272589,0,0,11577,1,NULL,0,0,70338),
+(12793,6,274444,0,0,11596,1,NULL,0,0,70338),
+(12793,9,274968,0,0,11595,1,NULL,0,0,70338),
+(12795,101,21177,0,0,0,1,NULL,0,0,70338),
+(14581,109,272452,0,0,11593,1,NULL,0,0,70338),
+(14581,119,272591,0,0,11706,1,NULL,0,0,70338),
+(14581,107,272592,0,0,11593,1,NULL,0,0,70338),
+(14581,102,272593,0,0,11594,1,NULL,0,0,70338),
+(14581,116,272594,0,0,11593,1,NULL,0,0,70338),
+(14581,114,272595,0,0,11593,1,NULL,0,0,70338),
+(14581,111,272596,0,0,11593,1,NULL,0,0,70338),
+(14581,117,272597,0,0,11593,1,NULL,0,0,70338),
+(14581,118,272598,0,0,11593,1,NULL,0,0,70338),
+(14581,115,272599,0,0,11593,1,NULL,0,0,70338),
+(14581,108,272600,0,0,11593,1,NULL,0,0,70338),
+(14581,103,272601,0,0,11594,1,NULL,0,0,70338),
+(14581,104,272602,0,0,11594,1,NULL,0,0,70338),
+(14581,105,272603,0,0,11594,1,NULL,0,0,70338),
+(14581,101,272604,0,0,11594,1,NULL,0,0,70338),
+(14581,110,272681,0,0,11593,1,NULL,0,0,70338),
+(14581,106,272682,0,0,11594,1,NULL,0,0,70338),
+(14581,112,272683,0,0,11593,1,NULL,0,0,70338),
+(14581,113,272684,0,0,11593,1,NULL,0,0,70338),
+(14581,120,272685,0,0,11706,1,NULL,0,0,70338),
+(14581,121,272686,0,0,11706,1,NULL,0,0,70338),
+(14581,122,278469,0,0,11706,1,NULL,0,0,70338),
+(257422,8,11303,2,0,0,1,NULL,0,0,70338);
+
+-- Zephyris rogue trainers and Eldrun Stormbreaker: the sniffed "I'd like training!" option
+DELETE FROM `gossip_menu_option` WHERE `MenuID`=41124 AND `OptionID`=0;
+INSERT INTO `gossip_menu_option` (`MenuID`, `GossipOptionID`, `OptionID`, `OptionNpc`, `OptionText`, `OptionBroadcastTextID`, `Language`, `Flags`, `ActionMenuID`, `ActionPoiID`, `GossipNpcOptionID`, `BoxCoded`, `BoxMoney`, `BoxText`, `BoxBroadcastTextID`, `SpellID`, `OverrideIconID`, `VerifiedBuild`) VALUES (41124,95100001,0,3,'I\'d like training!',0,0,0,0,0,NULL,0,0,NULL,0,NULL,NULL,0);
+DELETE FROM `creature_template_gossip` WHERE `CreatureID`=258098 AND `MenuID`=41915;
+INSERT INTO `creature_template_gossip` (`CreatureID`, `MenuID`, `VerifiedBuild`) VALUES (258098,41915,0);
+DELETE FROM `creature_trainer` WHERE (`CreatureID` IN (251389,252379,254087) AND `MenuID`=41124 AND `OptionID`=0) OR (`CreatureID`=258098 AND `MenuID`=41915 AND `OptionID`=0);
+INSERT INTO `creature_trainer` (`CreatureID`, `TrainerID`, `MenuID`, `OptionID`) VALUES (251389,26,41124,0),
+(252379,26,41124,0),
+(254087,26,41124,0),
+(258098,10,41915,0);
+-- Akeri Duskblade taught from the 5-spell list 25; all three share the full rogue list 26 (Wowhead Forever: Eltheen teaches all of it)
+UPDATE `creature_trainer` SET `TrainerId`=26 WHERE `CreatureID`=251389 AND `MenuID`=0 AND `OptionID`=0 AND `TrainerId`=25;
+
+-- Weapon masters Sayoc 397, Hanashi 399 and Archibald 400: the weapon skills they teach on Forever
+DELETE FROM `trainer_spell` WHERE `TrainerId`=397 AND `SpellId` IN (196,197,264,2567);
+DELETE FROM `trainer_spell` WHERE `TrainerId`=399 AND `SpellId` IN (196,197,264,2567);
+DELETE FROM `trainer_spell` WHERE `TrainerId`=400 AND `SpellId` IN (200,202);
+INSERT INTO `trainer_spell` (`TrainerId`, `SpellId`, `MoneyCost`, `ReqSkillLine`, `ReqSkillRank`, `ReqAbility1`, `ReqAbility2`, `ReqAbility3`, `ReqLevel`, `VerifiedBuild`) VALUES (397,196,1000,0,0,0,0,0,0,70338),
+(397,197,1000,0,0,0,0,0,0,70338),
+(397,264,1000,0,0,0,0,0,0,70338),
+(397,2567,1000,0,0,0,0,0,0,70338),
+(399,196,1000,0,0,0,0,0,0,70338),
+(399,197,1000,0,0,0,0,0,0,70338),
+(399,264,1000,0,0,0,0,0,0,70338),
+(399,2567,1000,0,0,0,0,0,0,70338),
+(400,200,10000,0,0,0,0,0,20,70338),
+(400,202,1000,0,0,0,0,0,0,70338);

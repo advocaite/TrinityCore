@@ -139,14 +139,18 @@ struct classic_boss_archaedas : public ScriptedAI
         else
             _roomCheck -= diff;
 
-        // wake a wall minion
-        if (_wallMinionTimer <= diff)
+        // wake a wall minion every 10 s while above a third of his health; once the Vault Warders are up the wall stays asleep
+        // (classic: the dwarves stop coming in the last phase)
+        if (!_vaultWardersAwake)
         {
-            _instance->SetData(ULDAMAN_ENCOUNTER_ARCHAEDAS, IN_PROGRESS);
-            _wallMinionTimer = 10000;
+            if (_wallMinionTimer <= diff)
+            {
+                _instance->SetData(ULDAMAN_ENCOUNTER_ARCHAEDAS, IN_PROGRESS);
+                _wallMinionTimer = 10000;
+            }
+            else
+                _wallMinionTimer -= diff;
         }
-        else
-            _wallMinionTimer -= diff;
 
         //If we are <66 summon the guardians
         if (!_guardiansAwake && me->GetHealthPct() <= 66.0f)

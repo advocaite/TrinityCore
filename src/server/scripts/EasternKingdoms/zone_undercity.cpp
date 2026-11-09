@@ -41,6 +41,7 @@ EndContentData */
 enum Sylvanas
 {
     QUEST_JOURNEY_TO_UNDERCITY      = 9180,
+    QUEST_EXPLORING_THE_HORDE       = 93739,  // Skyborne: "Speak with Lady Sylvanas Windrunner" is a kill-type objective
 
     EMOTE_LAMENT_END                = 0,
     SAY_LAMENT_END                  = 1,
@@ -239,6 +240,13 @@ public:
         {
             if (quest->GetQuestId() == QUEST_JOURNEY_TO_UNDERCITY)
                 SetGUID(player->GetGUID(), GUID_EVENT_INVOKER);
+        }
+
+        bool OnGossipHello(Player* player) override
+        {
+            if (player->GetQuestStatus(QUEST_EXPLORING_THE_HORDE) == QUEST_STATUS_INCOMPLETE)
+                player->KilledMonsterCredit(me->GetEntry());
+            return false;
         }
 
     private:

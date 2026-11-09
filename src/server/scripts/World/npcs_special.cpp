@@ -732,6 +732,27 @@ public:
             if ((quest->GetQuestId() == 6624) || (quest->GetQuestId() == 6622))
                 BeginEvent(player);
         }
+
+        // Classic 1.60: the doctors teach the three Artisan First Aid recipes from their gossip (VMaNGOS gossip_scripts 5382-5384 on
+        // menus 5381 / 5382); the options' conditions (Triage done, First Aid 240 / 260 / 290, recipe not known yet) decide what shows
+        bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
+        {
+            if (menuId != 5381 && menuId != 5382)
+                return false;
+
+            uint32 learnSpell = 0;
+            switch (gossipListId)
+            {
+                case 0: learnSpell = 10843; break;  // Heavy Mageweave Bandage
+                case 1: learnSpell = 18631; break;  // Runecloth Bandage
+                case 2: learnSpell = 18632; break;  // Heavy Runecloth Bandage
+                default: return false;
+            }
+
+            CloseGossipMenuFor(player);
+            me->CastSpell(player, learnSpell, true);
+            return true;
+        }
     };
 
     CreatureAI* GetAI(Creature* creature) const override

@@ -528,12 +528,9 @@ bool Aura::CanPeriodicTickCrit() const
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR2_CANT_CRIT))
         return false;
 
-    // Classic 1.60 (vanilla): damage and healing over time never critically strike (Renew, Rejuvenation, Corruption, Immolate...).
-    // Ids from 1000000 on are spells new to Forever and keep their client attributes.
-    static constexpr uint32 FirstForeverSpellId = 1000000;
-    if (GetId() < FirstForeverSpellId)
-        return false;
-
+    // Classic 1.60 (WoW Forever): the client's own flag decides. Forever gave its damage over time spells the flag (70707:
+    // Corruption 172, Curse of Agony 980, Shadow Word: Pain 589, Immolate 348 have Attributes8 0x200), so they can crit; the
+    // vanilla rule "no periodic crits" kept here before held them back (Azeldof, 2026-11-02). Spells without the flag still can't.
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR8_PERIODIC_CAN_CRIT))
         return true;
 
@@ -1773,6 +1770,40 @@ bool Aura::CanStackWith(Aura const* existingAura) const
         // same spell with same caster should not stack
         return false;
     }
+
+    // Classic 1.60: not every rank pair is chained through SkillLineAbility (Blessing of Sacrifice 6940 / 20729 stacked on one target, 45 + 55 redirected).
+    // Only a rank-like pair counts: same caster, same name, same family and class mask, the same effect/aura layout in every effect, both timed and
+    // not passive, neither enchant-proc, and neither triggers the other. Talent + proc pairs and multi-part buffs differ in one of those.
+    auto const looksLikeRank = [&]()
+    {
+        if (!sameCaster || m_spellInfo->ChainEntry || existingSpellInfo->ChainEntry || m_spellInfo->Id == existingSpellInfo->Id)
+            return false;
+        if (!m_spellInfo->SpellName || !existingSpellInfo->SpellName || !m_spellInfo->IsPositive() || !existingSpellInfo->IsPositive())
+            return false;
+        if (m_spellInfo->IsPassive() || existingSpellInfo->IsPassive() || m_spellInfo->GetDuration() <= 0 || existingSpellInfo->GetDuration() <= 0)
+            return false;
+        if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC) || existingSpellInfo->HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC))
+            return false;
+        if (m_spellInfo->SpellFamilyName == SPELLFAMILY_GENERIC || m_spellInfo->SpellFamilyName != existingSpellInfo->SpellFamilyName
+            || m_spellInfo->SpellFamilyFlags[0] != existingSpellInfo->SpellFamilyFlags[0] || m_spellInfo->SpellFamilyFlags[1] != existingSpellInfo->SpellFamilyFlags[1]
+            || m_spellInfo->SpellFamilyFlags[2] != existingSpellInfo->SpellFamilyFlags[2] || m_spellInfo->SpellFamilyFlags[3] != existingSpellInfo->SpellFamilyFlags[3])
+            return false;
+        if (strcmp((*m_spellInfo->SpellName)[sWorld->GetDefaultDbcLocale()], (*existingSpellInfo->SpellName)[sWorld->GetDefaultDbcLocale()]) != 0)
+            return false;
+        // Ranks may differ in their number of effects (Mark of the Wild 1126 has one, 5234 eight): compare the effects both have. GetEffect past the
+        // other spell's last effect asserts (235 crash 01:35, a druid bot's 5234 on a target holding 1126).
+        SpellInfo const* fewer = m_spellInfo->GetEffects().size() <= existingSpellInfo->GetEffects().size() ? m_spellInfo : existingSpellInfo;
+        SpellInfo const* more = fewer == m_spellInfo ? existingSpellInfo : m_spellInfo;
+        for (SpellEffectInfo const& a : fewer->GetEffects())
+        {
+            SpellEffectInfo const& b = more->GetEffect(a.EffectIndex);
+            if (a.Effect != b.Effect || a.ApplyAuraName != b.ApplyAuraName || a.TriggerSpell == more->Id || b.TriggerSpell == fewer->Id)
+                return false;
+        }
+        return true;
+    };
+    if (looksLikeRank())
+        return false;
 
     return true;
 }

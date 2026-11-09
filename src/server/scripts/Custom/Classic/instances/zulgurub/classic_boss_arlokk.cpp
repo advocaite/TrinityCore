@@ -114,22 +114,49 @@ void ClassicZgArlokkSetDamagePct(Creature* me, float pct)
 ## go_gong_of_bethekk
 ######*/
 
+// VMaNGOS summons Arlokk from the world database: event_scripts 9066 (the gong's goober event)
+// (9066, delay 10, command 10 SUMMON_CREATURE, 14515, 900000 ms, ..., -11540.7, -1627.71, 41.27, 0.1): ten seconds after
+// the gong she appears at the spot below, timed-or-dead despawn after 15 minutes.
+Position const ArlokkSummonPos = { -11540.7f, -1627.71f, 41.27f, 0.1f };
+constexpr uint32 ArlokkSummonDelayMs = 10 * IN_MILLISECONDS;
+constexpr Milliseconds ArlokkSummonDespawn = 900000ms;
+
 struct classic_go_gong_of_bethekk : public GameObjectAI
 {
     classic_go_gong_of_bethekk(GameObject* go) : GameObjectAI(go) { }
 
+    uint32 m_summonTimer = 0;
+
     bool OnGossipHello(Player* /*player*/) override
     {
-        if (InstanceScript* pInstance = me->GetInstanceScript())
-        {
-            if (pInstance->GetData(CLASSIC_ZG_TYPE_ARLOKK) == DONE || pInstance->GetData(CLASSIC_ZG_TYPE_ARLOKK) == IN_PROGRESS)
-                return true;
+        InstanceScript* pInstance = me->GetInstanceScript();
+        if (!pInstance)
+            return true;
 
-            pInstance->SetData(CLASSIC_ZG_TYPE_ARLOKK, IN_PROGRESS);
-        }
+        if (pInstance->GetData(CLASSIC_ZG_TYPE_ARLOKK) == DONE || pInstance->GetData(CLASSIC_ZG_TYPE_ARLOKK) == IN_PROGRESS)
+            return true;
 
-        // default goober use: event 9066 summons Arlokk
+        pInstance->SetData(CLASSIC_ZG_TYPE_ARLOKK, IN_PROGRESS);
+        m_summonTimer = ArlokkSummonDelayMs;
+
+        // default goober use: the gong rings; event 9066 is the timer above
         return false;
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (!m_summonTimer)
+            return;
+        if (m_summonTimer > diff)
+        {
+            m_summonTimer -= diff;
+            return;
+        }
+        m_summonTimer = 0;
+
+        // Her script despawns her on evade and respawns the gong, so a wipe can ring it again.
+        if (!me->SummonCreature(CLASSIC_ZG_NPC_ARLOKK, ArlokkSummonPos, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, ArlokkSummonDespawn))
+            TC_LOG_ERROR("scripts", "classic_go_gong_of_bethekk: could not summon High Priestess Arlokk ({}) in map {}", uint32(CLASSIC_ZG_NPC_ARLOKK), me->GetMapId());
     }
 };
 

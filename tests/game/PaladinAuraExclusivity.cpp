@@ -30,7 +30,7 @@ void UnitTestDataLoader::InitializeSpellSpecificInfo(SpellInfo& spellInfo)
 
 namespace
 {
-    constexpr uint32 AuraRanks[] = { 465, 10290, 643, 10291, 1032, 10292, 10293,
+    constexpr uint32 AuraRanks[] = { 465, 10290, 643, 10291, 1032, 10292, 10293, 20218,
         7294, 10298, 10299, 10300, 10301, 19746,
         19876, 19895, 19896, 19888, 19897, 19898, 19891, 19899, 19900 };
 

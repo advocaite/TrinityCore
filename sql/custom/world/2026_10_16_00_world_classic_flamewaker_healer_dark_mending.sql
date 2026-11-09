@@ -1,0 +1,7 @@
+-- Molten Core: the Flamewaker Healer (11663, Majordomo Executus' four healer adds) casts Dark Mending (19775, heals an ally for 27750-32250).
+-- The baseline SmartAI (2026_09_27_00_world_forever_baseline_02.sql) gives it only Shadow Shock and Shadow Bolt, so the "Healers first" kill
+-- order had nothing to stop. Cadence follows the Flamewaker Priest's Dark Mending row (11662, VMaNGOS spell list 116620): the most hurt ally
+-- (under 80 percent) within 30 yards, every 5-10 s (SmartAI event 74 with the action-invoker target picks the lowest-health friendly). Shadow Shock (id 0) and Shadow Bolt (id 1) rows stay as they are.
+DELETE FROM world.smart_scripts WHERE source_type = 0 AND entryorguid = 11663 AND id = 2;
+INSERT INTO world.smart_scripts (entryorguid, source_type, id, link, Difficulties, event_type, event_phase_mask, event_chance, event_flags, event_param1, event_param2, event_param3, event_param4, event_param5, event_param_string, action_type, action_param1, action_param2, action_param3, action_param4, action_param5, action_param6, action_param7, action_param_string, target_type, target_param1, target_param2, target_param3, target_param4, target_param_string, target_x, target_y, target_z, target_o, comment) VALUES
+(11663, 0, 2, 0, '', 74, 0, 100, 0, 0, 80, 5000, 10000, 30, '', 11, 19775, 0, 0, 0, 0, 0, 0, '', 7, 0, 0, 0, 0, '', 0.000, 0.000, 0.000, 0.000, 'Flamewaker Healer - Friendly At 80% HP - Cast ''Dark Mending''');

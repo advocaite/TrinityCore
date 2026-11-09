@@ -20,6 +20,9 @@
 
 // For static or at-server-startup loaded spell data
 
+#include "ClassicSpellValue.h"
+#include "DB2Structure.h"
+#include <deque>
 #include "Define.h"
 #include "DBCEnums.h"
 #include "Duration.h"
@@ -708,6 +711,19 @@ class TC_GAME_API SpellMgr
         // Spell threat table
         SpellThreatEntry const* GetSpellThreatEntry(uint32 spellID) const;
 
+        // Classic 1.60: vanilla damage / heal / absorb value of an effect of a legacy spell (ClassicSpellValue.h)
+        ClassicSpellValue::Value const* GetClassicSpellValue(uint32 spellId, uint32 effectIndex) const;
+        ClassicSpellValue::Cost const* GetClassicSpellCost(uint32 spellId) const;
+
+        // Classic 1.60 (Forever): a Waylaid Crate's "Stock Crate" spell takes one bundle of its list (table classic_crate_bundle)
+        struct ClassicCrateBundle
+        {
+            uint32 ItemId = 0;
+            uint32 Count = 0;
+        };
+        ClassicCrateBundle const* GetClassicCrateBundle(uint32 spellId, uint32 itemId) const;
+        bool IsClassicCrateSpell(uint32 spellId) const { return mClassicCrateBundles.contains(spellId); }
+
         SkillLineAbilityMapBounds GetSkillLineAbilityMapBounds(uint32 spell_id) const;
 
         PetAura const* GetPetAura(uint32 spell_id, uint8 eff) const;
@@ -775,6 +791,12 @@ class TC_GAME_API SpellMgr
         void LoadSpellInfoServerside();
         void LoadSpellInfoCustomAttributes();
         void LoadSpellInfoCorrections();
+        void LoadClassicSpellInfo();                        // must be after LoadSpellInfoCorrections (table classic_spell_info: cast time, cooldowns, duration, range)
+        void LoadClassicSpellEffects();                     // must be after LoadClassicSpellInfo and before LoadClassicSpellValues (table classic_spell_effect: aura, misc value, class mask)
+        void LoadClassicTwinChannels();                     // must be after LoadClassicSpellInfo (table classic_spell_twin: a twin of a channeled vanilla spell is channeled too)
+        void LoadClassicSpellValues();                      // must be after LoadSpellInfoStore
+        void LoadClassicSpellCosts();                       // must be after LoadSpellInfoStore
+        void LoadClassicCrateBundles();                     // must be after LoadSpellInfoStore and LoadItemTemplates
         void LoadSpellInfoSpellSpecificAndAuraState();
         void LoadSpellInfoDiminishing();
         void LoadSpellInfoImmunities();
@@ -807,6 +829,13 @@ class TC_GAME_API SpellMgr
         PetLevelupSpellMap         mPetLevelupSpellMap;
         PetDefaultSpellsMap        mPetDefaultSpellsMap;           // only spells not listed in related mPetLevelupSpellMap entry
         SpellTotemModelMap         mSpellTotemModel;
+        // the cast time / duration / range rows the classic_spell_info overrides point to (a SpellInfo holds a pointer to its DB2 row; these outlive it)
+        std::deque<SpellCastTimesEntry> mClassicCastTimes;
+        std::deque<SpellDurationEntry> mClassicDurations;
+        std::deque<SpellRangeEntry> mClassicRanges;
+        std::unordered_map<uint64, ClassicSpellValue::Value> mClassicSpellValues;   // (spellId << 8 | effectIndex)
+        std::unordered_map<uint32, ClassicSpellValue::Cost> mClassicSpellCosts;
+        std::unordered_map<uint32, std::vector<ClassicCrateBundle>> mClassicCrateBundles;   // Stock Crate spell -> its bundles
 };
 
 #define sSpellMgr SpellMgr::instance()

@@ -62,6 +62,11 @@ enum WeatherState : uint32
     WEATHER_STATE_BLACKSNOW         = 106
 };
 
+/// The Classic client's Weather.db2 keeps the legacy rows above (3-8, 22, 41, 42, 86) for their sounds only:
+/// none of them has a WeatherXParticulate entry, so the client plays the ambience and draws nothing.
+/// Returns the client row of the same type and strength that has particles; other ids pass through unchanged.
+TC_GAME_API uint32 GetClientWeatherId(WeatherState state);
+
 /// Weather for one zone
 class TC_GAME_API Weather
 {

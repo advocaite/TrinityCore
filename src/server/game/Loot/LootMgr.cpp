@@ -30,6 +30,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "World.h"
+#include <limits>
 
 static constexpr Rates QualityToRate[MAX_ITEM_QUALITY] =
 {
@@ -154,7 +155,11 @@ uint32 LootStore::LoadLootTable()
 
         uint32 entry               = fields[0].GetUInt32();
         LootStoreItem::Type type   = static_cast<LootStoreItem::Type>(fields[1].GetInt8());
-        uint32 item                = fields[2].GetUInt32();
+        // Use GetUInt64 to handle databases with BIGINT item columns, skip invalid values
+        uint64 rawItem             = fields[2].GetUInt64();
+        if (rawItem > std::numeric_limits<uint32>::max())
+            continue;
+        uint32 item                = static_cast<uint32>(rawItem);
         float  chance              = fields[3].GetFloat();
         bool   needsquest          = fields[4].GetBool();
         uint16 lootmode            = fields[5].GetUInt16();
@@ -1128,6 +1133,10 @@ void LoadLootTemplates_Creature()
     // 1 means loot for player corpse
     lootIdSet.erase(PLAYER_CORPSE_LOOT_ENTRY);
 
+    // Classic 1.60: Alterac Valley player corpse loot per victim race
+    for (uint32 race = 1; race <= std::numeric_limits<uint8>::max(); ++race)
+        lootIdSet.erase(CLASSIC_AV_CORPSE_LOOT_ENTRY + race);
+
     // output error for any still listed (not referenced from appropriate table) ids
     LootTemplates_Creature.ReportUnusedIds(lootIdSet);
 
@@ -1166,6 +1175,11 @@ void LoadLootTemplates_Disenchant()
         else
             lootIdSetUsed.insert(lootid);
     }
+
+    // Classic 1.60: an ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE item may have an entry of its own, keyed by its item id (Item::GetDisenchantLootId)
+    for (auto const& [itemId, itemTemplate] : sObjectMgr->GetItemTemplateStore())
+        if (itemTemplate.HasFlag(ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE) && lootIdSet.contains(itemId))
+            lootIdSetUsed.insert(itemId);
 
     for (uint32 lootId : lootIdSetUsed)
         lootIdSet.erase(lootId);
@@ -1431,6 +1445,15 @@ void LoadLootTemplates_Spell()
     // remove real entries and check existence loot
     sSpellMgr->ForEachSpellInfo([&](SpellInfo const* spellInfo)
     {
+        // SPELL_EFFECT_LOOT spells and the Classic 1.60 Stock Crate spells take their loot from here too; most SPELL_EFFECT_LOOT
+        // spells of the client have no rows (nothing to report), the ones that do are in use
+        if (spellInfo->HasEffect(SPELL_EFFECT_LOOT) || sSpellMgr->IsClassicCrateSpell(spellInfo->Id))
+        {
+            if (lootIdSet.contains(spellInfo->Id))
+                lootIdSetUsed.insert(spellInfo->Id);
+            return;
+        }
+
         // possible cases
         if (!spellInfo->IsLootCrafting())
             return;

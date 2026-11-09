@@ -1,7 +1,7 @@
 -- The Wounds of Betrayal (94489): Jorel Windsinger (258130) could not be talked to (Discord, KailON). The sniff gave him npcflag 0,
 -- and WorldSession::HandleGossipHelloOpcode needs UNIT_NPC_FLAG_GOSSIP, so his menu 41923 ("<Leave to tend to the other druids.>",
 -- the Find Jorel Windsinger credit, 2026_10_05_01) never opened. He is the only spawned creature with a scripted menu and neither
--- the gossip nor the quest giver flag. AnoCore v10 has npcflag 1 on him.
+-- the gossip nor the quest giver flag. The other Forever server has npcflag 1 on him.
 UPDATE `creature_template` SET `npcflag` = `npcflag` | 1 WHERE `entry` = 258130; -- UNIT_NPC_FLAG_GOSSIP
 
 -- The conditions of seven Forever gossip options used the GossipOptionID as SourceEntry; ConditionMgr::addToGossipMenuItems matches

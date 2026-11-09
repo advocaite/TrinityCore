@@ -2,7 +2,7 @@
 -- (94638), whose reward spell teaches Bear Form. The quests sniffed from Forever came without a class mask, so AllowableClasses
 -- stays 0 and Player::SatisfyQuestClass lets every class take them. The class sort in quest_template (QuestSortID -263 druid,
 -- -261 hunter, ...) is not checked by the core.
--- In AnoCore v10 every one of its 631 quests with a class sort has exactly that class as AllowableClasses, so a class sort means
+-- In the other Forever server every one of its 631 quests with a class sort has exactly that class as AllowableClasses, so a class sort means
 -- that class only. Fill the mask from the sort wherever it is still 0 (the 10-23 file did this for four Thendal Grove quests;
 -- 65 more Forever quests were left, among them the Skyborne druid, hunter, shaman and warrior chains). A mask already set is kept.
 -- Safe to run again.
@@ -23,7 +23,7 @@ WHERE `QuestSortID` IN (-81, -141, -261, -162, -262, -82, -161, -61, -263)
 ON DUPLICATE KEY UPDATE `AllowableClasses` = IF(`AllowableClasses` = 0, VALUES(`AllowableClasses`), `AllowableClasses`);
 
 -- Call of Earth (Zephras Isle, Windshaper Skyborne shaman) is sorted under the zone, not the class: its first step 92466 is
--- shaman-only since the 10-24 quest givers file, the next two are not. AnoCore v10 has all three at 64.
+-- shaman-only since the 10-24 quest givers file, the next two are not. The other Forever server has all three at 64.
 INSERT INTO `quest_template_addon` (`ID`, `AllowableClasses`) VALUES
 (92467, 64),
 (92468, 64)
