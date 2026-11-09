@@ -3790,6 +3790,13 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
     });
 
+    // Forever Skyborne racial Skysight: its buff (Elemental Blessing 1259688) also raises mounted speed, so it can be cast while
+    // mounted (client row through hotfixes 2026_11_09_40)
+    ApplySpellFix({ 1259686 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_ALLOW_WHILE_MOUNTED;
+    });
+
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {
