@@ -9,6 +9,8 @@
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/BotIntent.h"
 #include "ObjectGuid.h"
+#include "ObjectMgr.h"
+#include "Util/ChestLock.h"
 #include "Log.h"
 
 namespace Playerbot {
@@ -166,12 +168,22 @@ bool GatherDetourFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
 // ---------- idle:loot_chest ----------
 constexpr uint8 GO_CHEST_LOCAL = 3;
 
+// The closest chest a bot may click: herbs, ore veins and locked boxes need a skill spell, not a click (API::use_game_object
+// refuses them), so they are skipped here and a real chest behind one is still found.
+BotSnapshot::NearbyObject const* NearestClickableChest(BotSnapshotView const& s)
+{
+    for (auto const& o : s.nearby_objects())
+        if (o.go_type == GO_CHEST_LOCAL && !ChestNeedsSkill(sObjectMgr->GetGameObjectTemplate(o.entry)))
+            return &o;
+    return nullptr;
+}
+
 bool LootChestGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,uint32 now_ms)
 {
     // Quest-first (2026-06-16): yield to a reachable quest action.
     if (s.has_actionable_quest()) return false;
     if (s.bag_free_slots() == 0) return false;
-    auto const* chest = s.nearest_object_of_type(GO_CHEST_LOCAL);
+    auto const* chest = NearestClickableChest(s);
     if (!chest) return false;
     if (ai.chest_loot_recently_tried(chest->guid.GetCounter(), now_ms))
         return false;
@@ -183,7 +195,7 @@ bool LootChestGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
 
 bool LootChestFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32 now_ms)
 {
-    auto const* chest = s.nearest_object_of_type(GO_CHEST_LOCAL);
+    auto const* chest = NearestClickableChest(s);
     if (!chest) return false;
     emit.use_game_object(chest->guid);
     ai.note_chest_loot_try(chest->guid.GetCounter(), now_ms);

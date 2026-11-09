@@ -39,6 +39,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "DB2Structure.h"
+#include "Util/ChestLock.h"
 #include "Creature.h"
 #include "UnitDefines.h"
 #include "Loot.h"
@@ -7162,6 +7163,11 @@ Result API::use_game_object(ObjectGuid go_guid)
     // have. A bot opening one took nothing from it, but the object stayed opened with loot made for the bot, and the player who
     // needed it found it empty (Discord 2026-10-27).
     if (obj->GetGoType() == GAMEOBJECT_TYPE_CHEST && (!obj->isSpawned() || !obj->ActivateToQuest(p_)))
+        return Result::InvalidTarget;
+    // An herb, ore vein or locked box is a chest whose lock needs a skill: a player casts Herb Gathering, Mining or Pick Lock on it,
+    // and Use() skips that lock. Bots walking past emptied every herb and ore node in the open world with no skill at all, so players
+    // found none (Discord 2026-11-09). A bot never opens one of these by a plain click.
+    if (obj->GetGoType() == GAMEOBJECT_TYPE_CHEST && Playerbot::ChestNeedsSkill(obj->GetGOInfo()))
         return Result::InvalidTarget;
     // Mounted-restriction check from HandleGameObjectUseOpcode: most GOs
     // refuse interaction while mounted unless flagged UsableMounted.
