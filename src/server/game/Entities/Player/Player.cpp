@@ -2547,8 +2547,13 @@ void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
     // talents base at level diff (talents = level - 9 but some can be used already)
+    // Only when the character is not on its class's default specialization already: the reset takes the specialization spells
+    // away and teaches them again, and doing that on every level gain from 2 to 9 dismissed a warlock's or hunter's pet each time
+    // (Discord 2026-11-09, with the Legacy perk Talented, whose points come at 5 to 9).
     if (level < MIN_SPECIALIZATION_LEVEL)
-        ResetTalentSpecialization();
+        if (ChrSpecializationEntry const* defaultSpec = sDB2Manager.GetDefaultChrSpecializationForClass(GetClass());
+            !defaultSpec || uint32(GetPrimarySpecialization()) != defaultSpec->ID)
+            ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
     // Classic 1.60: the first talent point comes at level 10, not at 15 as on retail; resetting below 15 wiped the
