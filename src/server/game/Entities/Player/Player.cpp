@@ -17056,9 +17056,12 @@ bool Player::GiveQuestSourceItem(Quest const* quest)
     uint32 srcitem = quest->GetSrcItemId();
     if (srcitem > 0)
     {
-        // Don't give source item if it is the same item used to start the quest
+        // Don't give source item if it is the same item used to start the quest.
+        // Only when the player really holds it: some quests (The Treaty of Understanding 98423) are started from
+        // a gameobject, and their source item also names the quest as its start quest. Without the item check the
+        // player never got the item and could not finish the quest.
         ItemTemplate const* itemTemplate = ASSERT_NOTNULL(sObjectMgr->GetItemTemplate(srcitem));
-        if (quest->GetQuestId() == itemTemplate->GetStartQuest())
+        if (quest->GetQuestId() == itemTemplate->GetStartQuest() && HasItemCount(srcitem, 1, true))
             return true;
 
         uint32 count = quest->GetSrcItemCount();
