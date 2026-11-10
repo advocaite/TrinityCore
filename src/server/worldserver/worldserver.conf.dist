@@ -70,6 +70,16 @@
 RealmID = 1
 
 #
+#    Realm.AlsoAcceptBuilds
+#        Description: Comma-separated client builds that every realm also lists for and lets in, besides its own
+#                     realmlist.gamebuild. The in-game realm list and realm switch read it here, the login in
+#                     bnetserver.conf: keep the two lists the same. Each build also needs a row in auth.build_info.
+#        Example:     "70862,70888" (a realm on 70707 that 70862 and 70888 clients may also join)
+#        Default:     "" - (only the realm's own build)
+
+Realm.AlsoAcceptBuilds = ""
+
+#
 #    DataDir
 #        Description: Data directory setting.
 #        Important:   DataDir needs to be quoted, as the string might contain space characters.
