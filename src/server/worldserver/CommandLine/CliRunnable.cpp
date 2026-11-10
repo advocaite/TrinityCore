@@ -713,8 +713,10 @@ namespace Trinity::Impl::Cli
             bool outputIsConsole = GetConsoleMode(out, &outMode) != 0;
             if (outputIsConsole)
                 SetConsoleMode(out, outMode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            // Quick Edit off: a click or a selection in the window paused every console write, so logging, the world
+            // thread and logins hung until somebody pressed a key in the window
             if (inputIsConsole)
-                SetConsoleMode(in, (inMode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_PROCESSED_INPUT);
+                SetConsoleMode(in, (inMode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_QUICK_EDIT_MODE)) | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS);
 
             {
                 std::lock_guard<std::recursive_mutex> lock(CliManager::GetMutex());

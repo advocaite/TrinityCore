@@ -21,12 +21,14 @@
 #include "BattlegroundScore.h"
 #include "BattlegroundScript.h"
 #include "ChatTextBuilder.h"
+#include "Config.h"
 #include "Creature.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "Formulas.h"
 #include "GameEventSender.h"
+#include "GameObject.h"
 #include "GameTime.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
@@ -44,6 +46,7 @@
 #include "Player.h"
 #include "ReputationMgr.h"
 #include "SpellAuras.h"
+#include "StringFormat.h"
 #include "TemporarySummon.h"
 #include "TerrainMgr.h"
 #include "Transport.h"
@@ -51,6 +54,7 @@
 #include "VMapFactory.h"
 #include "VMapManager.h"
 #include "WorldStateMgr.h"
+#include <algorithm>
 #include <cstdarg>
 
 template<class Do>
@@ -65,20 +69,19 @@ Battleground::Battleground(BattlegroundTemplate const* battlegroundTemplate) : _
 {
     ASSERT(_battlegroundTemplate, "Nonexisting Battleground Template passed to battleground ctor!");
 
+    m_QueueID           = BATTLEGROUND_QUEUE_NONE;
     m_InstanceID        = 0;
     m_Status            = STATUS_NONE;
     m_ClientInstanceID  = 0;
     m_EndTime           = 0;
     m_InvitedAlliance   = 0;
     m_InvitedHorde      = 0;
-    m_ArenaType         = 0;
     _winnerTeamId       = PVP_TEAM_NEUTRAL;
     m_StartTime         = 0;
     m_ResetStatTimer    = 0;
     m_ValidStartPositionTimer = 0;
     m_Events            = 0;
     m_StartDelayTime    = 0;
-    m_IsRated           = false;
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
 
@@ -517,6 +520,94 @@ WorldSafeLocsEntry const* Battleground::GetTeamStartPosition(TeamId teamId) cons
     return _battlegroundTemplate->StartLocation[teamId];
 }
 
+Battleground::StartGateInfo const& Battleground::GetStartGate(TeamId teamId, WorldObject const* searcher) const
+{
+    StartGateInfo& info = _startGate[teamId];
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (info.StampMs != 0 && now - info.StampMs < 2000u)
+        return info;
+    info = StartGateInfo();
+    info.StampMs = now ? now : 1u;
+
+    WorldSafeLocsEntry const* start = GetTeamStartPosition(teamId);
+    if (!start || !searcher || start->Loc.GetMapId() != searcher->GetMapId())
+        return info;
+
+    FindGameObjectOptions options;
+    options.GameObjectType = GAMEOBJECT_TYPE_DOOR;
+    std::vector<GameObject*> doors;
+    searcher->GetGameObjectListWithOptionsInGrid(doors, 150.0f, options);
+
+    // The closed doors by distance from the team's start position. The nearest one closes the room; a door pair is mirrored about
+    // the start, so a door within 25 y further out belongs to the same line, while the next line out (the vestibule beyond the
+    // inner doors in Warsong Gulch) is farther.
+    std::vector<std::pair<float, GameObject const*>> closed;
+    for (GameObject const* door : doors)
+        if (door->GetGoState() == GO_STATE_READY)
+            closed.emplace_back(door->GetExactDist2d(start->Loc), door);
+    if (closed.empty())
+        return info;
+    std::sort(closed.begin(), closed.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+
+    float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+    uint8 n = 0;
+    for (auto const& [dist, door] : closed)
+    {
+        if (dist > closed.front().first + 25.0f)
+            break;
+        sx += door->GetPositionX(); sy += door->GetPositionY(); sz += door->GetPositionZ();
+        ++n;
+    }
+    info.X = sx / n; info.Y = sy / n; info.Z = sz / n;
+    float ix = start->Loc.GetPositionX() - info.X, iy = start->Loc.GetPositionY() - info.Y;
+    float const len = std::sqrt(ix * ix + iy * iy);
+    if (len < 1.0f)
+        return info;
+    info.InX = ix / len; info.InY = iy / len;
+    info.Doors = n;
+    info.Valid = true;
+    return info;
+}
+
+std::string Battleground::DescribeIndoors(Player const* player) const
+{
+    Map* map = player->GetMap();
+    uint32 mogp = 0; int32 adtId = 0, rootId = 0, groupId = 0;
+    bool const wmo = map && map->GetTerrain() && map->GetTerrain()->GetAreaInfo(player->GetPhaseShift(), map->GetId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), mogp, adtId, rootId, groupId);
+    if (!wmo)
+        return Trinity::StringFormat("no wmo under the player, area {}", player->GetAreaId());
+    char const* row = "no WMOAreaTable row";
+    int32 rowFlags = 0;
+    if (WMOAreaTableEntry const* e = DB2Manager::GetWMOAreaTable(rootId, adtId, groupId, false))
+    {
+        row = "exact row"; rowFlags = e->Flags;
+    }
+    else if (WMOAreaTableEntry const* f = DB2Manager::GetWMOAreaTable(rootId, adtId, groupId, true))
+    {
+        row = "group -1 fallback row"; rowFlags = f->Flags;
+    }
+    AreaTableEntry const* area = sAreaTableStore.LookupEntry(player->GetAreaId());
+    return Trinity::StringFormat("wmo mogp 0x{:X} (0x8 exterior {}, 0x2000 interior {}) root {} adt {} group {}, {} flags 0x{:X}, area {} flags 0x{:X}",
+        mogp, (mogp & 0x8) != 0, (mogp & 0x2000) != 0, rootId, adtId, groupId, row, rowFlags, player->GetAreaId(), area ? uint32(area->Flags[0]) : 0u);
+}
+
+char const* Battleground::GetMountRefusal(Player const* player) const
+{
+    if (isArena())
+        return nullptr;
+    if (GetStatus() == STATUS_WAIT_JOIN && IsEnclosedStartArea(GetMapId()))
+        return "the start doors are closed";
+    // The client's own rule: the WMO group under the player decides (interior 0x2000 and not exterior 0x8). Not Player::IsOutdoors(): that
+    // value takes the WMOAreaTable ForceIndoors override, and with 70205 vmaps under 70291 DB2 data (WSG 2026-10-09: exterior group 19307
+    // at the Horde flag room, and open ground with no WMO at all, were refused as indoors) the override hits the wrong groups.
+    Map const* map = player->GetMap();
+    uint32 mogp = 0; int32 adtId = 0, rootId = 0, groupId = 0;
+    if (map && map->GetTerrain() && map->GetTerrain()->GetAreaInfo(player->GetPhaseShift(), map->GetId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), mogp, adtId, rootId, groupId))
+        if (IsIndoorWmoGroup(mogp))
+            return "the area is indoors";
+    return nullptr;
+}
+
 bool Battleground::IsMountRefused(Player const* player, bool checkStartArea) const
 {
     if (checkStartArea && GetStatus() == STATUS_WAIT_JOIN && IsEnclosedStartArea(GetMapId()))
@@ -699,6 +790,14 @@ void Battleground::EndBattleground(Team winner)
         if (marks.MapId == GetBgMap()->GetId())
             classicMarks = &marks;
 
+    // Classic 1.60: PvP rank. The rank is the renown track of faction 2800 "PvP Rank Points" (renown currency 3473, rank 1 at 750
+    // points ... rank 14 at 24750 in all, RenownThresholdCurveID 103650). Battlegrounds are the main source of rank points on the
+    // official realm; nothing in the client data pays them (no spell or quest reward), so the server gives them when a battle ends.
+    static constexpr uint32 ClassicPvPRankFactionID = 2800;
+    FactionEntry const* classicPvPRankFaction = isBattleground() ? sFactionStore.LookupEntry(ClassicPvPRankFactionID) : nullptr;
+    int32 const classicRankPointsWin = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundWin", 250);
+    int32 const classicRankPointsLoss = sConfigMgr->GetIntDefault("Classic.PvPRank.PointsBattlegroundLoss", 100);
+
     WorldPackets::Battleground::PVPMatchComplete pvpMatchComplete;
     pvpMatchComplete.Winner = GetWinner();
     pvpMatchComplete.Duration = std::chrono::duration_cast<Seconds>(Milliseconds(std::max<int32>(0, (GetElapsedTime() - BG_START_DELAY_2M))));
@@ -764,6 +863,11 @@ void Battleground::EndBattleground(Team winner)
             else if (GetInProgressDuration() >= 10min)
                 player->CastSpell(player, classicMarks->Lose, true);
         }
+
+        // Classic 1.60: rank points for the battle (winners more, losers less), see classicPvPRankFaction above
+        if (classicPvPRankFaction)
+            if (int32 rankPoints = team == winner ? classicRankPointsWin : classicRankPointsLoss; rankPoints > 0)
+                player->GetReputationMgr().ModifyReputation(classicPvPRankFaction, rankPoints, false, true);
 
         // Reward winner team
         if (team == winner)
@@ -916,7 +1020,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
             // close the match state opened at the start on every way out (leave, kick, teleport away, the leave after the scoreboard);
             // the client keeps its PvP match (restricted addon environment) active until told otherwise and the chat box stays broken
-            if (SendPacket)
+            if (SendPacket && player->GetSession() && !player->GetSession()->IsBot())
                 player->SendDirectMessage(WorldPackets::Battleground::PVPMatchSetState(WorldPackets::Battleground::PVPMatchState::Inactive).Write());
 
             if (SendPacket && bgQueueTypeId)
@@ -1010,8 +1114,8 @@ void Battleground::StartBattleground()
     // and it doesn't matter if we call StartBattleground() more times, because m_Battlegrounds is a map and instance id never changes
     sBattlegroundMgr->AddBattleground(this);
 
-    if (m_IsRated)
-        TC_LOG_DEBUG("bg.arena", "Arena match type: {} started.", m_ArenaType);
+    if (isRated())
+        TC_LOG_DEBUG("bg.arena", "Arena match type: {} started.", GetArenaType());
 }
 
 void Battleground::TeleportPlayerToExploitLocation(Player* player)
@@ -1043,6 +1147,7 @@ void Battleground::AddPlayer(Player* player, BattlegroundQueueTypeId queueId)
     if (!isInBattleground)
     {
         UpdatePlayersCountByTeam(team, false);                  // +1 player
+        RaiseInvitedCountTo(team, GetPlayersCountByTeam(team));
         PlayerScores[player->GetGUID()] = new BattlegroundScore(player->GetGUID(), player->GetBGTeam(), _pvpStatIds);
     }
 
@@ -1210,7 +1315,7 @@ void Battleground::EventPlayerLoggedOut(Player* player)
 // This method should be called only once ... it adds pointer to queue
 void Battleground::AddToBGFreeSlotQueue()
 {
-    if (!m_InBGFreeSlotQueue && isBattleground())
+    if (!m_InBGFreeSlotQueue && isBattleground() && !isRated())
     {
         sBattlegroundMgr->AddToBGFreeSlotQueue(this);
         m_InBGFreeSlotQueue = true;
@@ -1222,7 +1327,7 @@ void Battleground::RemoveFromBGFreeSlotQueue()
 {
     if (m_InBGFreeSlotQueue)
     {
-        sBattlegroundMgr->RemoveFromBGFreeSlotQueue(GetMapId(), m_InstanceID);
+        sBattlegroundMgr->RemoveFromBGFreeSlotQueue(this);
         m_InBGFreeSlotQueue = false;
     }
 }
@@ -1233,7 +1338,9 @@ uint32 Battleground::GetFreeSlotsForTeam(Team team) const
 {
     // if BG is starting and CONFIG_BATTLEGROUND_INVITATION_TYPE == BG_QUEUE_INVITATION_TYPE_NO_BALANCE, invite anyone
     if (GetStatus() == STATUS_WAIT_JOIN && sWorld->getIntConfig(CONFIG_BATTLEGROUND_INVITATION_TYPE) == BG_QUEUE_INVITATION_TYPE_NO_BALANCE)
-        return (GetInvitedCount(team) < GetMaxPlayersPerTeam()) ? GetMaxPlayersPerTeam() - GetInvitedCount(team) : 0;
+        // players already inside count too: the invited counter only holds the pending invitations (WSG 2026-10-11: 12 Alliance inside a
+        // 10-a-side match, because 4 invited left 6 'free')
+        return PhysicalRoom(std::max(GetInvitedCount(team), GetPlayersCountByTeam(team)), GetMaxPlayersPerTeam());
 
     // if BG is already started or CONFIG_BATTLEGROUND_INVITATION_TYPE != BG_QUEUE_INVITATION_TYPE_NO_BALANCE, do not allow to join too much players of one faction
     uint32 otherTeamInvitedCount;
@@ -1256,6 +1363,19 @@ uint32 Battleground::GetFreeSlotsForTeam(Team team) const
         otherTeamPlayersCount = GetPlayersCountByTeam(ALLIANCE);
     }
     if (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN)
+        return BalancedFreeSlots(thisTeamInvitedCount, otherTeamInvitedCount, thisTeamPlayersCount, otherTeamPlayersCount,
+            GetMaxPlayersPerTeam(), GetMinPlayersPerTeam());
+    return 0;
+}
+
+uint32 Battleground::BalancedFreeSlots(uint32 thisTeamInvitedCount, uint32 otherTeamInvitedCount, uint32 thisTeamPlayersCount, uint32 otherTeamPlayersCount,
+    uint32 maxPlayersPerTeam, uint32 minPlayersPerTeam)
+{
+    // A player already inside was invited once: the invited counter only counts queue invitations, so a player who arrived another way
+    // (the bots' direct ports, a claimed running match) was missing from it. AB 2026-10-11 had 10 Alliance and 4 Horde inside with invited
+    // counters of 1 and 0, so only one Horde bot at a time was allowed in. The players inside count as invited.
+    thisTeamInvitedCount  = std::max(thisTeamInvitedCount, thisTeamPlayersCount);
+    otherTeamInvitedCount = std::max(otherTeamInvitedCount, otherTeamPlayersCount);
     {
         // difference based on ppl invited (not necessarily entered battle)
         // default: allow 0
@@ -1269,7 +1389,7 @@ uint32 Battleground::GetFreeSlotsForTeam(Team team) const
             diff = otherTeamInvitedCount - thisTeamInvitedCount;
 
         // difference based on max players per team (don't allow inviting more)
-        uint32 diff2 = (thisTeamInvitedCount < GetMaxPlayersPerTeam()) ? GetMaxPlayersPerTeam() - thisTeamInvitedCount : 0;
+        uint32 diff2 = (thisTeamInvitedCount < maxPlayersPerTeam) ? maxPlayersPerTeam - thisTeamInvitedCount : 0;
 
         // difference based on players who already entered
         // default: allow 0
@@ -1281,8 +1401,8 @@ uint32 Battleground::GetFreeSlotsForTeam(Team team) const
         else if (otherTeamPlayersCount > thisTeamPlayersCount)
             diff3 = otherTeamPlayersCount - thisTeamPlayersCount;
         // or other side has less than minPlayersPerTeam
-        else if (thisTeamInvitedCount <= GetMinPlayersPerTeam())
-            diff3 = GetMinPlayersPerTeam() - thisTeamInvitedCount + 1;
+        else if (thisTeamInvitedCount <= minPlayersPerTeam)
+            diff3 = minPlayersPerTeam - thisTeamInvitedCount + 1;
 
         // return the minimum of the 3 differences
 
@@ -1291,7 +1411,6 @@ uint32 Battleground::GetFreeSlotsForTeam(Team team) const
         // min of diff, diff2 and diff3
         return std::min(diff, diff3);
     }
-    return 0;
 }
 
 bool Battleground::isArena() const
@@ -1524,7 +1643,10 @@ void Battleground::SetBracket(PVPDifficultyEntry const* bracketEntry)
 
 void Battleground::RewardXPAtKill(Player* killer, Player* victim)
 {
-    if (sWorld->getBoolConfig(CONFIG_BG_XP_FOR_KILL) && killer && victim)
+    // Honor from a battleground kill must not depend on Battleground.GiveXPForKills - that switch only
+    // decides whether kills also grant XP (see KillRewarder::_RewardPlayer). Before, the whole reward
+    // call was skipped when it was off, so a battleground kill paid no honor and counted no HK.
+    if (killer && victim)
     {
         Player* killers[] = { killer };
         KillRewarder(Trinity::IteratorPair(std::begin(killers), std::end(killers)), victim, true).Reward();

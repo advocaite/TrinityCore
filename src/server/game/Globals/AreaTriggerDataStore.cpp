@@ -522,6 +522,12 @@ AreaTriggerSpawn const* AreaTriggerDataStore::GetAreaTriggerSpawn(ObjectGuid::Lo
     return Trinity::Containers::MapGetValuePtr(_areaTriggerSpawnsBySpawnId, spawnId);
 }
 
+void AreaTriggerDataStore::ForEachAreaTriggerSpawn(std::function<void(AreaTriggerSpawn const&)> const& visit) const
+{
+    for (auto const& [spawnId, spawn] : _areaTriggerSpawnsBySpawnId)
+        visit(spawn);
+}
+
 AreaTriggerDataStore* AreaTriggerDataStore::Instance()
 {
     static AreaTriggerDataStore instance;

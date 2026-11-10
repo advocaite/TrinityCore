@@ -290,9 +290,8 @@ public:
         }
 
         // Replaces the VMaNGOS OnCreatureSpellHit instance hook (see header)
-        // TODO(classic): nothing calls this yet. VMaNGOS reacted to spell 28441 (AB Effect 000, cast by an Ashbringer wielder)
-        // hitting Commander Mograine (3976, EventAI / SmartAI in DB). Needs a spell script on 28441 (or Mograine's SmartAI)
-        // doing instance->SetGuidData(CLASSIC_SM_DATA_ASHBRINGER_MOGRAINE_HIT, casterGuid).
+        // VMaNGOS reacted to spell 28441 (AB Effect 000, cast by an Ashbringer wielder) hitting Commander Mograine (3976). His SmartAI
+        // row 27 (2026_10_24_62_world_classic_sm_ashbringer_mograine.sql) sets this on that spell hit with the caster's guid.
         void SetGuidData(uint32 type, ObjectGuid data) override
         {
             if (type != CLASSIC_SM_DATA_ASHBRINGER_MOGRAINE_HIT)

@@ -19,6 +19,7 @@
 #include "BattlefieldMgr.h"
 #include "CellImpl.h"
 #include "CinematicMgr.h"
+#include "ClassicLegacyPerks.h"
 #include "CombatLogPackets.h"
 #include "Corpse.h"
 #include "CreatureGroups.h"
@@ -1801,6 +1802,11 @@ int32 WorldObject::ModSpellDuration(SpellInfo const* spellInfo, WorldObject cons
             if (std::ranges::find(CampBenefitSpells, spellInfo->Id) != std::end(CampBenefitSpells))
                 if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(1225502, EFFECT_1))
                     AddPct(duration, pct);
+
+            // Conquering Hero 1225506: "Beneficial effects you gain from celebrating the defeat of bosses gain $s1% increased duration."
+            if (ClassicLegacyPerks::IsBossCelebrationBuff(spellInfo->Id))
+                if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(ClassicLegacyPerks::CONQUERING_HERO, EFFECT_0))
+                    AddPct(duration, pct);
         }
 
         // Permanence 1225502 EFFECT_0: class abilities granting long-duration stat or attribute benefits to party / raid members
@@ -1845,6 +1851,18 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
         castTime = int32(float(castTime) * unitCaster->m_modAttackSpeedPct[RANGED_ATTACK]);
     else if (IsPartOfSkillLine(SKILL_COOKING, spellInfo->Id) && unitCaster->HasAura(67556)) // cooking with Chef Hat.
         castTime = 500;
+
+    // PlayerbotV2 pacing multiplier (bots only; 1.0 for everyone else). Applied last so it
+    // also covers ranged-slot and ability cast times. A cast never drops below 250 ms.
+    if (castTime > 0 && unitCaster->IsPlayer())
+    {
+        float const botMod = unitCaster->ToPlayer()->GetBotCastSpeedMod();
+        if (botMod != 1.0f)
+        {
+            int32 const scaled = int32(float(castTime) * botMod);
+            castTime = botMod < 1.0f ? std::max(scaled, std::min(castTime, 250)) : scaled;
+        }
+    }
 }
 
 void WorldObject::ModSpellDurationTime(SpellInfo const* spellInfo, int32& duration, Spell* spell /*= nullptr*/) const
@@ -2013,6 +2031,12 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, SpellInfo const* spellIn
 
     if (spellInfo->HasAttribute(SPELL_ATTR3_ALWAYS_HIT))
         return SPELL_MISS_NONE;
+
+    // A playerbot raid tank's taunt lands (ThreatManager::SetTauntNeverMisses): immunity and reflect above still apply.
+    if (Unit const* caster = ToUnit())
+        if (caster->GetThreatManager().GetTauntNeverMisses() &&
+            (spellInfo->HasAura(SPELL_AURA_MOD_TAUNT) || spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME)))
+            return SPELL_MISS_NONE;
 
     switch (spellInfo->DmgClass)
     {
@@ -3118,13 +3142,27 @@ void WorldObject::BuildUpdate(UpdateDataMapType& data_map)
 
 bool WorldObject::AddToObjectUpdate()
 {
-    GetMap()->AddUpdateObject(this);
+    // SAFETY CHECK: Validate Map pointer to prevent crash in AddUpdateObject
+    // Crash at Map.h:573 (hash set insert) could be caused by corrupted Map pointer
+    Map* map = GetMap();
+    if (!map)
+    {
+        TC_LOG_ERROR("misc", "WorldObject::AddToObjectUpdate called with null map for {}", GetGUID().ToString());
+        return false;
+    }
+    map->AddUpdateObject(this);
     return true;
 }
 
 void WorldObject::RemoveFromObjectUpdate()
 {
-    GetMap()->RemoveUpdateObject(this);
+    Map* map = GetMap();
+    if (!map)
+    {
+        TC_LOG_ERROR("misc", "WorldObject::RemoveFromObjectUpdate called with null map for {}", GetGUID().ToString());
+        return;
+    }
+    map->RemoveUpdateObject(this);
 }
 
 ObjectGuid WorldObject::GetTransGUID() const

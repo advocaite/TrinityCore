@@ -21,6 +21,7 @@
 #include "Object.h"
 #include "CombatManager.h"
 #include "FlatSet.h"
+#include "IteratorPair.h"
 #include "SpellAuraDefines.h"
 #include "ThreatManager.h"
 #include "Timer.h"
@@ -325,6 +326,7 @@ enum UnitState : uint32
     UNIT_STATE_ALL_STATE           = 0xffffffff
 };
 
+TC_GAME_API extern float const defaultBaseMoveSpeed[MAX_MOVE_TYPE];
 TC_GAME_API extern float baseMoveSpeed[MAX_MOVE_TYPE];
 TC_GAME_API extern float playerBaseMoveSpeed[MAX_MOVE_TYPE];
 
@@ -626,6 +628,7 @@ enum ReactiveType
 {
     REACTIVE_DEFENSE      = 0,
     REACTIVE_DEFENSE_2    = 1,
+    REACTIVE_OVERPOWER    = 2,
     MAX_REACTIVE
 };
 
@@ -1477,6 +1480,9 @@ class TC_GAME_API Unit : public WorldObject
         void FinishSpell(CurrentSpellTypes spellType, SpellCastResult result = SPELL_CAST_OK);
 
         void CancelAutoRepeatSpell();
+        // Classic 1.60: whether Auto Shot (75) may take a shot now as far as the wind-up goes: it is already on and the unit has stood
+        // still for half a second (players only; ClassicAutoShot.h)
+        bool IsClassicAutoShotWindupDone() const;
 
         // set withDelayed to true to account delayed spells as cast
         // delayed+channeled spells are always accounted as cast
@@ -1779,7 +1785,7 @@ class TC_GAME_API Unit : public WorldObject
 
         // reactive attacks
         void ClearAllReactives();
-        void StartReactiveTimer(ReactiveType reactive) { m_reactiveTimer[reactive] = REACTIVE_TIMER_START;}
+        void StartReactiveTimer(ReactiveType reactive, uint32 duration = REACTIVE_TIMER_START) { m_reactiveTimer[reactive] = duration; }
         void UpdateReactives(uint32 p_time);
 
         // group updates
@@ -1830,7 +1836,7 @@ class TC_GAME_API Unit : public WorldObject
 
         int32 RewardRage(uint32 baseRage);
         // Classic 1.60 (vanilla) combat: rage from damage, weapon / defense skill of the attack table, blocked amount
-        int32 RewardClassicRage(uint32 damage, bool attacker);
+        int32 RewardClassicRage(float damage, bool attacker);   // damage stays fractional (Dual Wield Specialization bonus on small hits)
         int32 GetClassicWeaponSkill(WeaponAttackType attType, Unit const* victim) const;
         int32 GetClassicDefenseSkill(Unit const* attacker) const;
         virtual uint32 GetClassicShieldBlockValue() const { return GetLevel() / 2 + uint32(std::max(0.0f, GetStat(STAT_STRENGTH)) / 20.0f); }
@@ -1914,6 +1920,11 @@ class TC_GAME_API Unit : public WorldObject
         void _DeleteRemovedAuras();
 
         void _UpdateAutoRepeatSpell();
+
+        // Classic 1.60 Auto Shot (ClassicAutoShot.h): game time the hunter last moved or turned Auto Shot on (the half-second wind-up
+        // counts from here), and the last failure reason told to the client (told once, not every update)
+        uint32 m_classicAutoShotStillSince = 0;
+        SpellCastResult m_classicAutoShotLastReported = SPELL_CAST_OK;
 
         bool m_ControlledByPlayer;
 

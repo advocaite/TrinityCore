@@ -495,9 +495,35 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
         if (categoryCooldown < Duration::zero())
             categoryCooldown = Duration::zero();
 
+        // Classic 1.60: the client starts the cooldown of its own data (Forever's Drain Life 15 s) when the spell goes off and only the server's packet
+        // corrects it. A cooldown the classic tables changed is therefore always told to the client: cleared when there is none, else sent in full.
+        if (spellInfo->ClassicCooldownOverridden && !forcedCooldown)
+        {
+            if (cooldown == Duration::zero() && categoryCooldown == Duration::zero())
+            {
+                if (Player* playerOwner = GetPlayerOwner())
+                {
+                    WorldPackets::Spells::ClearCooldown clearCooldown;
+                    clearCooldown.IsPet = _owner != playerOwner;
+                    clearCooldown.SpellID = spellInfo->Id;
+                    clearCooldown.ClearOnHold = false;
+                    playerOwner->SendDirectMessage(clearCooldown.Write());
+                }
+            }
+            else
+                needsCooldownPacket = true;
+        }
+
         // no cooldown after applying spell mods
         if (cooldown == Duration::zero() && categoryCooldown == Duration::zero())
+        {
+            // the cooldown event of a "cooldown on event" spell (Stealth) still has to end the waiting (on hold) entry, or the spell
+            // stays "not ready" until the next login
+            auto itr = _spellCooldowns.find(spellInfo->Id);
+            if (itr != _spellCooldowns.end() && itr->second.OnHold)
+                EraseCooldown(itr);
             return;
+        }
     }
 
     TimePoint curTime = time_point_cast<Duration>(GameTime::GetTime<Clock>());
@@ -516,7 +542,8 @@ void SpellHistory::StartCooldown(SpellInfo const* spellInfo, uint32 itemId, Spel
                 WorldPackets::Spells::SpellCooldown spellCooldown;
                 spellCooldown.Caster = _owner->GetGUID();
                 spellCooldown.Flags = SPELL_COOLDOWN_FLAG_NONE;
-                spellCooldown.SpellCooldowns.emplace_back(spellInfo->Id, uint32(cooldown.count()));
+                // the cooldown the entry above really runs for: its own, else the category's (a category-only classic cooldown would send 0)
+                spellCooldown.SpellCooldowns.emplace_back(spellInfo->Id, uint32(duration_cast<Milliseconds>(recTime - curTime).count()));
                 playerOwner->SendDirectMessage(spellCooldown.Write());
             }
         }
@@ -551,8 +578,11 @@ void SpellHistory::SendCooldownEvent(SpellInfo const* spellInfo, uint32 itemId /
 void SpellHistory::AddCooldown(uint32 spellId, uint32 itemId, TimePoint cooldownEnd, uint32 categoryId, TimePoint categoryEnd, bool onHold /*= false*/)
 {
     CooldownEntry& cooldownEntry = _spellCooldowns[spellId];
-    // scripts can start multiple cooldowns for a given spell, only store the longest one
-    if (cooldownEnd > cooldownEntry.CooldownEnd || categoryEnd > cooldownEntry.CategoryEnd || onHold)
+    // scripts can start multiple cooldowns for a given spell, only store the longest one.
+    // An entry on hold (cooldown on event, e.g. Stealth) is always replaced by the real cooldown when the event comes: its end time is only
+    // a placeholder (cast time + base cooldown), so a cooldown shortened by spell mods (Camouflage on Stealth, -2..-6 s) that ends earlier
+    // would otherwise leave the spell on hold, "not ready" until the next login.
+    if (cooldownEnd > cooldownEntry.CooldownEnd || categoryEnd > cooldownEntry.CategoryEnd || onHold || cooldownEntry.OnHold)
     {
         cooldownEntry.SpellId = spellId;
         cooldownEntry.CooldownEnd = cooldownEnd;

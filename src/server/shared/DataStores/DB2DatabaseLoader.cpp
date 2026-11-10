@@ -129,6 +129,13 @@ char* DB2DatabaseLoader::Load(bool custom, uint32& records, char**& indexTable, 
                         if (char* str = AddString(&slot->Str[LOCALE_enUS], fields[f].GetStringView()))
                             stringPool.push_back(str);
 
+                        // A record the client files do not have (an item sent only as a hotfix) has no text in the other
+                        // languages: show the enUS text there until a *_locale row gives its own, instead of an empty string
+                        // (a ruRU client got items without a name, only the random suffix "of the Whale")
+                        if (isNew)
+                            for (char const*& localeStr : slot->Str)
+                                localeStr = slot->Str[LOCALE_enUS];
+
                         offset += sizeof(LocalizedString);
                         break;
                     }

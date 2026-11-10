@@ -39,13 +39,15 @@ namespace
     bpt::ptree _config;
     std::mutex _configLock;
 
-    bool LoadFile(std::string const& file, bpt::ptree& fullTree, std::string& error)
+    // allowEmpty: a file without any setting (only a section line and comments) is not an error. The main config file must have
+    // settings; an additional one (worldserver.conf.d) may be a template the player has not filled in yet.
+    bool LoadFile(std::string const& file, bpt::ptree& fullTree, std::string& error, bool allowEmpty = false)
     {
         try
         {
             bpt::ini_parser::read_ini(file, fullTree);
 
-            if (fullTree.empty())
+            if (fullTree.empty() && !allowEmpty)
             {
                 error = "empty file (" + file + ")";
                 return false;
@@ -155,13 +157,14 @@ bool ConfigMgr::LoadInitial(std::string file, std::vector<std::string> args,
 bool ConfigMgr::LoadAdditionalFile(std::string file, bool keepOnReload, std::string& error)
 {
     bpt::ptree fullTree;
-    if (!LoadFile(file, fullTree, error))
+    if (!LoadFile(file, fullTree, error, true))
         return false;
 
     std::scoped_lock lock(_configLock);
 
-    for (bpt::ptree::value_type const& child : fullTree.begin()->second)
-        _config.put_child(bpt::ptree::path_type(child.first, '/'), child.second);
+    if (!fullTree.empty())
+        for (bpt::ptree::value_type const& child : fullTree.begin()->second)
+            _config.put_child(bpt::ptree::path_type(child.first, '/'), child.second);
 
     if (keepOnReload)
         _additonalFiles.emplace_back(std::move(file));
@@ -175,6 +178,9 @@ bool ConfigMgr::LoadAdditionalDir(std::string const& dir, bool keepOnReload, std
     if (!fs::exists(dirPath) || !fs::is_directory(dirPath))
         return true;
 
+    // Load in name order, so a later file (zz-9-...) always overrides an earlier one. The order of the directory listing
+    // itself depends on the file system and is not alphabetical everywhere.
+    std::vector<fs::path> configFiles;
     for (fs::directory_entry const& f : fs::recursive_directory_iterator(dirPath))
     {
         if (!fs::is_regular_file(f))
@@ -184,6 +190,12 @@ bool ConfigMgr::LoadAdditionalDir(std::string const& dir, bool keepOnReload, std
         if (configFile.extension() != ".conf")
             continue;
 
+        configFiles.push_back(std::move(configFile));
+    }
+    std::sort(configFiles.begin(), configFiles.end());
+
+    for (fs::path const& configFile : configFiles)
+    {
         std::string fileName = configFile.generic_string();
         std::string error;
         if (LoadAdditionalFile(fileName, keepOnReload, error))

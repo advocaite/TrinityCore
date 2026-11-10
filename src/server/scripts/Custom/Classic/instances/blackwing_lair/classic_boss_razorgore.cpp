@@ -149,6 +149,9 @@ struct classic_boss_razorgore : public ScriptedAI
             return;
 
         m_pInstance->SetData(CLASSIC_BWL_TYPE_RAZORGORE, IN_PROGRESS);
+        // the orb has to be clickable for the whole of phase 1, whatever state the last reset or phase 2 left it in
+        if (GameObject* pOrb = me->GetMap()->GetGameObject(m_pInstance->GetGuidData(CLASSIC_BWL_DATA_ORB_DOMINATION_GUID)))
+            pOrb->RemoveFlag(GO_FLAG_NOT_SELECTABLE);
         if (Creature* pTrigger = me->GetMap()->GetCreature(m_pInstance->GetGuidData(CLASSIC_BWL_DATA_TRIGGER_GUID)))
             ClassicBwlRazSetChannel(pTrigger, ObjectGuid::Empty, 0);
         DoZoneInCombat();

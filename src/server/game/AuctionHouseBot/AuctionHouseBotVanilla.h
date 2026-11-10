@@ -18,6 +18,8 @@
 #ifndef AUCTION_HOUSE_BOT_VANILLA_H
 #define AUCTION_HOUSE_BOT_VANILLA_H
 
+#include "Define.h"
+
 struct ItemTemplate;
 
 // Optional vanilla-era item filter for the AuctionHouseBot seller (AuctionHouseBot.Vanilla.*).
@@ -31,6 +33,10 @@ namespace AuctionBotVanilla
 
     // False for anything that is not level-60 vanilla content; always true while the filter is off.
     bool IsAllowed(ItemTemplate const* proto);
+
+    // AuctionHouseBot.Vanilla.ValueCurve = 1: per-unit market value in copper from item level, quality and class,
+    // never below the vendor price. 0 while the curve is off (callers keep the vendor price).
+    uint64 UnitValue(ItemTemplate const* proto);
 }
 
 #endif

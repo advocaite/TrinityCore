@@ -24,6 +24,12 @@
 #include "PathGenerator.h"
 #include "Pet.h"
 #include "Unit.h"
+#include "Player.h"
+#include "WorldSession.h"
+
+// Target drift (yards) a playerbot follower tolerates before re-pathing a follow spline that is
+// still in flight. 2.5y at run speed is ~0.35 s of leader movement.
+static constexpr float FOLLOW_BOT_REPATH_DIST = 2.5f;
 
 static void DoMovementInform(Unit* owner, Unit* target)
 {
@@ -63,6 +69,12 @@ bool FollowMovementGenerator::Initialize(Unit* owner)
     UpdatePetSpeed(owner);
     _path = nullptr;
     _lastTargetPosition.reset();
+    // Pets and guardians of a player are throttled too: MoveSplineInit sends them the same stop packet before every new spline
+    // (PlayerSideUnit), so a pet re-pathing on every step of its bot owner (a monster spline moves the owner every map update) was
+    // shown sliding in its run pose, as if hovering (Karrz, Ironforge 2026-10-26: a bot hunter's wolf).
+    Player const* playerOwner = owner->ToPlayer();
+    _throttleRepath = (playerOwner && playerOwner->GetSession() && playerOwner->GetSession()->IsBot())
+        || (!owner->IsPlayer() && owner->GetCharmerOrOwnerGUID().IsPlayer());
     return true;
 }
 
@@ -130,6 +142,17 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
         owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
         DoMovementInform(owner, target);
     }
+
+    // Playerbot followers: while a follow spline is still in flight, re-path only once the
+    // target has drifted FOLLOW_BOT_REPATH_DIST from where it stood at the last launch.
+    // The stock rule re-paths and re-launches on ANY target movement, i.e. every map update
+    // while the leader runs; with a raid of bot followers that is tens of SMSG_ON_MONSTER_MOVE
+    // per bot per second to every viewer (and a pathfind each), which chokes the client.
+    // _lastTargetPosition is left untouched while holding, so the drift accumulates; a
+    // finished spline, a speed change (reset) or a large drift re-paths exactly as before.
+    if (_throttleRepath && _lastTargetPosition && owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) && !owner->movespline->Finalized()
+        && _lastTargetPosition->GetExactDistSq(target->GetPosition()) < FOLLOW_BOT_REPATH_DIST * FOLLOW_BOT_REPATH_DIST)
+        return true;
 
     if (!_lastTargetPosition || _lastTargetPosition->GetExactDistSq(target->GetPosition()) > 0.0f)
     {

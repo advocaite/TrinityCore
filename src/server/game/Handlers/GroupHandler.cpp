@@ -17,6 +17,7 @@
 
 #include "WorldSession.h"
 #include "CharacterCache.h"
+#include "ClassicSetRole.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
 #include "Group.h"
@@ -29,6 +30,7 @@
 #include "ObjectAccessor.h"
 #include "PartyPackets.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "World.h"
 
@@ -131,6 +133,10 @@ void WorldSession::HandlePartyInviteOpcode(WorldPackets::Party::PartyInviteClien
         group = invitingPlayer->GetGroupInvite();
 
     Group* group2 = invitedPlayer->GetGroup(packet.PartyIndex);
+    // a bot group listed in the Group Finder takes a player who invites its member as a sign-up
+    if (group2 && !invitingPlayer->GetGroup(packet.PartyIndex) && sScriptMgr->OnPlayerGroupFinderJoinRequest(invitedPlayer, invitingPlayer))
+        return;
+
     // player already in another group or invited
     if (group2 || invitedPlayer->GetGroupInvite())
     {
@@ -326,6 +332,19 @@ void WorldSession::HandleSetRoleOpcode(WorldPackets::Party::SetRole& packet)
     WorldPackets::Party::RoleChangedInform roleChangedInform;
 
     Group* group = GetPlayer()->GetGroup(packet.PartyIndex);
+
+    ClassicSetRole::Request request;
+    request.InGroup = group != nullptr;
+    request.TargetIsSelf = packet.TargetGUID == GetPlayer()->GetGUID();
+    request.TargetIsMember = group && group->IsMember(packet.TargetGUID);
+    request.SenderIsLeaderOrAssistant = group && (group->IsLeader(GetPlayer()->GetGUID()) || group->IsAssistant(GetPlayer()->GetGUID()));
+    request.Role = packet.Role;
+    if (!ClassicSetRole::IsAllowed(request))
+    {
+        TC_LOG_DEBUG("network", "CMSG_SET_ROLE: {} may not set role {} on {}, ignored", GetPlayerInfo(), uint32(packet.Role), packet.TargetGUID.ToString());
+        return;
+    }
+
     uint8 oldRole = group ? group->GetLfgRoles(packet.TargetGUID) : 0;
     if (oldRole == packet.Role)
         return;
@@ -566,12 +585,20 @@ void WorldSession::HandleDoReadyCheckOpcode(WorldPackets::Party::DoReadyCheck& p
 {
     Group* group = GetPlayer()->GetGroup(packet.PartyIndex);
     if (!group)
+    {
+        TC_LOG_INFO("network", "[ready_check] {} sent a ready check (party index {}) but has no such group", GetPlayer()->GetName(), packet.PartyIndex ? int32(*packet.PartyIndex) : -1);
         return;
+    }
 
     /** error handling **/
     if (!group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
+    {
+        TC_LOG_INFO("network", "[ready_check] {} is not the leader or an assistant: ready check refused", GetPlayer()->GetName());
         return;
+    }
     /********************/
+
+    TC_LOG_INFO("network", "[ready_check] {} starts a ready check ({} members)", GetPlayer()->GetName(), group->GetMembersCount());
 
     // everything's fine, do it
     group->StartReadyCheck(GetPlayer()->GetGUID());
@@ -745,6 +772,8 @@ void WorldSession::HandleSendPingUnit(WorldPackets::Party::SendPingUnit const& p
 
         member->SendDirectMessage(broadcastPingUnit.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingUnit(_player, const_cast<Group*>(group), const_cast<Unit*>(target), static_cast<uint8>(pingUnit.Type));
 }
 
 void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPoint const& pingWorldPoint)
@@ -774,6 +803,8 @@ void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPo
 
         member->SendDirectMessage(broadcastPingWorldPoint.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingWorldPoint(_player, const_cast<Group*>(group), pingWorldPoint.Point.Pos, static_cast<uint8>(pingWorldPoint.Type));
 }
 
 void WorldSession::HandleSendPingCooldown(WorldPackets::Party::SendPingCooldown const& pingCooldown)

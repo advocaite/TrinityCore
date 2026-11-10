@@ -263,6 +263,14 @@ public:
 
     bool IsLootItem(ObjectGuid const& lootObject, uint32 lootListId) const;
 
+    // Read-only inspection: Playerbot V2 surfaces in-flight rolls in the
+    // bot snapshot so AI can decide pass/greed/need without a per-roll
+    // poke. Stay non-mutating; do not expose internal m_rollVoteMap.
+    LootItem const* GetItem() const { return m_lootItem; }
+    Loot const*     GetLoot() const { return m_loot; }
+    RollMask        GetVoteMask() const { return m_voteMask; }
+    bool            IsStarted() const { return m_isStarted; }
+
 private:
     void SendStartRoll();
     void SendAllPassed();
@@ -316,6 +324,9 @@ struct TC_GAME_API Loot
     void NotifyItemRemoved(uint8 lootListId, Map const* map);
     void NotifyMoneyRemoved(Map const* map);
     void OnLootOpened(Map* map, Player* looter);
+    // Test-night loot trail (logger playerbot.v2, INFO): what a corpse holds, who won a roll, who received each item and how.
+    void LogTable(Map* map) const;
+    void LogGiven(Map* map, char const* receiver, LootItem const& item, char const* how) const;
     void AddLooter(ObjectGuid GUID) { PlayersLooting.insert(GUID); }
     void RemoveLooter(ObjectGuid GUID) { PlayersLooting.erase(GUID); }
 

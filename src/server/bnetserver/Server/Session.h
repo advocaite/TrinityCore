@@ -23,7 +23,9 @@
 #include "DatabaseEnvFwd.h"
 #include "Duration.h"
 #include "Hash.h"
+#include "IpConnectionLimit.h"
 #include "Realm.h"
+#include "RequestRateLimit.h"
 #include "Socket.h"
 #include "SslStream.h"
 #include <memory>
@@ -93,6 +95,11 @@ namespace Battlenet
         void DelayedCloseSocket() { return _socket->DelayedCloseSocket(); }
 
         bool IsAuthed() const { return _authed; }
+
+        // one login (auth token check against the login database) at a time per connection; false: one is already running or done
+        bool TryBeginLogin();
+        void EndLogin() { _loginInFlight = false; }
+        void SetHandshakeDone() { _handshakeDone = true; }
 
         uint32 GetSessionId() const { return _sessionId; }
         SystemTimePoint GetCreationTime() const { return _creationTime; }
@@ -170,6 +177,16 @@ namespace Battlenet
         std::array<uint8, 32> _clientSecret;
 
         bool _authed;
+
+        // closed when the TLS handshake or the login doesn't finish in time (Network.HandshakeTimeout, Network.LoginTimeout)
+        bool _handshakeDone;
+        TimePoint _handshakeDeadline;
+        TimePoint _loginDeadline;
+        std::unique_ptr<Trinity::Net::IpConnectionLimit::Slot> _ipConnectionSlot;
+
+        // requests this connection may send (Network.RequestsPerSecond); over it the connection is closed
+        Trinity::Net::RequestRateLimit _requestRateLimit;
+        bool _loginInFlight = false;
 
         QueryCallbackProcessor _queryProcessor;
 

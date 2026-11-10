@@ -21,12 +21,14 @@
 #include "AsyncCallbackProcessor.h"
 #include "AuthDefines.h"
 #include "DatabaseEnvFwd.h"
+#include "IpConnectionLimit.h"
 #include "MPSCQueue.h"
 #include "MessageBuffer.h"
 #include "Socket.h"
 #include "WorldPacket.h"
 #include "WorldPacketCrypt.h"
 #include <array>
+#include <atomic>
 #include <mutex>
 
 namespace JSON::RealmList
@@ -164,8 +166,12 @@ private:
 
     std::mutex _worldSessionLock;
     WorldSession* _worldSession;
-    bool _authed;
+    std::atomic<bool> _authed;      // also set from the world thread (SetWorldSession), read by Update for the login timeout
     bool _canRequestHotfixes;
+    std::atomic<uint32> _clientBuild;   // the client's build once known (auth or SetWorldSession): picks its message numbers
+
+    std::unique_ptr<Trinity::Net::IpConnectionLimit::Slot> _ipConnectionSlot;
+    TimePoint _authDeadline;        // closed if not logged in by then (Network.AuthTimeout); TimePoint::max() = no limit
 
     MessageBuffer _headerBuffer;
     MessageBuffer _packetBuffer;

@@ -161,7 +161,8 @@ ConditionMgr::ConditionTypeInfo const ConditionMgr::StaticConditionTypeData[COND
     { .Name = "Private Object",            .HasConditionValue1 = false, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
     { .Name = "String ID",                 .HasConditionValue1 = false, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 =  true },
     { .Name = "Label",                     .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
-    { .Name = "Group status",              .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false }
+    { .Name = "Group status",              .HasConditionValue1 =  true, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false },
+    { .Name = "Cannot Reach Target",       .HasConditionValue1 = false, .HasConditionValue2 = false, .HasConditionValue3 = false, .HasConditionStringValue1 = false }
 };
 
 static bool MeetsGroupStatusCondition(Player const* player, GroupStatusCondition status)
@@ -706,6 +707,12 @@ bool Condition::Meets(ConditionSourceInfo& sourceInfo) const
                 condMeets = MeetsGroupStatusCondition(player, GroupStatusCondition(ConditionValue1));
             break;
         }
+        case CONDITION_CANNOT_REACH_TARGET:
+        {
+            if (Creature const* creature = object->ToCreature())
+                condMeets = creature->GetVictim() && creature->CanNotReachTarget();
+            break;
+        }
         default:
             break;
     }
@@ -929,6 +936,9 @@ uint32 Condition::GetSearcherTypeMaskForCondition() const
             break;
         case CONDITION_GROUP_STATUS:
             mask |= GRID_MAP_TYPE_MASK_PLAYER;
+            break;
+        case CONDITION_CANNOT_REACH_TARGET:
+            mask |= GRID_MAP_TYPE_MASK_CREATURE;
             break;
         default:
             ABORT_MSG("Condition::GetSearcherTypeMaskForCondition - missing condition handling!");
@@ -1908,7 +1918,7 @@ bool ConditionMgr::isSourceTypeValid(Condition* cond) const
                     case TARGET_SELECT_CATEGORY_CONE:
                     case TARGET_SELECT_CATEGORY_AREA:
                     case TARGET_SELECT_CATEGORY_TRAJ:
-                    case TARGET_SELECT_CATEGORY_LINE:
+                    case TARGET_SELECT_CATEGORY_RECT:
                         continue;
                     default:
                         break;
@@ -1920,7 +1930,7 @@ bool ConditionMgr::isSourceTypeValid(Condition* cond) const
                     case TARGET_SELECT_CATEGORY_CONE:
                     case TARGET_SELECT_CATEGORY_AREA:
                     case TARGET_SELECT_CATEGORY_TRAJ:
-                    case TARGET_SELECT_CATEGORY_LINE:
+                    case TARGET_SELECT_CATEGORY_RECT:
                         continue;
                     default:
                         break;
@@ -2138,11 +2148,17 @@ bool ConditionMgr::isSourceTypeValid(Condition* cond) const
                 TC_LOG_ERROR("sql.sql", "{} SourceEntry in `condition` table, does not exist in SkillLineAbility.db2, ignoring.", *cond);
                 return false;
             }
-            if (skillLineAbility->GetAcquireMethod() != SkillLineAbilityAcquireMethod::LearnedOrAutomaticCharLevel)
+            // Classic 1.60: automatic abilities take conditions too (Player::LearnSkillRewardedSpells)
+            switch (skillLineAbility->GetAcquireMethod())
             {
-                TC_LOG_ERROR("sql.sql", "{} in SkillLineAbility.db2 does not have AcquireMethod = {} (LearnedOrAutomaticCharLevel), ignoring.",
-                    *cond, SkillLineAbilityAcquireMethod::LearnedOrAutomaticCharLevel);
-                return false;
+                case SkillLineAbilityAcquireMethod::AutomaticSkillRank:
+                case SkillLineAbilityAcquireMethod::AutomaticCharLevel:
+                case SkillLineAbilityAcquireMethod::LearnedOrAutomaticCharLevel:
+                    break;
+                default:
+                    TC_LOG_ERROR("sql.sql", "{} in SkillLineAbility.db2 is not learned automatically (AcquireMethod {}), ignoring.",
+                        *cond, skillLineAbility->GetAcquireMethod());
+                    return false;
             }
             break;
         }
@@ -2695,6 +2711,7 @@ bool ConditionMgr::isConditionTypeValid(Condition* cond) const
         case CONDITION_ALIVE:
         case CONDITION_IN_WATER:
         case CONDITION_TERRAIN_SWAP:
+        case CONDITION_CANNOT_REACH_TARGET:
         case CONDITION_CHARMED:
         case CONDITION_TAXI:
         case CONDITION_GAMEMASTER:

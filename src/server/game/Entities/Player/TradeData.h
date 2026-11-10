@@ -36,9 +36,11 @@ class TC_GAME_API TradeData
 public:
     TradeData(Player* player, Player* trader) :
         _player(player), _trader(trader), _accepted(false), _acceptProccess(false),
-        _money(0), _spell(0), _spellCastItem(), _clientStateIndex(1), _serverStateIndex(1) { }
+        _money(0), _spell(0), _spellCastItem(), _clientStateIndex(1), _serverStateIndex(1), _serial(++s_serialCounter) { }
 
     Player* GetTrader() const { return _trader; }
+    // Unique per trade window ever opened: lets a bot tell a new proposal from the one it already answered.
+    uint64 GetSerial() const { return _serial; }
     TradeData* GetTraderData() const;
 
     Item* GetItem(TradeSlots slot) const;
@@ -91,6 +93,9 @@ private:
     uint32     _serverStateIndex;
 
     bool       _awaitingProposerBusy = false;
+
+    uint64     _serial;
+    static inline uint64 s_serialCounter = 0;
 };
 
 #endif // TradeData_h__

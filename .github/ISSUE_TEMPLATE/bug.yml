@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in the game or the server works differently from Blizzard's game, or the server crashes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please search the open issues first, and fill in every field, including the title.
+        Questions and setup help go to our Discord instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happens
+      description: Describe the problem. For a crash, attach the crash log from the Crashes folder or link a gist.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+      description: What does Blizzard's game do, and how do you know? (Wowhead link, video, screenshot, packet capture)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the ids of the creatures, quests, items or spells involved.
+      placeholder: |
+        1. Take quest 12345 from NPC 678 in ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: branch
+    attributes:
+      label: Branch
+      options:
+        - forever
+        - forever-bots
+        - repack
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: The output of `.server debug` in game, the first lines of the worldserver log, or the repack version.
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client build
+      description: For example 1.60.1.70862 (shown on the login screen).
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: For example Windows 11 x64 or Ubuntu 24.04.
+    validations:
+      required: true
+  - type: textarea
+    id: custom
+    attributes:
+      label: Your own changes
+      description: Config switches you turned on, modules, or code you changed. Write "None" if you have none.
+    validations:
+      required: true

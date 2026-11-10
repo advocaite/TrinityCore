@@ -73,11 +73,28 @@ BattlenetPort = 1119
 #        Description: Determines how long the login ticket is valid (in seconds)
 #                     When using client -launcherlogin feature it is recommended to set it to a high value (like a week)
 #
+#    LoginREST.DefaultAccountDomain
+#        Description: Added as "@<domain>" to an account name typed without an @ on the login screen,
+#                     so players can log in with "name" instead of "name@local". Names that contain
+#                     an @ are used as typed. Leave empty ("") to turn this off.
+#        Default:     "local"
+#
 
 LoginREST.Port = 8081
 LoginREST.ExternalAddress=127.0.0.1
 LoginREST.LocalAddress=127.0.0.1
 LoginREST.TicketDuration=3600
+LoginREST.DefaultAccountDomain = "local"
+
+#
+#    Realm.AlsoAcceptBuilds
+#        Description: Comma-separated client builds that every realm also lists for and lets in, besides its own
+#                     realmlist.gamebuild. Use it only for builds with the same game data and protocol as the realm's
+#                     build; each one also needs a row in auth.build_info.
+#        Example:     "70532" (a realm on 70630 that 70532 clients may also join)
+#        Default:     "" - (only the realm's own build)
+
+Realm.AlsoAcceptBuilds = ""
 
 #
 #
@@ -147,6 +164,41 @@ ProcessPriority = 0
 #                     0  - (Disabled)
 
 RealmsStateUpdateDelay = 10
+
+#
+#    Network.ConnectionsPerIp
+#        Description: Open Battle.net connections allowed from one address. Connections from this PC (127.0.0.1) are never
+#                     limited. Raise it when many players share one internet address (LAN party, one household).
+#        Default:     16
+#                     0 - (No limit)
+
+Network.ConnectionsPerIp = 16
+
+#
+#    Network.HandshakeTimeout
+#        Description: Seconds a new connection has to finish the TLS handshake before it is closed.
+#        Default:     30
+#                     0 - (No limit)
+
+Network.HandshakeTimeout = 30
+
+#
+#    Network.LoginTimeout
+#        Description: Seconds a connection has to log in before it is closed.
+#        Default:     600
+#                     0 - (No limit)
+
+Network.LoginTimeout = 600
+
+#
+#    Network.RequestsPerSecond
+#        Description: Requests one Battle.net connection may send per second on average, with room for a burst of ten seconds'
+#                     worth (a login sends a few dozen at once). A connection over it is closed. Counted per connection, so
+#                     players sharing one address (a tunnel, a household) do not share it.
+#        Default:     10
+#                     0 - (No limit)
+
+Network.RequestsPerSecond = 10
 
 #
 #    WrongPass.MaxCount

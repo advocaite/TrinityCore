@@ -30,6 +30,24 @@
 #include "Util.h"
 #include "World.h"
 
+uint32 GetClientWeatherId(WeatherState state)
+{
+    switch (state)
+    {
+        case WEATHER_STATE_LIGHT_RAIN:       return 625;
+        case WEATHER_STATE_MEDIUM_RAIN:      return 579;
+        case WEATHER_STATE_HEAVY_RAIN:       return 586;
+        case WEATHER_STATE_LIGHT_SNOW:       return 588;
+        case WEATHER_STATE_MEDIUM_SNOW:      return 589;
+        case WEATHER_STATE_HEAVY_SNOW:       return 590;
+        case WEATHER_STATE_LIGHT_SANDSTORM:  return 592;
+        case WEATHER_STATE_MEDIUM_SANDSTORM: return 600;
+        case WEATHER_STATE_HEAVY_SANDSTORM:  return 602;
+        case WEATHER_STATE_THUNDERS:         return 584;
+        default:                             return state;
+    }
+}
+
 /// Create the Weather object
 Weather::Weather(Map* map, uint32 zoneId, WeatherData const* weatherChances)
     : m_map(map), m_zone(zoneId), m_weatherChances(weatherChances)

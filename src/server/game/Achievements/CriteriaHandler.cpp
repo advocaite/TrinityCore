@@ -707,7 +707,8 @@ void CriteriaHandler::UpdateCriteria(Criteria const* criteria, uint64 miscValue1
             break;
         case CriteriaType::ReputationGained:
         {
-            int32 reputation = referencePlayer->GetReputationMgr().GetReputation(criteria->Entry->Asset.FactionID);
+            // looked up as an entry: factions missing from the client data (TBC+ factions in 1.60.1.70532) count as 0 without logging an error
+            int32 reputation = referencePlayer->GetReputationMgr().GetReputation(sFactionStore.LookupEntry(criteria->Entry->Asset.FactionID));
             if (reputation > 0)
                 SetCriteriaProgress(criteria, reputation, referencePlayer);
             break;

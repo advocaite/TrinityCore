@@ -57,6 +57,7 @@ namespace ClassicBlackrockSpire
         NPC_BLACKHAND_SUMMONER      = 9818,
         NPC_BLACKHAND_VETERAN       = 9819,
         NPC_BLACKHAND_INCANCERATOR  = 10316,
+        NPC_PYROGUARD_EMBERSEER     = 9816,
         NPC_BLACKHAND_ELITE         = 10317,
         NPC_LORD_VICTOR_NEFARIUS    = 10162,
         NPC_REND_BLACKHAND          = 10429,

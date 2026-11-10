@@ -21,7 +21,10 @@
 #include "Define.h"
 #include "ItemTemplate.h"
 #include "AuctionHouseBot.h"
+#include "DatabaseEnvFwd.h"
 #include <array>
+
+class AuctionHouseObject;
 
 struct ItemToSell
 {
@@ -138,7 +141,11 @@ private:
     SellerConfiguration _houseConfig[MAX_AUCTION_HOUSE_TYPE];
 
     ItemPool _itemPool[MAX_AUCTION_QUALITY][MAX_ITEM_CLASS];
+    ItemPool _craftedStock;     // the pool's crafted items, kept listed by AuctionHouseBot.Items.Crafted.MinStock
+    bool _bonusQualityReported = false;
 
+    bool PostAuction(SellerConfiguration& config, AuctionHouseObject* auctionHouse, uint32 itemId, CharacterDatabaseTransaction trans);
+    void AddCraftedStock(SellerConfiguration& config, AuctionHouseObject* auctionHouse, CharacterDatabaseTransaction trans, uint32& budget, uint32& count);
     void LoadSellerValues(SellerConfiguration& config);
     uint32 SetStat(SellerConfiguration& config);
     bool GetItemsToSell(SellerConfiguration& config, ItemsToSellArray& itemsToSellArray, AllItemsArray const& addedItem);

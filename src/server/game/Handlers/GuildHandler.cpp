@@ -35,6 +35,7 @@
 #include "ObjectMgr.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 void WorldSession::HandleGuildQueryOpcode(WorldPackets::Guild::QueryGuildInfo& query)
@@ -1004,6 +1005,7 @@ namespace
         time_t Created = 0;
         std::string Name, Comment;                  // as the leader typed them (for the Discord bot's LFG channel)
         uint8 PlayStyle = 0;                        // the play style dropdown: 1 Learning, 2 Relaxed, 3 Competitive, 4 Carry Offered
+        bool Silent = false;                        // a group the bots made: not written to the "groupfinder" log (Discord)
     };
 
     std::unordered_map<ObjectGuid, LfgListing> LfgListings;
@@ -1044,8 +1046,10 @@ namespace
         if (bits[7])
             listing.PlayStyle = data.read<uint8>();     // play style (retail LFGEntryGeneralPlaystyle)
 
-        listing.Request.assign(data.data() + start, data.data() + data.rpos());
-        return data.rpos() == data.size();
+        // The client's request ends with one more byte after the optional values (it is 0 in the captured request); the request is
+        // echoed whole.
+        listing.Request.assign(data.data() + start, data.data() + data.size());
+        return data.rpos() == data.size() || data.rpos() + 1 == data.size();
     }
 
     WorldPackets::LFG::RideTicket LfgListTicket(ObjectGuid const& leader, LfgListing const& listing)
@@ -1072,6 +1076,34 @@ namespace
         data.WriteBit(false);
         data.FlushBits();
         session->SendPacket(&data);
+    }
+
+    // The request bytes of a listing the server makes itself, laid out as a request of the real client (captured 2026-10-20: all nine
+    // flag bits off, no name or comment, the int8 after the three floats 2 = Relaxed, the activity id, one closing zero byte).
+    std::vector<uint8> BuildLfgListRequest(uint32 categoryId, std::vector<uint32> const& activities, std::string_view name,
+                                           std::string_view comment, uint8 playStyle)
+    {
+        ByteBuffer data;
+        data.WriteBits(uint32(std::min<size_t>(activities.size(), 31)), 5);
+        data.WriteBits(uint32(std::min<size_t>(name.size(), 1023)), 10);
+        data.WriteBits(uint32(std::min<size_t>(comment.size(), 2047)), 11);
+        data.WriteBits(0, 8);
+        for (uint8 i = 0; i < 9; ++i)
+            data.WriteBit(false);
+        data.FlushBits();
+        data << uint32(categoryId);
+        data << float(0.0f) << float(0.0f) << float(0.0f);
+        data << uint32(0);
+        data << int8(playStyle);
+        for (size_t i = 0; i < std::min<size_t>(activities.size(), 31); ++i)
+            data << uint32(activities[i]);
+        // ByteBuffer::append asserts on a zero-sized value: an empty name or comment writes nothing
+        if (size_t const nameSize = std::min<size_t>(name.size(), 1023))
+            data.append(name.data(), nameSize);
+        if (size_t const commentSize = std::min<size_t>(comment.size(), 2047))
+            data.append(comment.data(), commentSize);
+        data << uint8(0);
+        return std::vector<uint8>(data.data(), data.data() + data.size());
     }
 
     // one LFGListSearchResult (Classic reader rva 0xA4EC70)
@@ -1128,7 +1160,11 @@ namespace
             data << guid;
             data << int8(member ? member->GetLevel() : info ? info->Level : 0);
             data << int8(member ? member->GetClass() : info ? info->Class : 0);
-            data << int8(spec ? spec->Role : 2);
+            // the role the group gave the member (a bot has no talent specialization of its own), else the specialization's
+            uint8 const groupRole = leaderPlayer && leaderPlayer->GetGroup() ? leaderPlayer->GetGroup()->GetLfgRoles(guid) : 0;
+            int8 const role = (groupRole & lfg::PLAYER_ROLE_TANK) ? 0 : (groupRole & lfg::PLAYER_ROLE_HEALER) ? 1
+                : (groupRole & lfg::PLAYER_ROLE_DAMAGE) ? 2 : int8(spec ? spec->Role : 2);
+            data << role;
             data << int32(member ? member->GetZoneId() : 0);
             data << uint8(member ? member->GetLevel() : 0);
             data << ObjectGuid::Empty;
@@ -1174,6 +1210,8 @@ namespace
     // {"event": "listed" | "updated" | "delisted", "id", "faction", "activities", "title", "comment", "members": [...]}
     void LogLfgListing(char const* event, ObjectGuid const& leader, LfgListing const& listing)
     {
+        if (listing.Silent)
+            return;
         if (!sLog->ShouldLog("groupfinder", LOG_LEVEL_INFO))
             return;
 
@@ -1251,6 +1289,33 @@ void GroupFinderListings::OnLogout(Player const* player)
     LfgListings.erase(itr);
 }
 
+void GroupFinderListings::PostBotListing(Player const* leader, uint32 categoryId, std::vector<uint32> const& activities,
+                                         std::string const& name, std::string const& comment, uint8 playStyle)
+{
+    LfgListing listing;
+    listing.Id = NextLfgListingId++;
+    listing.CategoryId = categoryId;
+    listing.Activities = activities;
+    listing.Created = GameTime::GetGameTime();
+    listing.Name = name;
+    listing.Comment = comment;
+    listing.PlayStyle = playStyle;
+    listing.Silent = true;
+    listing.Request = BuildLfgListRequest(categoryId, activities, name, comment, playStyle);
+    LfgListings[leader->GetGUID()] = std::move(listing);
+}
+
+void GroupFinderListings::RemoveBotListing(Player const* leader)
+{
+    OnLogout(leader);
+}
+
+uint32 GroupFinderListings::CategoryOf(Player const* leader)
+{
+    auto itr = LfgListings.find(leader->GetGUID());
+    return itr != LfgListings.end() ? itr->second.CategoryId : 0;
+}
+
 void WorldSession::HandleLfgListProbe(WorldPackets::Null& packet)
 {
     WorldPacket const* raw = packet.GetRawPacket();
@@ -1283,6 +1348,25 @@ void WorldSession::HandleLfgListProbe(WorldPackets::Null& packet)
                 SendPacket(&result);
                 SendLfgListStatus(this, stored, true);
                 LogLfgListing("listed", _player->GetGUID(), stored);
+                sScriptMgr->OnPlayerGroupFinderListing(_player, stored.CategoryId, stored.Activities, true);
+                break;
+            }
+            case CMSG_LFG_LIST_APPLY_TO_GROUP:  // the reply layouts are not captured: the ticket is read as the one of the search result
+            {
+                // A bot group listed by the module takes the applicant at once (the same as inviting a member). The packet is in
+                // the log above; a ticket that does not read or names no listed bot group is only logged.
+                WorldPackets::LFG::RideTicket ticket;
+                data >> ticket;
+                auto itr = LfgListings.find(ticket.RequesterGuid);
+                Player* leader = ObjectAccessor::FindConnectedPlayer(ticket.RequesterGuid);
+                if (itr == LfgListings.end() || !itr->second.Silent || !leader || !leader->GetGroup())
+                {
+                    TC_LOG_INFO("network.opcode", "GroupFinder: apply by {} names ticket leader {} id {}: no listed bot group", GetPlayerInfo(),
+                        ticket.RequesterGuid.ToString(), ticket.Id);
+                    break;
+                }
+                bool const taken = !_player->GetGroup() && sScriptMgr->OnPlayerGroupFinderJoinRequest(leader, _player);
+                TC_LOG_INFO("network.opcode", "GroupFinder: apply by {} to {}: {}", GetPlayerInfo(), leader->GetName(), taken ? "joined" : "not taken");
                 break;
             }
             case CMSG_LFG_LIST_UPDATE_REQUEST:  // edit (serializer rva 0x944C00): ticket, request
@@ -1311,6 +1395,7 @@ void WorldSession::HandleLfgListProbe(WorldPackets::Null& packet)
                 LfgListings.erase(itr);
                 SendLfgListStatus(this, listing, false);
                 LogLfgListing("delisted", _player->GetGUID(), listing);
+                sScriptMgr->OnPlayerGroupFinderListing(_player, listing.CategoryId, listing.Activities, false);
                 break;
             }
             case CMSG_PERKS_PROGRAM_REQUEST_REFUND: // Classic 0x3E02B3: the roles ticked in the Group Finder (uint8 mask)
@@ -1350,6 +1435,7 @@ void WorldSession::HandleLfgListProbe(WorldPackets::Null& packet)
                         activities.insert(data.read<uint32>());
                 }
 
+                sScriptMgr->OnPlayerGroupFinderSearch(_player);   // the bots list a group for this player's faction when there is none
                 WorldPacket results(SMSG_LFG_LIST_SEARCH_RESULTS, 256);
                 std::vector<std::pair<ObjectGuid, LfgListing const*>> found;
                 bool const crossFaction = sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP);
@@ -1368,11 +1454,35 @@ void WorldSession::HandleLfgListProbe(WorldPackets::Null& packet)
                         ++itr;
                         continue;
                     }
-                    if (itr->second.CategoryId == categoryId && (activities.empty() || std::ranges::any_of(itr->second.Activities,
-                        [&](uint32 activityId) { return activities.contains(activityId); })))
+                    // A bot group does not know the client's category id: it is shown in the category the search asks for when one of its
+                    // activities is among the searched ones, or when no activity is searched (an activity id belongs to one dungeon).
+                    // A listing carries its activity id shifted left by 8 bits (Upper Blackrock Spire 214272 = 837 << 8) while the search
+                    // filter carries the plain id (837): either form matches.
+                    bool const activityMatch = std::ranges::any_of(itr->second.Activities,
+                        [&](uint32 activityId) { return activities.contains(activityId) || activities.contains(activityId >> 8); });
+                    bool const match = itr->second.Silent ? (activities.empty() || activityMatch)
+                        : (itr->second.CategoryId == categoryId && (activities.empty() || activityMatch));
+                    if (itr->second.Silent)
+                    {
+                        TC_LOG_INFO("network.opcode", "GroupFinder: bot listing of {} category {} activity {}: {}", leaderPlayer->GetName(),
+                            itr->second.CategoryId, itr->second.Activities.empty() ? 0 : itr->second.Activities.front(), match ? "shown" : "no match");
+                        if (match && itr->second.CategoryId != categoryId)
+                        {
+                            itr->second.CategoryId = categoryId;
+                            itr->second.Request = BuildLfgListRequest(categoryId, itr->second.Activities, itr->second.Name, itr->second.Comment,
+                                itr->second.PlayStyle);
+                        }
+                    }
+                    if (match)
                         found.emplace_back(itr->first, &itr->second);
                     ++itr;
                 }
+                // the searched activity ids are how the id of a dungeon or raid is read: pick it in the filter and search
+                std::string searched;
+                for (uint32 activityId : activities)
+                    searched += (searched.empty() ? "" : ",") + std::to_string(activityId);
+                TC_LOG_INFO("network.opcode", "GroupFinder: search category {} activities [{}] by {}: {} of {} listing(s) found", categoryId,
+                    searched, GetPlayerInfo(), found.size(), LfgListings.size());
                 results << uint16(found.size());
                 results << uint32(found.size());
                 for (auto const& [leader, listing] : found)

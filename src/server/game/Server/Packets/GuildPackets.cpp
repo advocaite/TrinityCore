@@ -298,21 +298,38 @@ WorldPacket const* GuildEventLogQueryResults::Write()
 
 WorldPacket const* GuildEventPlayerLeft::Write()
 {
+    // Classic 1.60 (guild switch case 0x32, 70790 reader rva 0x7239F0): every name is followed by a surname with a 9 bit length,
+    // like PLAYER_JOINED. Bits: Removed, leaver name (6), leaver surname (9), [remover name (6), remover surname (9)], flush; then
+    // [remover guid, realm, name, surname] and leaver guid, realm, name, surname. Without the surnames the client took the
+    // second byte as the leaver surname length, ran past the end of the message and crashed reading the leaver guid
+    // (ACCESS_VIOLATION on every guild kick, 2026-11-06).
+    std::string const leaverSurname = sCharacterCache->GetCharacterSurnameByGuid(LeaverGUID);
+    std::string const removerSurname = Removed ? sCharacterCache->GetCharacterSurnameByGuid(RemoverGUID) : std::string();
+
     _worldPacket << Bits<1>(Removed);
     _worldPacket << SizedString::BitsSize<6>(LeaverName);
+    _worldPacket << SizedString::BitsSize<9>(leaverSurname);
 
     if (Removed)
     {
         _worldPacket << SizedString::BitsSize<6>(RemoverName);
+        _worldPacket << SizedString::BitsSize<9>(removerSurname);
+    }
 
+    _worldPacket.FlushBits();
+
+    if (Removed)
+    {
         _worldPacket << RemoverGUID;
         _worldPacket << uint32(RemoverVirtualRealmAddress);
         _worldPacket << SizedString::Data(RemoverName);
+        _worldPacket << SizedString::Data(removerSurname);
     }
 
     _worldPacket << LeaverGUID;
     _worldPacket << uint32(LeaverVirtualRealmAddress);
     _worldPacket << SizedString::Data(LeaverName);
+    _worldPacket << SizedString::Data(leaverSurname);
 
     return &_worldPacket;
 }
@@ -357,9 +374,18 @@ void GuildSetRankPermissions::Read()
 
 WorldPacket const* GuildEventNewLeader::Write()
 {
+    // Classic 1.60 (guild switch case 0x33, 70790 reader rva 0x723C60): like PLAYER_LEFT, every name is followed by a surname with a
+    // 9 bit length. Bits: SelfPromoted, old name (6), old surname (9), new name (6), new surname (9), flush; then both guids and
+    // realms, then old name, old surname, new name, new surname. The client keeps the first guid, name and surname together, so the
+    // old leader stays first as before.
+    std::string const oldLeaderSurname = sCharacterCache->GetCharacterSurnameByGuid(OldLeaderGUID);
+    std::string const newLeaderSurname = sCharacterCache->GetCharacterSurnameByGuid(NewLeaderGUID);
+
     _worldPacket << Bits<1>(SelfPromoted);
     _worldPacket << SizedString::BitsSize<6>(OldLeaderName);
+    _worldPacket << SizedString::BitsSize<9>(oldLeaderSurname);
     _worldPacket << SizedString::BitsSize<6>(NewLeaderName);
+    _worldPacket << SizedString::BitsSize<9>(newLeaderSurname);
     _worldPacket.FlushBits();
 
     _worldPacket << OldLeaderGUID;
@@ -368,7 +394,9 @@ WorldPacket const* GuildEventNewLeader::Write()
     _worldPacket << uint32(NewLeaderVirtualRealmAddress);
 
     _worldPacket << SizedString::Data(OldLeaderName);
+    _worldPacket << SizedString::Data(oldLeaderSurname);
     _worldPacket << SizedString::Data(NewLeaderName);
+    _worldPacket << SizedString::Data(newLeaderSurname);
 
     return &_worldPacket;
 }

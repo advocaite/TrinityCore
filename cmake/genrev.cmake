@@ -16,6 +16,16 @@ if(NOT BUILDDIR)
   set(BUILDDIR ${CMAKE_BINARY_DIR})
 endif()
 
+# With -DEMBED_BUILD_PATHS=0 the programs carry no folder names of the machine that built them.
+# SourceDirectory (and BuildDirectory) must then be set in the config files, as the database updater and the module migrations read from it.
+if(DEFINED EMBED_BUILD_PATHS AND NOT EMBED_BUILD_PATHS)
+  set(TRINITY_EMBED_SOURCE_DIR "")
+  set(TRINITY_EMBED_BUILD_DIR "")
+else()
+  set(TRINITY_EMBED_SOURCE_DIR "${CMAKE_SOURCE_DIR}")
+  set(TRINITY_EMBED_BUILD_DIR "${BUILDDIR}")
+endif()
+
 if(WITHOUT_GIT)
   set(rev_date "1970-01-01 00:00:00 +0000")
   set(rev_hash "unknown")

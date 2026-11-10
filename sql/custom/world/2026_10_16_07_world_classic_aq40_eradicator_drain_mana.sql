@@ -1,0 +1,7 @@
+-- Temple of Ahn'Qiraj: the Obsidian Eradicator (15262) drains mana the way the June 2021 VMaNGOS spell list did: one Drain Mana (25755,
+-- 250 mana from one random player) every second. VMaNGOS (migration 20260913120518) now casts the area Drain Mana 26457 every 3-4 s,
+-- which hits up to 12 mana users at once and casts 25755 on each of them (classic_spell_aq40_drain_mana), so the Eradicators reach full
+-- mana and Shock Blast (26458, row id 0) the way they did in vanilla. Rows id 0 (Shock Blast at full mana) and id 1 stay. Safe to run again.
+DELETE FROM `smart_scripts` WHERE `entryorguid` = 15262 AND `source_type` = 0 AND `id` = 2;
+INSERT INTO `smart_scripts` (`entryorguid`, `source_type`, `id`, `link`, `Difficulties`, `event_type`, `event_phase_mask`, `event_chance`, `event_flags`, `event_param1`, `event_param2`, `event_param3`, `event_param4`, `event_param5`, `event_param_string`, `action_type`, `action_param1`, `action_param2`, `action_param3`, `action_param4`, `action_param5`, `action_param6`, `action_param7`, `action_param_string`, `target_type`, `target_param1`, `target_param2`, `target_param3`, `target_param4`, `target_param_string`, `target_x`, `target_y`, `target_z`, `target_o`, `comment`) VALUES
+(15262, 0, 2, 0, '', 0, 0, 100, 0, 3000, 4000, 3000, 4000, 0, '', 11, 26457, 0, 0, 0, 0, 0, 0, '', 1, 0, 0, 0, 0, '', 0, 0, 0, 0, 'Obsidian Eradicator - In Combat - Cast ''Drain Mana'' (area, VMaNGOS spell list 152620)');

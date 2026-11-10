@@ -424,6 +424,117 @@ DisconnectToleranceInterval = 0
 mmap.enablePathFinding = 1
 
 #
+#    Pathfinding.PreferRoads
+#        Description: Road-aware pathfinding. When enabled, Detour's
+#                     query filter biases shortest-path search toward
+#                     polygons tagged NAV_AREA_ROAD by the mmaps
+#                     generator. Requires mmaps regenerated with the
+#                     road-aware mapextractor + mmaps_generator binaries
+#                     (writes parallel <map>_<y>_<x>.road files alongside
+#                     each <map>_<y>_<x>.map). Polygons without a road
+#                     tag are unaffected — old extracted mmaps without
+#                     .road files behave identically to before.
+#        Default:     0 - (Disabled, neutral cost for road polygons)
+#                     1 - (Enabled, road polygons cost less to traverse)
+
+Pathfinding.PreferRoads = 0
+
+#
+#    Pathfinding.RoadCost
+#        Description: Per-polygon traversal cost for road-tagged
+#                     polygons when Pathfinding.PreferRoads is enabled.
+#                     Default 0.5 means roads cost half as much as
+#                     plain ground — Detour will prefer routes that
+#                     stay on roads even when they're geometrically
+#                     longer (up to 2x). Lower = stronger preference;
+#                     1.0 = neutral; values above 1.0 actively avoid
+#                     roads (unusual).
+#        Default:     0.5
+
+Pathfinding.RoadCost = 0.5
+
+#
+#    Pathfinding.RoadCostMounted
+#        Description: Road cost when the unit is mounted. Mounted bots
+#                     benefit more from roads (mount speed applies
+#                     cleanly, no terrain skidding) so we offer a
+#                     tighter cost than the on-foot RoadCost. Only
+#                     active when PreferRoads = 1.
+#        Default:     0.35
+#
+
+Pathfinding.RoadCostMounted = 0.35
+
+#
+#    Pathfinding.SlopeCoefficient
+#        Description: Road-aware pathfinding Phase 3 — slope-aware cost
+#                     modifier. Each path segment's cost is multiplied by
+#                     `1.0 + slopeAngleDegrees * SlopeCoefficient / 100`
+#                     (clamped to 2.0). At default 1.0: 30° slope costs
+#                     1.3×, 60° costs 1.6×. The slope term tempers raw
+#                     road preference so bots don't switchback up a
+#                     mountain just because there's a road on it.
+#                     Set to 0.0 to disable the slope penalty entirely (stock
+#                     pathing for every creature). The bot module's
+#                     playerbot.conf sets 1.0.
+#                     The dtQueryFilterTC subclass implements this; see
+#                     src/server/game/Movement/dtQueryFilterTC.cpp.
+#        Default:     0.0
+
+Pathfinding.SlopeCoefficient = 0.0
+
+###################################################################################################
+# Handcrafted road segments
+#
+#    HandcraftedRoads.Enable
+#        Description: Apply operator-curated road segments from the handcrafted_road table
+#                     to each map's navmesh at load time.  Tagged polys get the road-bias in
+#                     PathGenerator (slope-aware road bonus). The bot module's playerbot.conf sets 1.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+###################################################################################################
+HandcraftedRoads.Enable = 0
+
+###################################################################################################
+# Handcrafted road centerline routing (bots)
+#
+#    RoadGraph.Enable
+#        Description: Build a routable centerline graph from the handcrafted_road table and have
+#                     bots FOLLOW the authored road polylines for long ground trips (via a waypoint
+#                     spline) instead of only getting the NAV_AREA_ROAD area-cost nudge. The
+#                     area-cost bias (HandcraftedRoads.Enable above) remains the fallback.
+#                     The bot module's playerbot.conf sets 1.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    RoadGraph.MinDistance
+#        Description: Minimum straight-line distance (yards) before road routing is considered.
+#                     Shorter hops use direct navmesh movement.
+#        Default:     150.0
+#
+#    RoadGraph.MaxDetourRatio
+#        Description: Max allowed ratio of (entry + road + exit) length to the direct distance.
+#                     A road route longer than this is rejected in favour of the direct path.
+#        Default:     1.6
+#
+#    RoadGraph.MaxEntryDistance
+#        Description: Max distance (yards) a bot will treat a road node as a viable on/off ramp.
+#                     If no road node is within this range of the start or destination, the bot
+#                     uses direct movement.
+#        Default:     120.0
+#
+#    RoadGraph.NodeMergeEpsilon
+#        Description: Authored segment endpoints within this distance (yards) collapse into one
+#                     shared junction node when building the graph.
+#        Default:     3.0
+###################################################################################################
+RoadGraph.Enable = 0
+RoadGraph.MinDistance = 150.0
+RoadGraph.MaxDetourRatio = 1.6
+RoadGraph.MaxEntryDistance = 120.0
+RoadGraph.NodeMergeEpsilon = 3.0
+
+#
 #    vmap.enableLOS
 #    vmap.enableHeight
 #        Description: Vmap support for line of sight and height calculation.
@@ -1083,6 +1194,71 @@ Instance.IgnoreAttunement = 0
 #                     1 - (Enabled)
 
 Instance.IgnoreRaid = 0
+
+#
+#    Instance.BindOnEntry
+#        Description: Save a raid lockout (instance id, boss states) for every real player the moment
+#                     they enter a raid with a reset schedule, instead of waiting for the first boss
+#                     kill. Players who are game masters or bots are never bound by this.
+#                     The instance, its boss states and (with Instance.PersistRaidTrash) its dead
+#                     creatures then survive logout, instance unload and server restarts until the
+#                     normal lockout reset.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Instance.BindOnEntry = 0
+
+#
+#    Instance.PersistRaidTrash
+#        Description: Keep creatures killed inside a locked raid dead until the lockout resets
+#                     (their respawn time is stored in the characters.respawn table). Without this
+#                     all trash returns whenever the instance map is unloaded or the server restarts.
+#                     Only applies to raid instances that carry a lockout.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Instance.PersistRaidTrash = 0
+
+#
+#    Instance.AhnQirajGatesOpen
+#        Description: Optional server-owner option. The Gate of Ahn'Qiraj (door plug 176146 and gate
+#                     176149) stands open, so neither the war effort nor ringing the Scarab Gong is
+#                     needed to reach the two Ahn'Qiraj instances.
+#        Default:     0 - (Disabled, Blizzlike)
+#                     1 - (Enabled)
+
+Instance.AhnQirajGatesOpen = 0
+
+#
+#    Instance.MoltenCoreHoundsLinked
+#        Description: Molten Core Core Hounds as in 1.12: a hound that would die feigns death at 1 hp
+#                     and rises again at full health after 10 seconds unless every hound of the pack
+#                     dies within that time. Disabled: every hound simply dies when its health runs
+#                     out and stays dead, so a pack can be killed one by one.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Instance.MoltenCoreHoundsLinked = 0
+
+#
+#    Instance.MoltenCoreSkipRunes
+#        Description: The Molten Core bosses are all up from the start: the seven runes count as doused
+#                     (no Aqual Quintessence needed), Majordomo Executus stands in his hall, and
+#                     Ragnaros is in his lair ready to fight. A boss that is already killed in the
+#                     instance (raid lock) stays dead.
+#        Default:     0 - (Disabled, the 1.12 way: douse the runes, kill Majordomo, summon Ragnaros)
+#                     1 - (Enabled, optional shortcut for private servers)
+
+Instance.MoltenCoreSkipRunes = 0
+
+#
+#    Instance.MoltenCoreRagnarosReady
+#        Description: Ragnaros is up in his lair and can be attacked at once, without Majordomo's talk and
+#                     summon. Left out of the config, it follows Instance.MoltenCoreSkipRunes.
+#        Default:     0 - (Disabled, the 1.12 way: Majordomo summons Ragnaros)
+#                     1 - (Enabled, optional shortcut for private servers)
+
+Instance.MoltenCoreRagnarosReady = 0
 
 #
 #    Instance.CombatResurrectionLimit
@@ -2499,6 +2675,16 @@ Rate.XP.Quest   = 1
 Rate.XP.Explore = 1
 
 #
+#    Rate.Talent
+#        Description: Classic 1.60: talent points per level. Talent points are the class talent currency (one point at
+#                     each level from 10 to 60); its level rows and its cap are multiplied by this and sent to the
+#                     client as hotfixes so its talent window shows the same number. Points are handed out level by
+#                     level (1.5 = 1, 2, 1, 2...). Lowering it below what a character spent asks for a talent reset.
+#        Default:     1 - (blizzlike, nothing changed or sent)
+
+Rate.Talent = 1
+
+#
 #    Rate.XP.BattlegroundKill
 #        Description: Experience rate for honorable kills in battlegrounds,
 #                     it works when Battleground.GiveXPForKills = 1
@@ -2547,7 +2733,10 @@ Rate.Damage.Fall = 1
 #    Rate.Auction.Deposit
 #    Rate.Auction.Cut
 #        Description: Auction rates (auction time, deposit get at auction start,
-#                     auction cut from price at auction end).
+#                     auction cut from price at auction end). All three multiply the
+#                     normal value: 0.5 = half, 2 = double. Deposit and cut can be 0
+#                     (free). Time can't be 0 (the auction would end at once); the
+#                     lowest is 0.01.
 #        Default:     1 - (Rate.Auction.Time)
 #                     1 - (Rate.Auction.Deposit)
 #                     1 - (Rate.Auction.Cut)
@@ -2555,6 +2744,15 @@ Rate.Damage.Fall = 1
 Rate.Auction.Time    = 1
 Rate.Auction.Deposit = 1
 Rate.Auction.Cut     = 1
+
+#
+#    Rate.Mining.Amount
+#        Description: How many times a mining vein can be mined before it is gone,
+#                     as a multiplier (2 = twice as many times, 0.5 = half, never
+#                     fewer than once).
+#        Default:     1
+
+Rate.Mining.Amount = 1
 
 #
 #    Rate.Honor
@@ -2593,10 +2791,18 @@ Rate.Reputation.RecruitAFriendBonus = 0.1
 
 #
 #    Rate.MoveSpeed
-#        Description: Movement speed rate.
+#        Description: Movement speed rate of players, their pets and the bots (bots are players).
+#                     Rate.MoveSpeed.Player is the same setting under another name; it wins when both are set.
 #        Default:     1
 
 Rate.MoveSpeed = 1
+
+#
+#    Rate.MoveSpeed.Creature
+#        Description: Movement speed rate of NPCs and mobs.
+#        Default:     1
+
+Rate.MoveSpeed.Creature = 1
 
 #
 #    Rate.InstanceResetTime
@@ -2857,6 +3063,17 @@ Battleground.PremadeGroupWaitForMatch = 1800000
 #                     1 - (Enabled)
 
 Battleground.GiveXPForKills = 0
+
+#
+#    Battleground.AlteracValley.ReinforcementDefeat
+#        Description: Classic Alterac Valley: show both teams' reinforcements (600 each at the start;
+#                     -1 per player death, -75 per tower burned, -100 for the captain, +1 per owned
+#                     mine every 45 s) and end the match when a team reaches 0. Off: vanilla rules,
+#                     the counter stays hidden and only a general kill ends the match.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Battleground.AlteracValley.ReinforcementDefeat = 1
 
 #
 #    Battleground.Random.ResetHour
@@ -3195,6 +3412,24 @@ Network.SkipBuildAuthKeyCheck = 0
 #        Default:     1500
 
 Network.EnterEncryptedModeDelay = 1500
+
+#
+#    Network.ConnectionsPerIp
+#        Description: Open game connections allowed from one address. A player uses two (realm and instance). Connections
+#                     from this PC (127.0.0.1) are never limited. Raise it when many players share one internet address
+#                     (LAN party, one household).
+#        Default:     16
+#                     0 - (No limit)
+
+Network.ConnectionsPerIp = 16
+
+#
+#    Network.AuthTimeout
+#        Description: Seconds a new game connection has to log in before it is closed.
+#        Default:     60
+#                     0 - (No limit)
+
+Network.AuthTimeout = 60
 
 #
 ###################################################################################################
@@ -3636,6 +3871,36 @@ AuctionHouseBot.Vanilla.Only = 0
 AuctionHouseBot.Vanilla.MaxReqLevel = 60
 AuctionHouseBot.Vanilla.MaxItemLevel = 100
 
+#    AuctionHouseBot.Vanilla.ValueCurve
+#       Description: Price bot listings (and the buyer's fair price) by item level squared x quality x class,
+#                    never below the vendor price. For client data whose loot-only goods carry a token vendor price.
+#       Default:     0 - (Disabled, vendor price)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Vanilla.ValueCurve = 0
+
+#
+#    AuctionHouseBot.Vanilla.ValueCurve.Gray
+#    AuctionHouseBot.Vanilla.ValueCurve.White
+#    AuctionHouseBot.Vanilla.ValueCurve.Green
+#    AuctionHouseBot.Vanilla.ValueCurve.Blue
+#    AuctionHouseBot.Vanilla.ValueCurve.Epic
+#       Description: Copper per item level squared for each quality, used by AuctionHouseBot.Vanilla.ValueCurve = 1.
+#                    Example: an item level 66 epic with Epic = 150 is worth 66 x 66 x 150 copper (about 65 gold).
+#       Default:     1, 2, 15, 50, 150
+#
+#    AuctionHouseBot.Vanilla.ValueCurve.Scale
+#       Description: Multiplies the whole curve (1 = as set above, 2 = double prices, 0.5 = half; 0.1 to 10).
+#                    Never below the vendor price.
+#       Default:     1
+
+AuctionHouseBot.Vanilla.ValueCurve.Gray = 1
+AuctionHouseBot.Vanilla.ValueCurve.White = 2
+AuctionHouseBot.Vanilla.ValueCurve.Green = 15
+AuctionHouseBot.Vanilla.ValueCurve.Blue = 50
+AuctionHouseBot.Vanilla.ValueCurve.Epic = 150
+AuctionHouseBot.Vanilla.ValueCurve.Scale = 1
+
 #
 #    AuctionHouseBot.Alliance.Items.Amount.Ratio
 #       Description: Enable/Disable (disabled if 0) the part of AHBot that puts items up for auction on Alliance AH
@@ -3715,6 +3980,21 @@ AuctionHouseBot.Items.Loot = 1
 #                    1 - (Enabled)
 
 AuctionHouseBot.Items.Misc = 0
+
+#    AuctionHouseBot.Items.Crafted
+#       Description: Include items made by a profession recipe even when no loot or vendor list has them
+#                    (only matters with AuctionHouseBot.Items.Misc = 0)
+#       Default:     0 - (Disabled)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Items.Crafted = 0
+
+#    AuctionHouseBot.Items.Crafted.MinStock
+#       Description: With AuctionHouseBot.Items.Crafted, keep every crafted item listed at least this many times. The
+#                    random fill only adds items when listings run out, so without it a crafted item can stay away for days.
+#       Default:     0 - (Disabled)
+
+AuctionHouseBot.Items.Crafted.MinStock = 0
 
 #
 #    AuctionHouseBot.Bind.*
@@ -3904,6 +4184,14 @@ AuctionHouseBot.Class.Quest = 1
 AuctionHouseBot.Class.Key = 1
 AuctionHouseBot.Class.Misc = 5
 AuctionHouseBot.Class.Glyph = 3
+
+#    AuctionHouseBot.Class.WeightByPoolSize
+#       Description: Also weight each class's share of a quality by how many different items it has, so a
+#                    class with a handful of items (green bags, arrows) is not listed dozens of times each.
+#       Default:     0 - (Disabled, share by AuctionHouseBot.Class.* only)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Class.WeightByPoolSize = 0
 
 #
 ###################################################################################################
@@ -4098,12 +4386,25 @@ AuctionHouseBot.Buyer.ChanceMultiplier.Yellow = 100
 AuctionHouseBot.Buyer.Recheck.Interval = 20
 
 #
-#    AuctionHouseBot.Buyer.Stacks
-#       Description: Also buy stackable listings (herbs, ore, cloth...), always the whole listing.
-#       Default:     0 - (Disabled, only single items are bought)
-#                    1 - (Enabled)
+#    AuctionHouseBot.Buyer.Commodities
+#       Description: Also buy stackable listings (herbs, ore, cloth, potions...), always the whole listing.
+#                    AuctionHouseBot.Buyer.Stacks is the older name for the same switch and is only read
+#                    when AuctionHouseBot.Buyer.Commodities is not set.
+#       Default:     1 - (Enabled)
+#                    0 - (Disabled, only single items are bought)
 
-AuctionHouseBot.Buyer.Stacks = 0
+AuctionHouseBot.Buyer.Commodities = 1
+
+#
+#    AuctionHouseBot.Buyer.DropFloorPerLevel
+#       Description: Lowest fair price, in copper per item level, the buyer uses for white or better
+#                    consumables, recipes and miscellaneous items (scrolls, potions, drops). Their vendor
+#                    price is a few copper, so without a floor a player's listing was never bought.
+#                    Gray items and trade goods are not changed.
+#       Default:     100 - (1 silver per item level: a level 10 scroll is worth 10 silver)
+#                    0   - (Off)
+
+AuctionHouseBot.Buyer.DropFloorPerLevel = 100
 
 #
 #    AuctionHouseBot.Buyer.MaxPriceMultiplier
@@ -4268,7 +4569,7 @@ BlackMarket.UpdatePeriod = 24
 #
 
 Appender.Console=1,3,0
-Appender.Server=2,2,0,Server.log,w
+Appender.Server=2,2,0,Server.log,w,104857600,3
 Appender.GM=2,2,1,GM.log
 Appender.DBErrors=2,2,0,DBErrors.log,w
 Appender.CrashRing=4,3,7,300
@@ -4298,6 +4599,8 @@ Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors
 Logger.sql.updates=3,Console Server
 Logger.mmaps=3,Server
+Logger.entities.player.talents=4,Console Server
+#Logger.scripts.classic.firewalker=3,Console Server
 
 #Logger.addon=3,Console Server
 #Logger.ahbot=3,Console Server
@@ -4630,6 +4933,77 @@ Classic.MainGroupInsertIndex = 152
 
 Classic.ClientMainGroupInsertIndex = 315
 
+#    Classic.Build70755.FirstBuild
+#        Description: Clients of this build or newer (the build they logged in with, per connection) get the 70755 message
+#                     numbers below; older clients (70707 and before) keep theirs, so both can play on the same realm.
+#                     0 turns the 70755 numbers off.
+#        Default:     70755
+
+Classic.Build70755.FirstBuild = 70755
+
+#    Classic.Build70755.ClientNewMessages
+#        Description: Comma list of client message numbers (70755 numbering, hex like 0x440015 or decimal) that are new in 70755.
+#                     Client messages after a listed one (same group) are one lower in 70707 numbering. Tune with a restart.
+#        Default:     "0x440071,0x440072"
+
+Classic.Build70755.ClientNewMessages = "0x440071,0x440072"
+
+#    Classic.Build70755.ServerNewMessages
+#        Description: Comma list of server message numbers (70755 numbering) that are new in 70755. Server messages from a listed
+#                     number on (same group) are sent one higher. Tune with a restart.
+#        Default:     "0x470125"
+
+Classic.Build70755.ServerNewMessages = "0x470125"
+
+#    Classic.Build70790.FirstBuild
+#        Description: Clients of this build or newer get the 70790 message numbers below on top of the 70755 ones.
+#                     0 turns the 70790 numbers off (70790 clients then use the 70755 numbers).
+#        Default:     70790
+
+Classic.Build70790.FirstBuild = 70790
+
+#    Classic.Build70790.ClientNewMessages
+#        Description: Comma list of client message numbers (70790 numbering) that are new in 70790. Client messages after a
+#                     listed one (same group) are one lower in 70755 numbering. Empty = none moved. Tune with a restart.
+#        Default:     ""
+
+Classic.Build70790.ClientNewMessages = ""
+
+#    Classic.Build70790.ServerRemovedMessages
+#        Description: Comma list of server message numbers (70755 numbering) that 70790 does not have. Server messages after a
+#                     listed one (same group) are sent one lower. 0x470125 = the 70755 new message: official 70790 sniffs show
+#                     only one new main-group message against 70532, placed lower (see ServerNewMessages). Tune with a restart.
+#        Default:     "0x470125"
+
+Classic.Build70790.ServerRemovedMessages = "0x470125"
+
+#    Classic.Build70790.ServerNewMessages
+#        Description: Comma list of server message numbers (70790 numbering) that are new in 70790. Server messages from a
+#                     listed number on (same group) are sent one higher. Official sniffs: INSTANCE_INFO (0x4700DE) unchanged,
+#                     ACHIEVEMENT_EARNED (0x4700ED) moved, so the new one is in 0x4700DF..0x4700ED. Tested on a 70790 client:
+#                     0x4700ED is right (the mail result at 0x4700E4 arrives). Tune with a restart.
+#        Default:     "0x4700ED"
+
+Classic.Build70790.ServerNewMessages = "0x4700ED"
+
+#    Classic.Build70790.BlockedServerMessages
+#        Description: Comma list of server messages (core numbers, hex or decimal) that are not sent to 70790 or newer clients
+#                     because that client reads them as a different message (a stopgap while a number is unknown). Empty =
+#                     send everything. Tune with a restart.
+#        Default:     ""
+
+Classic.Build70790.BlockedServerMessages = ""
+
+#    Classic.CharacterSurnames
+#        Description: Classic 1.60 surnames ("Name Surname"). 0 = every character has a single name: the surname typed
+#                     at creation, rename or customize is kept in the characters table but never shown (character
+#                     select, name plates, party, guild, who, friends, mail). Mail, whispers and invites typed as
+#                     "Name Surname" still find the character by its name. Needs a restart.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Classic.CharacterSurnames = 1
+
 #    Classic.OfficialFeatureFlags
 #        Description: Send the client feature flags exactly as the official server does (sniffs 70205/70235).
 #                     0 goes back to the older hand-picked flags.
@@ -4646,6 +5020,78 @@ Classic.OfficialFeatureFlags = 1
 #                     0 - (Disabled)
 
 Classic.MountIndoorsRules = 1
+
+#    Classic.SecuredBagSlotsForAll
+#        Description: Every account gets the 4 extra backpack slots (and no "attach an Authenticator" prompt) that the
+#                     client otherwise shows locked until the Battle.net account has an authenticator.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, only accounts with an authenticator)
+
+Classic.SecuredBagSlotsForAll = 1
+
+#    Classic.ForeverCreatureHealth
+#        Description: Vanilla creatures take their base health from the curve fit to sniffed official Forever creatures
+#                     (creature_classic_classlevelstats.health_forever) instead of the VMaNGOS curve. One curve for all
+#                     classes: against VMaNGOS at level 60, warrior-class mobs have 43% more health and mage-class 104% more.
+#        Default:     0 - (Disabled, VMaNGOS curve)
+#                     1 - (Enabled, Forever curve)
+
+Classic.ForeverCreatureHealth = 0
+
+#    Classic.ForeverKillXp
+#        Description: Mobs below the player's level give kill XP from the mob's own base (5 * mob level + 45) instead of the
+#                     player's base, as reported from official Forever sniffs by the Azeroth project (not verified by us).
+#                     Lower mobs then give less (player 10, mob 8: 61 instead of 68). Equal and higher mobs are unchanged.
+#        Default:     0 - (Disabled, vanilla VMaNGOS formula)
+#                     1 - (Enabled, Forever sniff formula)
+
+Classic.ForeverKillXp = 0
+
+#    Classic.CreatureSpellLevelScaling
+#        Description: Vanilla creature spells flagged "scales with creature level" (Fireball 20793, Lightning Bolt 9532,
+#                     Shadow Bolt 9613...) carry the numbers of their spell level. As in vanilla, a creature's level scales
+#                     them by the creature melee damage of its level against the spell level (a level 3 Scarlet Initiate's
+#                     Fireball: 7-9 instead of 74-98).
+#        Default:     2 - (Vanilla both ways: creatures above the spell level also hit for more, up to 3.7x at level 63)
+#                     1 - (Only creatures below the spell level hit for less)
+#                     0 - (Disabled, every caster uses the spell-level numbers)
+
+Classic.CreatureSpellLevelScaling = 2
+
+#    Classic.Respawn.Level1to10Pct
+#    Classic.Respawn.Level11to20Pct
+#    Classic.Respawn.Level21to30Pct
+#    Classic.Respawn.Level31to60Pct
+#        Description: WoW Forever: starting zones respawn fastest and respawns slow down as zones go up in level. The
+#                     creature's level picks this percent of its normal respawn time (open world only; dungeons, raids,
+#                     summons, bosses and rares keep their own timers; never shorter than 30 seconds).
+#                     100 = normal time, 50 = twice as fast. All four at 100 = off.
+#        Default:     50 / 70 / 85 / 100
+
+Classic.Respawn.Level1to10Pct = 50
+Classic.Respawn.Level11to20Pct = 70
+Classic.Respawn.Level21to30Pct = 85
+Classic.Respawn.Level31to60Pct = 100
+
+#    Classic.CreatureHealth.RaiseFromLevel
+#    Classic.CreatureHealth.RaiseAt60Pct
+#    Classic.CreatureHealth.Raids
+#        Description: WoW Forever gave higher level creatures more health. Vanilla creatures above RaiseFromLevel get more
+#                     health, rising in a straight line to RaiseAt60Pct percent more at level 60 (defaults: +5% at 30,
+#                     +10% at 40, +20% at 60). Raids only when Classic.CreatureHealth.Raids = 1. RaiseAt60Pct = 0 = off.
+#        Default:     20 / 20 / 0
+
+Classic.CreatureHealth.RaiseFromLevel = 20
+Classic.CreatureHealth.RaiseAt60Pct = 20
+Classic.CreatureHealth.Raids = 0
+
+#    Classic.AutoEquipNewBags
+#        Description: A new bag goes straight onto an empty bag slot. WoW Forever stopped this: new bags go into the
+#                     backpack and the player puts them on by hand. Bots always put new bags on.
+#        Default:     0 - (Disabled, WoW Forever: equip bags by hand)
+#                     1 - (Enabled, old behaviour)
+
+Classic.AutoEquipNewBags = 0
 
 #    Classic.Shop.Enabled
 #        Description: In-game Store: shop points, products from world.shop_* (.shop reload), the Gold Market, character
@@ -4675,6 +5121,17 @@ Classic.Shop.BoostGold = 250
 #                     1 - (Enabled)
 
 Classic.Shop.VasTest = 0
+
+#    Classic.PvPRank.PointsBattlegroundWin
+#    Classic.PvPRank.PointsBattlegroundLoss
+#        Description: PvP rank points (reputation of the "PvP Rank Points" track, faction 2800) given to every player of the
+#                     winning / losing side when a battleground ends. Rank 1 needs 750 points, rank 14 needs 24750 in all.
+#                     Rate.Reputation.Gain also applies. 0 gives none.
+#        Default:     250 - (Win)
+#                     100 - (Loss)
+
+Classic.PvPRank.PointsBattlegroundWin = 250
+Classic.PvPRank.PointsBattlegroundLoss = 100
 
 #
 #    Discord.Channel.Enable

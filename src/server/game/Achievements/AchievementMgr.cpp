@@ -629,6 +629,11 @@ void PlayerAchievementMgr::SendAchievementEarned(AchievementEntry const* achieve
     if (achievement->Flags & ACHIEVEMENT_FLAG_HIDDEN)
         return;
 
+    // Bots are levelled and geared in jumps, so they would announce a burst of achievements to everyone nearby
+    // and to their guild. They still earn them; nobody is told.
+    if (_owner->GetSession()->IsBot())
+        return;
+
     TC_LOG_DEBUG("criteria.achievement", "PlayerAchievementMgr::SendAchievementEarned({})", achievement->ID);
 
     if (!(achievement->Flags & ACHIEVEMENT_FLAG_TRACKING_FLAG))

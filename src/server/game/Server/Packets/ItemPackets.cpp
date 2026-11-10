@@ -230,9 +230,12 @@ void AutoEquipItemSlot::Read()
 
 void AutoStoreBagItem::Read()
 {
+    // Classic 1.60 sends the source bag first, then the target bag, then the source slot. Read the other way round (Linen Cloth in
+    // backpack slot 36 dropped on the bag in slot 30 came in as "item 36 of bag 30, store anywhere"), the item wasn't found, the
+    // server sent nothing back and the game kept the item locked until a relog.
     _worldPacket >> Inv;
-    _worldPacket >> ContainerSlotB;
     _worldPacket >> ContainerSlotA;
+    _worldPacket >> ContainerSlotB;
     _worldPacket >> SlotA;
 }
 

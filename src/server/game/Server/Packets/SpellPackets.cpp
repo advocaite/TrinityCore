@@ -75,11 +75,11 @@ WorldPacket const* UpdateActionButtons::Write()
 
 void SetActionButton::Read()
 {
-    // Classic 1.60.1.70009: uint16 button index (360 buttons); indices past 255 are clamped (the handler ignores >= MAX_ACTION_BUTTONS)
+    // Classic 1.60.1.70009: uint16 button index, 360 action buttons (the controller UI binds above 180)
     uint16 index = 0;
     _worldPacket >> Action;
     _worldPacket >> index;
-    Index = uint8(std::min<uint16>(index, 255));
+    Index = index;
 }
 
 WorldPacket const* SendUnlearnSpells::Write()

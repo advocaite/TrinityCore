@@ -17,11 +17,15 @@
 
 #include "TraitMgr.h"
 #include "DB2Stores.h"
+#include "DB2HotfixGenerator.h"
+#include "Config.h"
 #include "FlatSet.h"
 #include "IteratorPair.h"
+#include "Log.h"
 #include "MapUtils.h"
 #include "TraitPacketsCommon.h"
 #include "UpdateFields.h"
+#include <cmath>
 
 namespace TraitMgr
 {
@@ -86,6 +90,78 @@ int32 _configIdGenerator = 0;
 std::unordered_map<int32, std::vector<TraitCurrencySourceEntry const*>> _traitCurrencySourcesByCurrency;
 std::unordered_map<int32, std::vector<TraitDefinitionEffectPointsEntry const*>> _traitDefinitionEffectPointModifiers;
 std::unordered_map<int32, std::vector<TraitTreeLoadoutEntryEntry const*>> _traitTreeLoadoutsByChrSpecialization;
+}
+
+// Classic 1.60: Rate.Talent (worldserver.conf / zz-9-local.conf), as on vanilla cores: talent points per level times this.
+// Talent points are the class talent currency 3820 (one point at each level 10-60, SourcedMax 51). The client works the
+// points out from the same DB2 rows, so the changed rows are also sent to it as hotfixes, or its talent window would still
+// show the old number. 1 = blizzlike (nothing is changed or sent). Points are handed out level by level, so 1.5 gives 1, 2,
+// 1, 2... and a level-60 character always ends with round-down(51 x rate). Lowering the rate below what a character has
+// spent makes its next talent change ask to reset first.
+static void ApplyClassicTalentRate()
+{
+    static constexpr uint32 ClassicTalentCurrencyID = 3820;
+
+    float const rate = sConfigMgr->GetFloatDefault("Rate.Talent", 1.0f);
+    if (rate <= 0.0f || std::fabs(rate - 1.0f) < 0.001f)
+        return;
+
+    std::vector<TraitCurrencySourceEntry const*> levelSources;
+    std::vector<uint32> otherSources;
+    for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
+    {
+        if (source->TraitCurrencyID != ClassicTalentCurrencyID || source->Amount <= 0)
+            continue;
+
+        if (source->PlayerLevel > 0 && !source->QuestID && !source->AchievementID && !source->TraitNodeEntryID)
+            levelSources.push_back(source);
+        else
+            otherSources.push_back(source->ID);
+    }
+
+    if (levelSources.empty())
+    {
+        TC_LOG_ERROR("server.loading", "Rate.Talent = {} not applied: no level rows for talent currency {} in TraitCurrencySource", rate, ClassicTalentCurrencyID);
+        return;
+    }
+
+    std::ranges::sort(levelSources, {}, &TraitCurrencySourceEntry::PlayerLevel);
+
+    uint32 changed = 0;
+    int32 baseTotal = 0;
+    int32 givenTotal = 0;
+    for (TraitCurrencySourceEntry const* source : levelSources)
+    {
+        baseTotal += source->Amount;
+        int32 const wanted = int32(std::floor(float(baseTotal) * rate + 0.0001f));
+        int32 const amount = std::max(0, wanted - givenTotal);
+        givenTotal += amount;
+
+        const_cast<TraitCurrencySourceEntry*>(source)->Amount = amount;
+        DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencySourceStore.GetTableHash(), source->ID);
+        ++changed;
+    }
+
+    for (uint32 sourceId : otherSources)
+    {
+        TraitCurrencySourceEntry* source = const_cast<TraitCurrencySourceEntry*>(sTraitCurrencySourceStore.AssertEntry(sourceId));
+        source->Amount = std::max(0, int32(std::lround(float(source->Amount) * rate)));
+        DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencySourceStore.GetTableHash(), sourceId);
+        ++changed;
+    }
+
+    if (TraitCurrencyEntry const* currency = sTraitCurrencyStore.LookupEntry(ClassicTalentCurrencyID))
+    {
+        if (currency->SourcedMax > 0 && currency->SourcedMax < givenTotal)
+        {
+            const_cast<TraitCurrencyEntry*>(currency)->SourcedMax = givenTotal;
+            DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencyStore.GetTableHash(), ClassicTalentCurrencyID);
+            ++changed;
+        }
+    }
+
+    TC_LOG_INFO("server.loading", ">> Rate.Talent = {}: {} talent points by the level cap instead of {} ({} rows changed)",
+        rate, givenTotal, baseTotal, changed);
 }
 
 void Load()
@@ -259,6 +335,53 @@ void Load()
         right->ParentNodes.emplace_back(left, static_cast<TraitEdgeType>(traitEdgeEntry->Type));
     }
 
+    // Some trees have edges both ways between two nodes (Classic 1.60.1.70532: Nature's Majesty and Nature's Splendor, the first
+    // requiring the second and a visual edge back). Each node then waits on the other and neither can ever be learned. Keep one
+    // direction per pair: the stronger edge type, or for equal types the edge that points down the tree (lower PosY to higher).
+    auto edgeStrength = [](TraitEdgeType type)
+    {
+        switch (type)
+        {
+            case TraitEdgeType::RequiredForAvailability: return 2;
+            case TraitEdgeType::SufficientForAvailability: return 1;
+            default: return 0;
+        }
+    };
+    std::vector<std::pair<Node*, Node const*>> backEdges; // child, parent whose edge into child is dropped
+    for (auto& [nodeId, node] : _traitNodes)
+    {
+        for (auto const& [parent, type] : node.ParentNodes)
+        {
+            if (parent->Data->ID >= node.Data->ID)
+                continue; // each pair once
+
+            auto reverse = std::ranges::find(parent->ParentNodes, &node, &std::pair<Node const*, TraitEdgeType>::first);
+            if (reverse == parent->ParentNodes.end())
+                continue;
+
+            // `type` is parent -> node, reverse->second is node -> parent
+            bool keepParentToNode;
+            if (edgeStrength(type) != edgeStrength(reverse->second))
+                keepParentToNode = edgeStrength(type) > edgeStrength(reverse->second);
+            else if (parent->Data->PosY != node.Data->PosY)
+                keepParentToNode = parent->Data->PosY < node.Data->PosY;
+            else
+                keepParentToNode = true;
+
+            if (keepParentToNode)
+                backEdges.emplace_back(&_traitNodes[parent->Data->ID], &node);
+            else
+                backEdges.emplace_back(&node, parent);
+        }
+    }
+
+    for (auto const& [child, parent] : backEdges)
+    {
+        std::erase_if(child->ParentNodes, [parent](std::pair<Node const*, TraitEdgeType> const& edge) { return edge.first == parent; });
+        TC_LOG_DEBUG("misc", "TraitMgr: TraitNode {} and TraitNode {} have edges both ways, the edge into {} is ignored", parent->Data->ID, child->Data->ID,
+            child->Data->ID);
+    }
+
     for (SkillLineXTraitTreeEntry const* skillLineXTraitTreeEntry : sSkillLineXTraitTreeStore)
     {
         Tree* tree = Trinity::Containers::MapGetValuePtr(_traitTrees, skillLineXTraitTreeEntry->TraitTreeID);
@@ -287,6 +410,8 @@ void Load()
         for (int32 traitTreeId : traitTreeIds)
             if (Tree* tree = Trinity::Containers::MapGetValuePtr(_traitTrees, traitTreeId))
                 _traitTreesByTraitSystem[traitSystemId].push_back(tree);
+
+    ApplyClassicTalentRate();
 
     for (TraitCurrencySourceEntry const* traitCurrencySource : sTraitCurrencySourceStore)
         _traitCurrencySourcesByCurrency[traitCurrencySource->TraitCurrencyID].push_back(traitCurrencySource);
@@ -905,7 +1030,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
                 if (!isNodeFullyFilled(parentNode))
                 {
                     if (edgeType == TraitEdgeType::RequiredForAvailability)
+                    {
+                        TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: node {} entry {} needs parent node {} filled", traitEntry.TraitNodeID, traitEntry.TraitNodeEntryID, parentNode->Data->ID);
                         return LearnResult::NotEnoughTalentsInPrimaryTree;
+                    }
 
                     continue;
                 }
@@ -914,7 +1042,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
             }
 
             if (!hasAnyParentTrait)
+            {
+                TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: node {} entry {} has no filled parent node", traitEntry.TraitNodeID, traitEntry.TraitNodeEntryID);
                 return LearnResult::NotEnoughTalentsInPrimaryTree;
+            }
         }
 
         return LearnResult::Ok;
@@ -992,7 +1123,10 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
 
         int32* grantedCount = Trinity::Containers::MapGetValuePtr(grantedCurrencies, traitCurrencyId);
         if (!grantedCount || *grantedCount < spentAmount.Total)
+        {
+            TC_LOG_INFO("entities.player", "TraitMgr::ValidateConfig: trait currency {} spent {} but owned {}", traitCurrencyId, spentAmount.Total, grantedCount ? *grantedCount : -1);
             return LearnResult::NotEnoughTalentsInPrimaryTree;
+        }
     }
 
     if (requireSpendingAllCurrencies && traitConfig.Type == TraitConfigType::Combat)
@@ -1063,6 +1197,47 @@ bool CanApplyTraitNode(UF::TraitConfig const& traitConfig, UF::TraitEntry const&
 std::vector<TraitDefinitionEffectPointsEntry const*> const* GetTraitDefinitionEffectPointModifiers(int32 traitDefinitionId)
 {
     return Trinity::Containers::MapGetValuePtr(_traitDefinitionEffectPointModifiers, traitDefinitionId);
+}
+
+std::vector<NodeEntryInfo> GetNodeEntriesForConfig(WorldPackets::Traits::TraitConfig const& traitConfig)
+{
+    std::vector<NodeEntryInfo> result;
+    std::vector<Tree const*> const* trees = GetTreesForConfig(traitConfig);
+    if (!trees)
+        return result;
+
+    for (Tree const* tree : *trees)
+        for (Node const* node : tree->Nodes)
+            for (NodeEntry const& entry : node->Entries)
+                result.push_back({ .TraitNodeID = int32(node->Data->ID), .TraitNodeEntryID = int32(entry.Data->ID),
+                    .MaxRanks = entry.Data->MaxRanks, .TraitDefinitionID = entry.Data->TraitDefinitionID });
+
+    return result;
+}
+
+std::vector<int32> GetCostCurrenciesForNode(int32 traitNodeId)
+{
+    std::vector<int32> currencies;
+    Node const* node = Trinity::Containers::MapGetValuePtr(_traitNodes, traitNodeId);
+    if (!node)
+        return currencies;
+
+    auto add = [&](std::vector<TraitCostEntry const*> const& costs)
+    {
+        for (TraitCostEntry const* cost : costs)
+            currencies.push_back(cost->TraitCurrencyID);
+    };
+    for (NodeGroup const* group : node->Groups)
+        add(group->Costs);
+    for (NodeEntry const& entry : node->Entries)
+        add(entry.Costs);
+    add(node->Costs);
+    if (Tree const* tree = Trinity::Containers::MapGetValuePtr(_traitTrees, node->Data->TraitTreeID))
+        add(tree->Costs);
+
+    std::ranges::sort(currencies);
+    currencies.erase(std::ranges::unique(currencies).begin(), currencies.end());
+    return currencies;
 }
 
 void InitializeStarterBuildTraitConfig(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player)

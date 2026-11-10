@@ -47,6 +47,7 @@
 #include "Language.h"
 #include "Log.h"
 #include "Mail.h"
+#include "LoginQueryHolder.h"
 #include "Map.h"
 #include "MapUtils.h"
 #include "Metric.h"
@@ -71,18 +72,9 @@
 #include <boost/circular_buffer.hpp>
 #include <sstream>
 
-class LoginQueryHolder : public CharacterDatabaseQueryHolder
-{
-    private:
-        uint32 m_accountId;
-        ObjectGuid m_guid;
-    public:
-        LoginQueryHolder(uint32 accountId, ObjectGuid guid)
-            : m_accountId(accountId), m_guid(guid) { }
-        ObjectGuid GetGuid() const { return m_guid; }
-        uint32 GetAccountId() const { return m_accountId; }
-        bool Initialize();
-};
+// LoginQueryHolder declaration moved to Handlers/LoginQueryHolder.h so the
+// V2 playerbot module can build/submit the same holder for headless bot
+// logins. The Initialize() body still lives here (~250 prepared statements).
 
 bool LoginQueryHolder::Initialize()
 {
@@ -792,11 +784,15 @@ bool WorldSession::ValidateAppearance(Races race, Classes playerClass, Gender ge
             return option->ID == playerChoice.ChrCustomizationOptionID;
         });
 
+        // Classic 1.60: a druid form appearance (barber shop) belongs to the form's own model, not to the race model
+        ChrCustomizationOptionEntry const* customizationOption = customizationOptionDataItr != options->end() ? *customizationOptionDataItr
+            : sDB2Manager.GetShapeshiftFormOption(race, gender, playerChoice.ChrCustomizationOptionID);
+
         // option not found for race/gender combination
-        if (customizationOptionDataItr == options->end())
+        if (!customizationOption)
             return false;
 
-        if (ChrCustomizationReqEntry const* req = sChrCustomizationReqStore.LookupEntry((*customizationOptionDataItr)->ChrCustomizationReqID))
+        if (ChrCustomizationReqEntry const* req = sChrCustomizationReqStore.LookupEntry(customizationOption->ChrCustomizationReqID))
             if (!MeetsChrCustomizationReq(req, race, playerClass, false, customizations))
                 return false;
 
@@ -1223,36 +1219,65 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
 
 void WorldSession::HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& charDelete)
 {
+    // Classic 1.60: a loaded character got no answer, and the client waited on "Deleting character" for good. On this server that
+    // is the player's own alt still in the world as a bot (summoned into the party, the player gone back to the character list;
+    // Discord report 2026-10-28): the bot is logged out and the delete finishes once it has left the world (WorldSession::Update).
+    // Anyone else's loaded character, or a second delete while one waits, is refused with an answer.
+    if (Player* loaded = ObjectAccessor::FindConnectedPlayer(charDelete.Guid))
+    {
+        WorldSession* botSession = loaded->GetSession();
+        if (!_pendingCharDelete.IsEmpty() || !botSession || !botSession->IsBot() || botSession->GetAccountId() != GetAccountId())
+        {
+            sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, GetAccountId());
+            SendCharDelete(CHAR_DELETE_FAILED);
+            return;
+        }
+
+        TC_LOG_INFO("entities.player.character", "Account: {} deletes character {}, still in the world as a bot: logging it out first",
+            GetAccountId(), charDelete.Guid.ToString());
+        botSession->KickPlayer("WorldSession::HandleCharDeleteOpcode the character is being deleted");
+        _pendingCharDelete = charDelete.Guid;
+        _pendingCharDeleteTimer = 30 * IN_MILLISECONDS;
+        return;
+    }
+
+    DeleteCharacter(charDelete.Guid);
+}
+
+void WorldSession::DeleteCharacter(ObjectGuid guid)
+{
     // Initiating
     uint32 initAccountId = GetAccountId();
 
     // can't delete loaded character
-    if (ObjectAccessor::FindPlayer(charDelete.Guid))
+    if (ObjectAccessor::FindConnectedPlayer(guid))
     {
-        sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, initAccountId);
+        sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
+        SendCharDelete(CHAR_DELETE_FAILED);
         return;
     }
 
     // is guild leader
-    if (sGuildMgr->GetGuildByLeader(charDelete.Guid))
+    if (sGuildMgr->GetGuildByLeader(guid))
     {
-        sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, initAccountId);
+        sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
         SendCharDelete(CHAR_DELETE_FAILED_GUILD_LEADER);
         return;
     }
 
     // is arena team captain
-    if (sArenaTeamMgr->GetArenaTeamByCaptain(charDelete.Guid))
+    if (sArenaTeamMgr->GetArenaTeamByCaptain(guid))
     {
-        sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, initAccountId);
+        sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
         SendCharDelete(CHAR_DELETE_FAILED_ARENA_CAPTAIN);
         return;
     }
 
-    CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(charDelete.Guid);
+    CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(guid);
     if (!characterInfo)
     {
-        sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, initAccountId);
+        sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
+        SendCharDelete(CHAR_DELETE_FAILED);
         return;
     }
 
@@ -1263,25 +1288,26 @@ void WorldSession::HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& c
     // prevent deleting other players' characters using cheating tools
     if (accountId != initAccountId)
     {
-        sScriptMgr->OnPlayerFailedDelete(charDelete.Guid, initAccountId);
+        sScriptMgr->OnPlayerFailedDelete(guid, initAccountId);
+        SendCharDelete(CHAR_DELETE_FAILED);
         return;
     }
 
-    TC_LOG_INFO("entities.player.character", "Account: {}, IP: {} deleted character: {}, {}, Level: {}", accountId, GetRemoteAddress(), name, charDelete.Guid.ToString(), level);
+    TC_LOG_INFO("entities.player.character", "Account: {}, IP: {} deleted character: {}, {}, Level: {}", accountId, GetRemoteAddress(), name, guid.ToString(), level);
 
     // To prevent hook failure, place hook before removing reference from DB
-    sScriptMgr->OnPlayerDelete(charDelete.Guid, initAccountId); // To prevent race conditioning, but as it also makes sense, we hand the accountId over for successful delete.
+    sScriptMgr->OnPlayerDelete(guid, initAccountId); // To prevent race conditioning, but as it also makes sense, we hand the accountId over for successful delete.
     // Shouldn't interfere with character deletion though
 
     if (sLog->ShouldLog("entities.player.dump", LOG_LEVEL_INFO)) // optimize GetPlayerDump call
     {
         std::string dump;
-        if (PlayerDumpWriter().GetDump(charDelete.Guid.GetCounter(), dump))
-            sLog->OutCharDump(dump, accountId, charDelete.Guid.GetCounter(), name);
+        if (PlayerDumpWriter().GetDump(guid.GetCounter(), dump))
+            sLog->OutCharDump(dump, accountId, guid.GetCounter(), name);
     }
 
-    sCalendarMgr->RemoveAllPlayerEventsAndInvites(charDelete.Guid);
-    Player::DeleteFromDB(charDelete.Guid, accountId);
+    sCalendarMgr->RemoveAllPlayerEventsAndInvites(guid);
+    Player::DeleteFromDB(guid, accountId);
 
     SendCharDelete(CHAR_DELETE_SUCCESS);
 }
@@ -1303,6 +1329,29 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin&
     {
         TC_LOG_ERROR("network", "Account ({}) can't login with that character ({}).", GetAccountId(), playerLogin.Guid.ToString());
         KickPlayer("WorldSession::HandlePlayerLoginOpcode Trying to login with a character of another account");
+        return;
+    }
+
+    // Classic 1.60: the character can still be in the world as this account's bot (the player's own alt summoned into the party,
+    // the player gone back to the character list; Discord report 2026-11-08). Loading it a second time put two players with the
+    // same guid in the world and the client closed with a fatal error. The bot is logged out first and the login goes on once it
+    // has left the world (WorldSession::Update), like a delete of that character (HandleCharDeleteOpcode).
+    if (Player* loaded = ObjectAccessor::FindConnectedPlayer(playerLogin.Guid))
+    {
+        WorldSession* botSession = loaded->GetSession();
+        if (!botSession || botSession == this || !botSession->IsBot() || botSession->GetAccountId() != GetAccountId())
+        {
+            TC_LOG_ERROR("network", "Account ({}) can't login with character ({}): it is already in the world.", GetAccountId(),
+                playerLogin.Guid.ToString());
+            AbortLogin(WorldPackets::Character::LoginFailureReason::DuplicateCharacter);
+            return;
+        }
+
+        TC_LOG_INFO("entities.player.character", "Account: {} logs in to character {}, still in the world as a bot: logging it out first",
+            GetAccountId(), playerLogin.Guid.ToString());
+        botSession->KickPlayer("WorldSession::HandlePlayerLoginOpcode the player logs in to this character");
+        _pendingLoginAfterBot = true;
+        _pendingLoginAfterBotTimer = 30 * IN_MILLISECONDS;
         return;
     }
 
@@ -1534,6 +1583,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // Classic 1.60: characters that were already level 25+ get the Legacy unlock on login
     pCurrChar->UpdateClassicLegacyUnlock();
 
+    // Classic 1.60: the honor rank that rank gear checks, from the PvP rank renown level (not saved, rebuilt on login)
+    pCurrChar->UpdateClassicPvPRank();
+
     // Classic 1.60: titles of the profession certifications bought on this account (300 skill shows them)
     pCurrChar->UpdateClassicProfessionTitles();
 
@@ -1545,9 +1597,17 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     stmt->setUInt64(0, pCurrChar->GetGUID().GetCounter());
     CharacterDatabase.Execute(stmt);
 
-    LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
-    loginStmt->setUInt32(0, GetAccountId());
-    LoginDatabase.Execute(loginStmt);
+    // Bot sessions share the owner's account id. Setting account.online=1
+    // here would (in auto-resume mode where the GM is offline) block them
+    // from later logging into their own account — the login server treats
+    // online=1 as "another session active". The character.online flag above
+    // is per-character and correctly reflects the bot's in-world state.
+    if (!IsBot())
+    {
+        LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
+        loginStmt->setUInt32(0, GetAccountId());
+        LoginDatabase.Execute(loginStmt);
+    }
 
     pCurrChar->SetInGameTime(GameTime::GetGameTimeMS());
 
@@ -1600,7 +1660,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     }
 
     // Load pet if any (if player not alive and in taxi flight or another then pet will remember as temporary unsummoned)
-    pCurrChar->ResummonPetTemporaryUnSummonedIfAny();
+    pCurrChar->DelayPetResummon(4000);
 
     // Set FFA PvP for non GM in non-rest mode
     if (sWorld->IsFFAPvPRealm() && !pCurrChar->IsGameMaster() && !pCurrChar->HasPlayerFlag(PLAYER_FLAGS_RESTING))
@@ -1739,10 +1799,13 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // Battle.net account with an authenticator (support site account page): "account secured", +4 backpack slots and no
     // "attach an Authenticator" prompts. Removing it takes the slots away again (items in them are mailed).
     {
-        bool secured = false;
-        if (QueryResult result = LoginDatabase.PQuery("SELECT COUNT(*) FROM battlenet_accounts WHERE id = {} AND authenticator_secret IS NOT NULL "
-            "AND authenticator_secret <> ''", GetBattlenetAccountId()))
-            secured = (*result)[0].GetUInt64() != 0;
+        bool secured = sWorld->getBoolConfig(CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL);
+        if (!secured)
+        {
+            if (QueryResult result = LoginDatabase.PQuery("SELECT COUNT(*) FROM battlenet_accounts WHERE id = {} AND authenticator_secret IS NOT NULL "
+                "AND authenticator_secret <> ''", GetBattlenetAccountId()))
+                secured = (*result)[0].GetUInt64() != 0;
+        }
 
         if (secured)
             pCurrChar->SetAccountSecured(true);
@@ -2089,6 +2152,23 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<WorldPackets::Charac
 
 void WorldSession::HandleSetPlayerDeclinedNames(WorldPackets::Character::SetPlayerDeclinedNames& packet)
 {
+    // Classic 1.60: the ruRU client waits for this answer before it finishes creating the character (it hung on "updating character"
+    // while the packet failed to read and got no answer). Declensions are optional: nothing is saved until the layout is known.
+    if (!packet.Parsed)
+    {
+        TC_LOG_INFO("entities.player.character", "SetPlayerDeclinedNames of {} not read, packet start: {}", packet.Player.ToString(), packet.RawHex);
+        SendSetPlayerDeclinedNamesResult(DECLINED_NAMES_RESULT_SUCCESS, packet.Player);
+        return;
+    }
+
+    // A realm without declined names (DeclinedNames = 0 and not a Russian RealmZone) never saves or shows them, so there is nothing
+    // to check: an error answer here left the ruRU client stuck in the declension dialog with no way to finish the character.
+    if (!sWorld->getBoolConfig(CONFIG_DECLINED_NAMES_USED))
+    {
+        SendSetPlayerDeclinedNamesResult(DECLINED_NAMES_RESULT_SUCCESS, packet.Player);
+        return;
+    }
+
     // not accept declined names for unsupported languages
     std::string name;
     if (!sCharacterCache->GetCharacterNameByGuid(packet.Player, name))
@@ -3307,7 +3387,7 @@ void WorldSession::SendCharRename(ResponseCodes result, WorldPackets::Character:
     WorldPackets::Character::CharacterRenameResult packet;
     packet.Result = result;
     packet.Name = renameInfo->NewName;
-    packet.Surname = renameInfo->NewSurname;
+    packet.Surname = CharacterCache::AreSurnamesEnabled() ? renameInfo->NewSurname : std::string();
     if (result == RESPONSE_SUCCESS)
         packet.Guid = renameInfo->Guid;
 
@@ -3340,7 +3420,7 @@ void WorldSession::SendCharFactionChange(ResponseCodes result, WorldPackets::Cha
     {
         packet.Display.emplace();
         packet.Display->Name = factionChangeInfo->Name;
-        packet.Display->Surname = factionChangeInfo->Surname;
+        packet.Display->Surname = CharacterCache::AreSurnamesEnabled() ? factionChangeInfo->Surname : std::string();
         packet.Display->SexID = factionChangeInfo->SexID;
         packet.Display->Customizations = &factionChangeInfo->Customizations;
         packet.Display->RaceID = factionChangeInfo->RaceID;

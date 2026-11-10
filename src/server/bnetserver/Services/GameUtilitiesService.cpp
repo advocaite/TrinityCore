@@ -175,12 +175,18 @@ uint32 GameUtilities::GetLastCharPlayed(Session const* session,
                 lastPlayerChar = session->GetLastPlayedCharacter(rulesetRealm->GetSubRegionAddress());
     }
 
+    // GetRealmEntryJSON is empty for an offline realm (or a build / security level mismatch). Do not answer with the last played realm then:
+    // drop it so the client is handed an online realm of the selected ruleset below.
+    std::string lastPlayedRealmEntry;
     if (lastPlayerChar)
     {
-        std::string realmEntryJson = sRealmList->GetRealmEntryJSON(lastPlayerChar->RealmId, session->GetBuild(), session->GetGameAccountInfo()->SecurityLevel);
-        if (realmEntryJson.empty())
-            return ERROR_UTIL_SERVER_FAILED_TO_SERIALIZE_RESPONSE;
+        lastPlayedRealmEntry = sRealmList->GetRealmEntryJSON(lastPlayerChar->RealmId, session->GetBuild(), session->GetGameAccountInfo()->SecurityLevel);
+        if (lastPlayedRealmEntry.empty())
+            lastPlayerChar = nullptr;
+    }
 
+    if (lastPlayerChar)
+    {
         std::vector<uint8> guidData(sizeof(lastPlayerChar->CharacterGUID));
         std::memcpy(guidData.data(), &lastPlayerChar->CharacterGUID, sizeof(lastPlayerChar->CharacterGUID));
 
@@ -189,7 +195,7 @@ uint32 GameUtilities::GetLastCharPlayed(Session const* session,
 
         std::vector<uint8> utilityInfoJson = CompressJson("JSONUtilityInfo:" + ::JSON::Serialize(utilityInfo));
 
-        responseValues.emplace_back("Param_RealmEntry"sv, CompressJson("JamJSONRealmEntry:" + realmEntryJson));
+        responseValues.emplace_back("Param_RealmEntry"sv, CompressJson("JamJSONRealmEntry:" + lastPlayedRealmEntry));
         responseValues.emplace_back("Param_CharacterName"sv, lastPlayerChar->CharacterName);
         responseValues.emplace_back("Param_CharacterGUID"sv, std::move(guidData));
         responseValues.emplace_back("Param_LastPlayedTime"sv, int64(lastPlayerChar->LastPlayedTime));

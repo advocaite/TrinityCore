@@ -111,7 +111,7 @@ constexpr uint32 GetMaxLevelForExpansion(uint32 expansion)
     switch (expansion)
     {
         case EXPANSION_CLASSIC:
-            return 60;                  // Classic 1.60: vanilla level cap (the official beta stops at 30, release goes to 60)
+            return 60; // local: the realm runs at level 60 (upstream Forever beta caps Classic at 30)
         case EXPANSION_THE_BURNING_CRUSADE:
             return 30;
         case EXPANSION_WRATH_OF_THE_LICH_KING:
@@ -3092,9 +3092,9 @@ enum Targets
     TARGET_UNIT_RECT_CASTER                     = 130,
     TARGET_DEST_SUMMONER                        = 131,
     TARGET_DEST_TARGET_ALLY                     = 132,
-    TARGET_UNIT_LINE_CASTER_TO_DEST_ALLY        = 133,
-    TARGET_UNIT_LINE_CASTER_TO_DEST_ENEMY       = 134,
-    TARGET_UNIT_LINE_CASTER_TO_DEST             = 135,
+    TARGET_UNIT_RECT_CASTER_TO_DEST_ALLY        = 133,
+    TARGET_UNIT_RECT_CASTER_TO_DEST_ENEMY       = 134,
+    TARGET_UNIT_RECT_CASTER_TO_DEST             = 135,
     TARGET_UNIT_CONE_CASTER_TO_DEST_ALLY        = 136,
     TARGET_DEST_CASTER_MOVEMENT_DIRECTION       = 137,
     TARGET_DEST_DEST_GROUND                     = 138,
@@ -5946,6 +5946,7 @@ enum SkillType
     SKILL_RAPTOR_RIDING                             = 533,
     SKILL_MECHANOSTRIDER_PILOTING                   = 553,
     SKILL_UNDEAD_HORSEMANSHIP                       = 554,
+    SKILL_LOCKPICKING                               = 633, // Classic 1.60: rogue skill line, gone from retail
     SKILL_PET_BAT                                   = 653,
     SKILL_PET_HYENA                                 = 654,
     SKILL_PET_BIRD_OF_PREY                          = 655,
@@ -6275,6 +6276,7 @@ constexpr SkillType SkillByLockType(LockType locktype)
         case LOCKTYPE_MINING_2:
         case LOCKTYPE_ELUSIVE_MINING:                 return SKILL_MINING;
         case LOCKTYPE_FISHING:                        return SKILL_FISHING;
+        case LOCKTYPE_LOCKPICKING:                    return SKILL_LOCKPICKING; // Classic 1.60: Pick Lock checks the Lockpicking skill
         case LOCKTYPE_INSCRIPTION:                    return SKILL_INSCRIPTION;
         case LOCKTYPE_ARCHAEOLOGY:                    return SKILL_ARCHAEOLOGY;
         case LOCKTYPE_LUMBER_MILL:                    return SKILL_LOGGING;
@@ -6969,9 +6971,9 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_SS_VS_TM       = 789,      // Southshore vs. Tarren Mill
     BATTLEGROUND_SMALL_D        = 803,      // Small Battleground D
     BATTLEGROUND_BRH            = 808,      // Black Rook Hold Arena
-    // 809 = "New Nagrand Arena (Legion)"
+    BATTLEGROUND_NA_NEW         = 809,      // New Nagrand Arena (Legion)
     BATTLEGROUND_AF             = 816,      // Ashamane's Fall
-    // 844 = "New Blade's Edge Arena (Legion)"
+    BATTLEGROUND_BE_NEW         = 844,      // New Blade's Edge Arena (Legion)
     BATTLEGROUND_BRAWL_TBG      = 846,      // Brawl - The Battle for Gilneas (Old City Map)
     BATTLEGROUND_BRAWL_ABW      = 847,      // Brawl - Arathi Basin Winter
     // 848 = "AI Test - Arathi Basin"

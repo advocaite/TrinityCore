@@ -170,6 +170,9 @@ bool normalizePlayerName(std::string& name)
     if (first == std::wstring::npos)
         return false;
     tmp = tmp.substr(first, tmp.find_last_not_of(blanks) - first + 1);
+    // Classic 1.60.1.70425+: the client shows and sends "Name Surname" (add friend, ignore, guild invite, mail by name).
+    // Character names never contain blanks, so keep the first word only
+    tmp = tmp.substr(0, tmp.find_first_of(blanks));
 
     wstrToLower(tmp);
     if (!tmp.empty())
@@ -646,8 +649,8 @@ void ObjectMgr::LoadCreatureClassicLevels()
     _creatureClassicClassLevelStatsStore.clear();
     _creatureClassicStatsStore.clear();
 
-    //                                     0      1      2       3     4      5             6
-    if (QueryResult cls = WorldDatabase.Query("SELECT class, level, health, mana, armor, melee_damage, ranged_damage FROM creature_classic_classlevelstats"))
+    //                                     0      1      2       3     4      5             6              7
+    if (QueryResult cls = WorldDatabase.Query("SELECT class, level, health, mana, armor, melee_damage, ranged_damage, health_forever FROM creature_classic_classlevelstats"))
     {
         do
         {
@@ -658,6 +661,7 @@ void ObjectMgr::LoadCreatureClassicLevels()
             stats.Armor = fields[4].GetUInt32();
             stats.MeleeDamage = fields[5].GetFloat();
             stats.RangedDamage = fields[6].GetFloat();
+            stats.HealthForever = fields[7].GetUInt32();
         } while (cls->NextRow());
     }
 
@@ -682,6 +686,22 @@ void ObjectMgr::LoadCreatureClassicLevels()
 
     TC_LOG_INFO("server.loading", ">> Loaded {} classic creature class level stats and {} vanilla creature stats in {} ms",
         _creatureClassicClassLevelStatsStore.size(), _creatureClassicStatsStore.size(), GetMSTimeDiffToNow(oldMSTime));
+
+    // Classic 1.60: summon spells whose creature cast summons at the caster level plus an offset (VMaNGOS), see TempSummon::InitStats
+    oldMSTime = getMSTime();
+    _spellClassicSummonLevelOffsetStore.clear();
+
+    //                                        0         1
+    if (QueryResult summons = WorldDatabase.Query("SELECT spell_id, level_offset FROM spell_classic_summon_level"))
+    {
+        do
+        {
+            Field* fields = summons->Fetch();
+            _spellClassicSummonLevelOffsetStore[fields[0].GetUInt32()] = fields[1].GetInt8();
+        } while (summons->NextRow());
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic summon spell levels in {} ms", _spellClassicSummonLevelOffsetStore.size(), GetMSTimeDiffToNow(oldMSTime));
 }
 
 std::pair<uint8, uint8> const* ObjectMgr::GetCreatureClassicLevel(uint32 entry) const
@@ -694,9 +714,52 @@ ClassicCreatureStats const* ObjectMgr::GetCreatureClassicStats(uint32 entry) con
     return Trinity::Containers::MapGetValuePtr(_creatureClassicStatsStore, entry);
 }
 
+// Classic 1.60: vanilla melee hit and swing time of every creature (imported from VMaNGOS)
+void ObjectMgr::LoadCreatureClassicMelee()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _creatureClassicMeleeStore.clear();
+
+    //                                               0      1         2         3          4
+    QueryResult result = WorldDatabase.Query("SELECT entry, dmg_min, dmg_max, attack_ms, ranged_attack_ms FROM creature_classic_melee");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 classic creature melee rows. DB table `creature_classic_melee` is empty.");
+        return;
+    }
+
+    do
+    {
+        Field* fields = result->Fetch();
+        uint32 entry = fields[0].GetUInt32();
+        if (!GetCreatureTemplate(entry))
+            continue;
+
+        CreatureClassicMelee melee;
+        melee.DamageMin = fields[1].GetFloat();
+        melee.DamageMax = std::max(fields[2].GetFloat(), melee.DamageMin);
+        melee.AttackMs = fields[3].GetUInt32();
+        melee.RangedAttackMs = fields[4].GetUInt32();
+        _creatureClassicMeleeStore[entry] = melee;
+    } while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic creature melee rows in {} ms", _creatureClassicMeleeStore.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+ObjectMgr::CreatureClassicMelee const* ObjectMgr::GetCreatureClassicMelee(uint32 entry) const
+{
+    return Trinity::Containers::MapGetValuePtr(_creatureClassicMeleeStore, entry);
+}
+
 ClassicCreatureClassLevelStats const* ObjectMgr::GetCreatureClassicClassLevelStats(uint8 level, uint8 unitClass) const
 {
     return Trinity::Containers::MapGetValuePtr(_creatureClassicClassLevelStatsStore, MAKE_PAIR16(level, unitClass));
+}
+
+int8 const* ObjectMgr::GetSpellClassicSummonLevelOffset(uint32 spellId) const
+{
+    return Trinity::Containers::MapGetValuePtr(_spellClassicSummonLevelOffsetStore, spellId);
 }
 
 // Classic 1.60: vanilla block value of shields (the Classic client data has none), see Player::GetShieldBlockValue
@@ -3679,6 +3742,34 @@ void ObjectMgr::LoadItemTemplateAddon()
     TC_LOG_INFO("server.loading", ">> Loaded {} item addon templates in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+// Classic 1.60: vanilla maximum durability (table classic_item_durability, VMaNGOS item_template.max_durability). The client has
+// no durability data, so LoadItemTemplates works one out with the retail formula; a listed item takes its vanilla value instead.
+void ObjectMgr::LoadClassicItemDurability()
+{
+    uint32 oldMSTime = getMSTime();
+    uint32 count = 0;
+
+    QueryResult result = WorldDatabase.Query("SELECT entry, max_durability FROM classic_item_durability");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 classic item durabilities. DB table `classic_item_durability` is empty.");
+        return;
+    }
+
+    do
+    {
+        Field* fields = result->Fetch();
+        ItemTemplate* itemTemplate = Trinity::Containers::MapGetValuePtr(_itemTemplateStore, fields[0].GetUInt32());
+        if (!itemTemplate)
+            continue;   // a vanilla item this client does not have
+
+        itemTemplate->MaxDurability = fields[1].GetUInt16();
+        ++count;
+    } while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic item durabilities in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
 void ObjectMgr::LoadItemScriptNames()
 {
     uint32 oldMSTime = getMSTime();
@@ -4550,8 +4641,9 @@ void ObjectMgr::LoadPlayerInfo()
 
         } while (raceStatsResult->NextRow());
 
-        //                                                  0      1     2    3    4    5    6    7
-        QueryResult result  = WorldDatabase.Query("SELECT class, level, str, agi, sta, inte, spi, basehp FROM player_classlevelstats");
+        //                                                  0      1     2    3    4    5    6    7       8
+        QueryResult result  = WorldDatabase.Query("SELECT class, level, str, agi, sta, inte, spi, basehp, basemana FROM player_classlevelstats");
+        _classicBaseMana.clear();
 
         if (!result)
         {
@@ -4596,6 +4688,10 @@ void ObjectMgr::LoadPlayerInfo()
                     levelInfo.baseHealth = fields[7].GetUInt32();
                 }
             }
+
+            // Classic 1.60 (vanilla, VMaNGOS player_classlevelstats.basemana): 0 keeps the client's game table value
+            if (uint32 classicBaseMana = fields[8].GetUInt32())
+                _classicBaseMana[(current_class << 8) | current_level] = classicBaseMana;
 
             ++count;
         }
@@ -4691,6 +4787,13 @@ void ObjectMgr::GetPlayerClassLevelInfo(uint32 class_, uint8 level, uint32& base
 
     if (level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
         level = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+
+    // Classic 1.60 (vanilla): the base mana of the class at this level from VMaNGOS, base health was replaced the same way
+    if (uint32 const* classicBaseMana = Trinity::Containers::MapGetValuePtr(_classicBaseMana, (class_ << 8) | level))
+    {
+        baseMana = *classicBaseMana;
+        return;
+    }
 
     GtBaseMPEntry const* mp = sBaseMPGameTable.GetRow(level);
     if (!mp)
@@ -9629,6 +9732,14 @@ void ObjectMgr::LoadTrainers()
                 spells = std::move(spellsItr->second);
                 spellsByTrainer.erase(spellsItr);
             }
+
+            // Classic 1.60: a class or pet trainer row without a level (teleports, portals, tracking, Concussive Shot...) would be
+            // sold at any level; it takes the spell's own level instead (SpellLevels.SpellLevel). Tradeskill rows are gated by skill.
+            if (trainerType != Trainer::Type::Tradeskill)
+                for (Trainer::Spell& spell : spells)
+                    if (!spell.ReqLevel)
+                        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spell.SpellId, DIFFICULTY_NONE))
+                            spell.ReqLevel = uint8(std::min<uint32>(spellInfo->SpellLevel, std::numeric_limits<uint8>::max()));
 
             _trainers.emplace(std::piecewise_construct, std::forward_as_tuple(trainerId), std::forward_as_tuple(trainerId, trainerType, greeting, std::move(spells)));
 

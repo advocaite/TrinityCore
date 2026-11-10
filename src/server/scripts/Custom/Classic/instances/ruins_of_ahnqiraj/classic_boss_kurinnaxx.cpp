@@ -17,12 +17,13 @@
 
 // Classic 1.60 port of VMaNGOS src/scripts/kalimdor/silithus/ruins_of_ahnqiraj/boss_kurinnaxx.cpp (ScriptDev2 lineage, GPL-2)
 // Scripts: boss_kurinnaxx
+// Follows the VMaNGOS rework of 2026-09-28 (46417908): sniff timers, the sand trap through 26524 (TC
+// spell_kurinnaxx_sand_trap picks a random enemy), Wide Slash and Trash cast on self, frenzy as a zone emote.
 
 #include "ScriptMgr.h"
 #include "GameObject.h"
 #include "InstanceScript.h"
 #include "Map.h"
-#include "QuaternionData.h"
 #include "ScriptedCreature.h"
 #include "classic_ruins_of_ahnqiraj.h"
 #include "classic_script_text.h"
@@ -31,7 +32,7 @@ namespace
 {
 enum ClassicAQ20Kurinnaxx : uint32
 {
-    EMOTE_AQ20_KURINNAXX_FRENZY        = 10645,
+    EMOTE_AQ20_KURINNAXX_FRENZY        = 2384,   // VMaNGOS 46417908 (was 10645)
 
     GO_AQ20_KURINNAXX_TRAP             = 180647,
 
@@ -60,11 +61,11 @@ struct classic_boss_kurinnaxx : public ScriptedAI
 
     void Reset() override
     {
-        m_uiMortalWound_Timer = 7000;
-        m_uiSandTrap_Timer = 7000;
+        m_uiMortalWound_Timer = 8000;
+        m_uiSandTrap_Timer = 8000;
         m_uiCleanSandTrap_Timer = 0;
-        m_uiTrash_Timer = 10000;
-        m_uiWideSlash_Timer = 15000;
+        m_uiTrash_Timer = 16000;
+        m_uiWideSlash_Timer = 11000;
         m_bHasEnraged = false;
     }
 
@@ -99,17 +100,21 @@ struct classic_boss_kurinnaxx : public ScriptedAI
 
     void UpdateAI(uint32 uiDiff) override
     {
-        // if no one gets to the trap in 5 seconds delete the trap
-        if (m_uiCleanSandTrap_Timer < uiDiff)
+        // Despawn an untriggered sand trap after 5 seconds
+        if (m_uiCleanSandTrap_Timer)
         {
-            if (GameObject* pTrap = GetClosestGameObjectWithEntry(me, GO_AQ20_KURINNAXX_TRAP, me->GetVisibilityRange()))
+            if (m_uiCleanSandTrap_Timer <= uiDiff)
             {
-                pTrap->SendGameObjectDespawn();
-                pTrap->Delete();
+                if (GameObject* pTrap = GetClosestGameObjectWithEntry(me, GO_AQ20_KURINNAXX_TRAP, me->GetVisibilityRange()))
+                {
+                    pTrap->SendGameObjectDespawn();
+                    pTrap->Delete();
+                }
+                m_uiCleanSandTrap_Timer = 0;
             }
+            else
+                m_uiCleanSandTrap_Timer -= uiDiff;
         }
-        else
-            m_uiCleanSandTrap_Timer -= uiDiff;
 
         if (!UpdateVictim())
             return;
@@ -119,7 +124,7 @@ struct classic_boss_kurinnaxx : public ScriptedAI
         {
             if (DoCastSelf(SPELL_AQ20_KURINNAXX_ENRAGE) == SPELL_CAST_OK)
             {
-                ClassicScriptText(EMOTE_AQ20_KURINNAXX_FRENZY, me);
+                ClassicScriptZoneEmote(EMOTE_AQ20_KURINNAXX_FRENZY, me);
                 m_bHasEnraged = true;
             }
         }
@@ -128,21 +133,17 @@ struct classic_boss_kurinnaxx : public ScriptedAI
         if (m_uiMortalWound_Timer < uiDiff)
         {
             if (DoCastVictim(SPELL_AQ20_KURINNAXX_MORTALWOUND) == SPELL_CAST_OK)
-                m_uiMortalWound_Timer = 9000;
+                m_uiMortalWound_Timer = 8000;
         }
         else
             m_uiMortalWound_Timer -= uiDiff;
 
-        // TODO: Should use 26524 instead (VMaNGOS note)
-        /* Summon trap */
+        /* Sand trap: 26524 makes a random enemy cast 25648, which summons the trap under them */
         if (m_uiSandTrap_Timer < uiDiff)
         {
-            if (Unit* pUnit = SelectTarget(SelectTargetMethod::Random, 0))
+            if (DoCastSelf(SPELL_AQ20_KURINNAXX_SUMMON_SANDTRAP, true) == SPELL_CAST_OK)
             {
-                // TC: the summoner (Kurinnaxx) becomes the trap owner (VMaNGOS SetOwnerGuid)
-                me->SummonGameObject(GO_AQ20_KURINNAXX_TRAP, pUnit->GetPositionX(), pUnit->GetPositionY(), pUnit->GetPositionZ(), 0.0f,
-                    QuaternionData(), 0s);
-                m_uiSandTrap_Timer = urand(5100, 7000); /** Random timer for sandtrap between 1 and 7s */
+                m_uiSandTrap_Timer = 8000;
                 m_uiCleanSandTrap_Timer = 5000;
             }
         }
@@ -152,8 +153,8 @@ struct classic_boss_kurinnaxx : public ScriptedAI
         /* WideSlash */
         if (m_uiWideSlash_Timer < uiDiff)
         {
-            if (DoCastVictim(SPELL_AQ20_KURINNAXX_WIDE_SLASH) == SPELL_CAST_OK)
-                m_uiWideSlash_Timer = 10000 + urand(0, 9999);
+            if (DoCastSelf(SPELL_AQ20_KURINNAXX_WIDE_SLASH) == SPELL_CAST_OK)
+                m_uiWideSlash_Timer = 11000;
         }
         else
             m_uiWideSlash_Timer -= uiDiff;
@@ -161,8 +162,8 @@ struct classic_boss_kurinnaxx : public ScriptedAI
         /* Trash */
         if (m_uiTrash_Timer < uiDiff)
         {
-            if (DoCastVictim(SPELL_AQ20_KURINNAXX_TRASH) == SPELL_CAST_OK)
-                m_uiTrash_Timer = 10000 + urand(0, 9999);
+            if (DoCastSelf(SPELL_AQ20_KURINNAXX_TRASH) == SPELL_CAST_OK)
+                m_uiTrash_Timer = 16000;
         }
         else
             m_uiTrash_Timer -= uiDiff;

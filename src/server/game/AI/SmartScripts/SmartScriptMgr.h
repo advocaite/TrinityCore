@@ -191,8 +191,9 @@ enum SMART_EVENT
     SMART_EVENT_AREATRIGGER_EXIT         = 88,      // NONE
     SMART_EVENT_ON_AURA_APPLIED          = 89,      // SpellID, CooldownMin, CooldownMax
     SMART_EVENT_ON_AURA_REMOVED          = 90,      // SpellID, CooldownMin, CooldownMax
+    SMART_EVENT_VICTIM_ROOTED            = 91,      // RepeatMin, RepeatMax (classic: VMaNGOS EVENT_T_VICTIM_ROOTED, the victim is the invoker)
 
-    SMART_EVENT_END                      = 91
+    SMART_EVENT_END                      = 92
 };
 
 struct SmartEvent
@@ -258,6 +259,12 @@ struct SmartEvent
             uint32 repeatMax;
             uint32 spellId;
         } targetCasting;
+
+        struct
+        {
+            uint32 repeatMin;
+            uint32 repeatMax;
+        } victimRooted;
 
         struct
         {
@@ -615,7 +622,8 @@ enum SMART_ACTION
     SMART_ACTION_EXIT_VEHICLE                       = 157,
     SMART_ACTION_RESUME_MOVEMENT                    = 158,    // MovementSlot (default = 0, active = 1, controlled = 2), ResumeTime (ms)
     SMART_ACTION_FALL                               = 159,    // pointId
-    SMART_ACTION_END                                = 160
+    SMART_ACTION_MOVE_AWAY_FROM_TARGET              = 160,    // Distance, MinManaPct (classic: VMaNGOS SCRIPT_COMMAND_MOVEMENT DISTANCING_MOTION_TYPE)
+    SMART_ACTION_END                                = 161
 };
 
 enum class SmartActionSummonCreatureFlags
@@ -880,6 +888,12 @@ struct SmartAction
         {
             uint32 pointId;
         } fall;
+
+        struct
+        {
+            uint32 distance;
+            uint32 minManaPct;
+        } moveAwayFromTarget;
 
         struct
         {
@@ -1336,7 +1350,7 @@ enum SMARTAI_TARGETS
     SMART_TARGET_CLOSEST_ENEMY                  = 25,   // maxDist, playerOnly
     SMART_TARGET_CLOSEST_FRIENDLY               = 26,   // maxDist, playerOnly
     SMART_TARGET_LOOT_RECIPIENTS                = 27,   // all players that have tagged this creature (for kill credit)
-    SMART_TARGET_FARTHEST                       = 28,   // maxDist, playerOnly, isInLos
+    SMART_TARGET_FARTHEST                       = 28,   // maxDist, playerOnly, isInLos, minDist (classic: no target when the farthest one is nearer than minDist)
     SMART_TARGET_VEHICLE_PASSENGER              = 29,   // seatMask (0 - all seats)
     SMART_TARGET_CLOSEST_UNSPAWNED_GAMEOBJECT   = 30,   // entry(0any), maxDist
 
@@ -1373,6 +1387,7 @@ struct SmartTarget
             uint32 maxDist;
             SAIBool playerOnly;
             SAIBool isInLos;
+            uint32 minDist;
         } farthest;
 
         struct
@@ -1629,6 +1644,7 @@ const uint32 SmartAIEventMask[SMART_EVENT_END][2] =
     {SMART_EVENT_AREATRIGGER_EXIT,          SMART_SCRIPT_TYPE_MASK_AREATRIGGER + SMART_SCRIPT_TYPE_MASK_AREATRIGGER_ENTITY },
     {SMART_EVENT_ON_AURA_APPLIED,           SMART_SCRIPT_TYPE_MASK_CREATURE },
     {SMART_EVENT_ON_AURA_REMOVED,           SMART_SCRIPT_TYPE_MASK_CREATURE },
+    {SMART_EVENT_VICTIM_ROOTED,             SMART_SCRIPT_TYPE_MASK_CREATURE },
 };
 
 enum SmartEventFlags

@@ -1,0 +1,13 @@
+-- Revenge of Gann (849, Bael Modan): the Explosive Stick of Gann (5021, spell 5140 Detonate) could not be used on the
+-- Bael Modan Flying Machine (3644). The vanilla import gave 25 quest objects of type 10 (goober) Data1 = -1, the old
+-- MaNGOS "no quest" value. On this core Data1 is the goober's quest ID and is sent to the client as is, so the client
+-- waits for quest 4294967295, which nobody can have. That keeps these objects out of reach even while the quest is
+-- in the log. 0 means "no quest" here. The server still shows each object only to players who need it, because
+-- every one of them is a quest objective (IsGameObjectForQuests), and that check does not use Data1.
+-- Objects: 1721, 1722 Locked ball and chain (498), 1761 Hillsbrad Proclamation (532), 1768-1770 Flames (553),
+-- 2704 Cache of Explosives (633), 3189/3190/3192 Attack Plans (786), 3644 Bael Modan Flying Machine (849),
+-- 4072/61935/61936 valves (900), 19027 Tome of Mel'Thandris (1022), 19030 Mound of Dirt (1043),
+-- 19901/20352 Circle of Imprisonment (1140), 20359 Egg of Onyxia (1172), 176158-176161 Braziers (5165),
+-- 177929 Gaea Dirt Mound (6381), 178090 Marla's Grave (6395).
+-- Safe to run twice.
+UPDATE `gameobject_template` SET `Data1` = 0 WHERE `type` = 10 AND `Data1` = -1;

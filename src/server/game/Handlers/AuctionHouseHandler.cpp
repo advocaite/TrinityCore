@@ -69,16 +69,19 @@ void WorldSession::HandleAuctionBrowseQuery(WorldPackets::AuctionHouse::AuctionB
 
         for (auto const& classFilter : browseQuery.ItemClassFilters)
         {
+            // the class and subclass numbers come from the client: ignore any outside the filter tables
+            if (uint32(classFilter.ItemClass) >= MAX_ITEM_CLASS)
+                continue;
+
             if (!classFilter.SubClassFilters.empty())
             {
                 for (auto const& subClassFilter : classFilter.SubClassFilters)
                 {
-                    if (classFilter.ItemClass < MAX_ITEM_CLASS)
-                    {
-                        classFilters->Classes[classFilter.ItemClass].SubclassMask |= 1 << subClassFilter.ItemSubclass;
-                        if (subClassFilter.ItemSubclass < MAX_ITEM_SUBCLASS_TOTAL)
-                            classFilters->Classes[classFilter.ItemClass].InvTypes[subClassFilter.ItemSubclass] = subClassFilter.InvTypeMask;
-                    }
+                    if (uint32(subClassFilter.ItemSubclass) >= MAX_ITEM_SUBCLASS_TOTAL)
+                        continue;
+
+                    classFilters->Classes[classFilter.ItemClass].SubclassMask |= 1u << subClassFilter.ItemSubclass;
+                    classFilters->Classes[classFilter.ItemClass].InvTypes[subClassFilter.ItemSubclass] = subClassFilter.InvTypeMask;
                 }
             }
             else
