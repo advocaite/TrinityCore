@@ -1980,6 +1980,130 @@ constexpr float kPostHealBelowPct = 85.0f;   // the in-fight formation's patient
 constexpr float kHealReach = 40.0f;
 constexpr float kSpellReach = 30.0f;
 
+// A healer post moves with the tanks it serves. From the post itself a tank can be out of sight (a pillar between it and the tank's pile)
+// or out of reach (the pile 40 y off), and then the healers on the post cannot heal it. They used to step for sight on their own (the
+// generic RaidCastLosStep), and the post walked them straight back: bwl_nefarian 1110a, every healer walked "role position" 15-18 times in
+// 18 s, twelve healers cast 33 heals in the first 48 s, and the main tank died at 17% with all of them at 99% mana. Now the post owns the
+// healer's place: it stands at the point within kSightRoam of the post that has the most living tanks in reach and in sight, the one
+// nearest to it among the best, and stays wherever it stands as long as nothing on the post would see more.
+constexpr float kSightRoam = 14.0f;              // how far from its post point a healer may stand (the post's tolerance plus the cast slack)
+constexpr float kSightHealReach = 36.0f;         // kHealReach, with room for the tank's own steps
+constexpr float kSightSpotArrive = 2.5f;         // a healer this close to its spot stands on it
+constexpr uint32_t kSightScoreMs = 2000;         // the post's candidate points are scored again after this long
+constexpr uint32_t kSightLockMs = 4000;          // a healer keeps its spot this long unless a better one opens up
+constexpr float kSightRings[] = { 4.0f, 8.0f, 12.0f };
+constexpr int kSightBearings = 12;
+
+enum class SightSpot { Post, Here, Walk };
+
+struct SightPoint { float x, y, z; int seen; };
+struct SightPost { uint32_t at = 0; int best = 0; int centre = 0; std::vector<SightPoint> points; };
+std::unordered_map<uint64_t, SightPost> g_sightPosts;                       // (group, post point) -> scored candidate points
+struct SightLock { uint32_t at = 0; float x = 0.f, y = 0.f, z = 0.f; };
+std::unordered_map<uint64_t, SightLock> g_sightLocks;                       // healer guid -> the spot it walks to
+
+// How many of <tanks> a healer standing at (x, y, z) can heal: in reach and in sight from eye height.
+int TanksSeenFrom(Player* bot, std::vector<Player*> const& tanks, float x, float y, float z)
+{
+    int seen = 0;
+    for (Player* tank : tanks)
+        if (Dist2D(x, y, tank->GetPositionX(), tank->GetPositionY()) <= kSightHealReach &&
+            bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), x, y, z + bot->GetCollisionHeight(), tank->GetPositionX(), tank->GetPositionY(),
+                                           tank->GetPositionZ() + tank->GetCollisionHeight(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            ++seen;
+    return seen;
+}
+
+SightSpot HealerSightSpot(Plan const& plan, Stand const& rule, std::vector<Circle> const& circles, uint32_t now, Player* bot,
+                          float& outX, float& outY, float& outZ)
+{
+    std::vector<Player*> tanks;
+    for (Member const& m : plan.members)
+        if (m.tank && m.p != bot && m.p->IsAlive() && m.p->IsInMap(bot))
+            tanks.push_back(m.p);
+    if (tanks.empty())
+        return SightSpot::Post;
+
+    float const bx = bot->GetPositionX(), by = bot->GetPositionY();
+    bool const inRoam = Dist2D(bx, by, rule.x, rule.y) <= kSightRoam;
+    int const here = inRoam && !InsideAny(circles, bx, by, 0.0f) ? TanksSeenFrom(bot, tanks, bx, by, bot->GetPositionZ()) : -1;
+    if (here == int(tanks.size()))
+        return SightSpot::Here;
+
+    // The post's candidate points, shared by its healers and scored every kSightScoreMs.
+    uint64_t const postKey = (plan.groupLow << 32) ^ (uint64_t(uint32_t(int32_t(rule.x * 4.0f))) << 12) ^ uint64_t(uint32_t(int32_t(rule.y * 4.0f)));
+    SightPost& post = g_sightPosts[postKey];
+    if (!post.at || now - post.at >= kSightScoreMs)
+    {
+        post.at = now ? now : 1u;
+        post.points.clear();
+        post.best = 0;
+        Map* map = bot->GetMap();
+        auto addPoint = [&](float x, float y)
+        {
+            float const z = map->GetHeight(bot->GetPhaseShift(), x, y, rule.z + 2.0f, true, 6.0f);
+            if (z <= INVALID_HEIGHT + 1.0f || std::fabs(z - rule.z) > 3.0f)
+                return;
+            int const seen = TanksSeenFrom(bot, tanks, x, y, z);
+            post.points.push_back({ x, y, z, seen });
+            post.best = std::max(post.best, seen);
+        };
+        addPoint(rule.x, rule.y);
+        post.centre = post.points.empty() ? 0 : post.points.front().seen;
+        for (float r : kSightRings)
+            for (int i = 0; i < kSightBearings; ++i)
+            {
+                float const a = float(i) * 2.0f * float(M_PI) / float(kSightBearings);
+                addPoint(rule.x + r * std::cos(a), rule.y + r * std::sin(a));
+            }
+    }
+    // Nothing on the post sees more than the post point itself, or no point sees a tank at all: the post as it is.
+    if (post.best == 0 || post.best <= post.centre)
+        return SightSpot::Post;
+    if (here >= post.best)
+        return SightSpot::Here;
+
+    SightLock& lock = g_sightLocks[bot->GetGUID().GetCounter()];
+    bool keep = lock.at && now - lock.at < kSightLockMs && !InsideAny(circles, lock.x, lock.y, 0.0f);
+    if (keep)
+    {
+        keep = false;
+        for (SightPoint const& pt : post.points)
+            if (pt.seen == post.best && Dist2D(pt.x, pt.y, lock.x, lock.y) < 0.5f)
+                keep = true;
+    }
+    if (!keep)
+    {
+        // The best points nearest to the healer first; the first one it can walk to is its spot.
+        std::vector<SightPoint const*> best;
+        for (SightPoint const& pt : post.points)
+            if (pt.seen == post.best && !InsideAny(circles, pt.x, pt.y, 0.0f))
+                best.push_back(&pt);
+        std::sort(best.begin(), best.end(), [&](SightPoint const* a, SightPoint const* b)
+                  { return Dist2D(bx, by, a->x, a->y) < Dist2D(bx, by, b->x, b->y); });
+        bool found = false;
+        int tries = 0;
+        for (SightPoint const* pt : best)
+        {
+            if (++tries > 3)
+                break;
+            float z = pt->z;
+            if (Dist2D(bx, by, pt->x, pt->y) <= kSightSpotArrive || Usable(bot, pt->x, pt->y, pt->z, z))
+            {
+                lock = { now ? now : 1u, pt->x, pt->y, z };
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return SightSpot::Post;
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_sight_spot] {} heals from ({:.1f},{:.1f}): {} of {} tanks in reach and sight there, {} from its post point, {} where it stood",
+                    bot->GetName(), lock.x, lock.y, post.best, tanks.size(), post.centre, here < 0 ? 0 : here);
+    }
+    outX = lock.x; outY = lock.y; outZ = lock.z;
+    return Dist2D(bx, by, lock.x, lock.y) <= kSightSpotArrive ? SightSpot::Here : SightSpot::Walk;
+}
+
 void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<Circle> const& circles, RaidOrder& out)
 {
     // 0. Scripted mechanics (Heigan's dance, Sapphiron's ice blocks) own the bot's movement while they run.
@@ -2598,6 +2722,21 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         if (rule.needOtherEnemy ? !other : (rule.needVictimIsMe && boss->GetVictim() != bot))
             continue;
         out.post_enemy = boss->GetGUID();
+        if (rule.who == Who::Healer && self.healer)
+        {
+            float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+            SightSpot const spot = HealerSightSpot(plan, rule, circles, now, bot, sx, sy, sz);
+            if (spot == SightSpot::Here)
+            {
+                out.at_post = true;
+                continue;
+            }
+            if (spot == SightSpot::Walk)
+            {
+                SetMove(out, sx, sy, sz, "sight spot");
+                return;
+            }
+        }
         float const offPost = Dist2D(bot->GetPositionX(), bot->GetPositionY(), rule.x, rule.y);
         if (offPost <= rule.tolerance)
         {

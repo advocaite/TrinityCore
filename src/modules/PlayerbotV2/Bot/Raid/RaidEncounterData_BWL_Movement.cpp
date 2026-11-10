@@ -47,6 +47,10 @@ namespace Playerbot::Raid {
         // him: melee stand at his sides.
         r.avoidFrontal.push_back({ 11583, 25.0f, 55.0f, Who::NonTank });
         r.avoidFrontal.push_back({ 11583, 20.0f, 45.0f, Who::NonTank, 180.0f });
+        // His tank puts his front away from the raid: with no rule he faced whoever he walked at, and with no tank on him he walked into the
+        // camp (bwl_nefarian 1110a run 1: Shadow Flame killed three casters standing on the camp 9 y in front of him, Cleave and his swings
+        // the healers at their post).
+        r.faceAway.push_back({ 11583 });
         // Corrupted Infernal (14668, warlock call): Immolation 20153 burns everything close; casters and healers stay off it (ike3).
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Ranged });
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Healer });
