@@ -3390,7 +3390,11 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             // Pick Lock 1804 is the same for Lockpicking 633: no skill effect, and its SkillRaceClassInfo 601 has Availability 0, so
             // rogues had Pick Lock but no Lockpicking ("insufficient skill" on every lock). This runs at login too, so existing
             // rogues get the skill on their next login.
-            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+            // Beast Training 5149 is the same for its skill line 261 (SkillRaceClassInfo 32, hunters, Availability 0): hunters had
+            // the spell but not the skill, so the client refused to open the Beast Training window ("You can't do that right now",
+            // player report 10 Nov) and Growl's Beast Training ranks (1853, 14922, learned with the skill) never came.
+            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING
+                    || _spell_idx->second->SkillLine == SKILL_BEAST_TRAINING)
                 && !HasSkill(_spell_idx->second->SkillLine))
             {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
