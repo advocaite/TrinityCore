@@ -523,8 +523,9 @@ class classic_spell_warl_curse_of_agony : public AuraScript
     }
 };
 
-// 18094 - Nightfall: "Gives you a $s1% chance to get a Shadow Trance after dealing damage with Corruption or Drain Life." The client spell is a
-// dummy aura, nothing cast 17941 Shadow Trance, so the talent never procced. Each tick is one roll (vanilla: periodic damage of the two spells).
+// 18094 - Nightfall: "Gives your Corruption, Drain Soul, Drain Life, and Wrack spells a $m1% chance to cause you to enter a Shadow Trance after
+// damaging the opponent." The client spell is a dummy aura, nothing cast 17941 Shadow Trance, so the talent never procced. Each tick of the
+// four spells' periodic damage is one roll.
 class classic_talent_warl_nightfall : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
@@ -535,8 +536,9 @@ class classic_talent_warl_nightfall : public AuraScript
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
-        // Corruption: warlock family flag 0x2, Drain Life: 0x8
-        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && (spellInfo->SpellFamilyFlags[0] & 0xA);
+        // Corruption: warlock family flag [0] 0x2, Drain Life: [0] 0x8, Drain Soul: [0] 0x4000, Wrack 1316697: [1] 0x40000
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK
+            && ((spellInfo->SpellFamilyFlags[0] & 0x400A) || (spellInfo->SpellFamilyFlags[1] & 0x40000));
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
