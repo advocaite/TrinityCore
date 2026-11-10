@@ -693,6 +693,7 @@ bool Escape(Player* bot, std::vector<Circle> const& circles, RaidOrder& out, std
 
 // Best nearby point that increases the distance to every raid member in `others`.
 std::string g_clearestWhy;
+constexpr float kCarrierFloorDz = 4.0f;   // a carrier run ends on the carrier's own floor: no more than this above or below it
 
 bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, RaidOrder& out, char const* reason,
               std::vector<Circle> const& avoid, bool urgent)
@@ -741,7 +742,7 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
         }
     std::stable_sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b) { return a.score > b.score; });
 
-    int pathChecks = 0, snapChecks = 0, offMesh = 0;
+    int pathChecks = 0, snapChecks = 0, offMesh = 0, offFloor = 0;
     for (Candidate const& c : candidates)
     {
         if (pathChecks >= (urgent ? 14 : 12))
@@ -778,6 +779,14 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
             ++why[g_usableWhy];
             continue;
         }
+        // A carrier stays on the floor it stands on: a run down a stair or off a ledge takes it out of the boss's room and into what waits
+        // below. zg_hakkar (sweep-zg-1109z run 2): a healer with Corrupted Blood ran from Hakkar's platform (z 52.9) down to z 40.8, woke a
+        // Son of Hakkar there, the off-tank went down for the Son with Hakkar after it, and Hakkar evaded at 88% (he leaves the fight below z 45.8).
+        if (g_carrierRun && std::fabs(pz - bot->GetPositionZ()) > kCarrierFloorDz)
+        {
+            ++offFloor;
+            continue;
+        }
         return SetMove(out, cx, cy, pz, reason);
     }
 
@@ -787,6 +796,8 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
     w << "not better " << skippedNear << ", in hazard " << skippedAvoid;
     if (offMesh)
         w << ", off navmesh " << offMesh;
+    if (offFloor)
+        w << ", another floor " << offFloor;
     for (int i = 1; i < 9; ++i)
         if (why[i])
             w << ", " << kUsableWhyName[i] << " " << why[i];

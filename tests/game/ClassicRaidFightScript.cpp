@@ -490,15 +490,15 @@ TEST_CASE("Hakkar: the raid kills a Son and gathers on it before each Blood Siph
     // The first siphon 90 s after the pull, then 90 s after the last one seen.
     CHECK(SiphonDueMs(0) == 90000u);
     CHECK(SiphonDueMs(93000) == 183000u);
-    // A Son dies from 25 s before it to 3 s before it, while fewer than half of the raid carry the poison.
-    CHECK_FALSE(KillWindow(64000, 0, 0, 20));
-    CHECK(KillWindow(65000, 0, 0, 20));
+    // A Son dies from 45 s before it to 3 s before it, while fewer than half of the raid carry the poison.
+    CHECK_FALSE(KillWindow(44000, 0, 0, 20));
+    CHECK(KillWindow(45000, 0, 0, 20));
     CHECK(KillWindow(86000, 0, 9, 20));
     CHECK_FALSE(KillWindow(87000, 0, 0, 20));
     CHECK_FALSE(KillWindow(70000, 0, 10, 20));
     CHECK_FALSE(KillWindow(120000, 93000, 0, 20));
     CHECK(KillWindow(160000, 93000, 0, 20));
-    // Poisonous Blood lasts 90 s: a Son killed 25 s before still covers the siphon.
+    // Poisonous Blood lasts 90 s: a Son killed 45 s before still covers the siphon.
     CHECK(kSiphonLeadMs < 90000u);
     // The gather: low enough Son, not poisoned, not excluded, in reach, not already on it (the death reaches 8 y).
     CHECK(Gathers(false, false, 50.f, 20.f));

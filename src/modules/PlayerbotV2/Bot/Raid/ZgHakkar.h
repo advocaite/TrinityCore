@@ -8,7 +8,7 @@
 //  - Poisonous Blood 24321 (90 s, 100 nature every 3 s on the carrier) comes from a Son of Hakkar (11357) as it dies: its death spell 24320
 //    (smart_scripts "VMaNGOS EventAI 1135701") is a script effect on every enemy within 8 y of it (spell_zulgurub_poisonous_blood casts
 //    24321 on each). There is no cloud on the ground: the raid has to stand next to the Son when it dies.
-// So 20-25 s before each siphon the DPS kill one Son, and once it is low everybody gathers on it. 90 s of poison covers the siphon.
+// So 45 s before each siphon the DPS kill one Son, and once it is low everybody gathers on it. 90 s of poison covers the siphon.
 
 #pragma once
 
@@ -25,7 +25,8 @@ constexpr uint32_t kPoisonousBlood = 24321;       // the aura that turns the sip
 constexpr uint32_t kCorruptedBlood = 24328;       // spreads within 10 y: a carrier does not join the crowd on the Son
 constexpr uint32_t kSiphonFirstMs = 90000;
 constexpr uint32_t kSiphonPeriodMs = 90000;
-constexpr uint32_t kSiphonLeadMs = 25000;         // a Son is killed from this long before the siphon is due
+constexpr uint32_t kSiphonLeadMs = 45000;         // a Son is pulled and killed from this long before the siphon is due (25 s was too short:
+                                                  // sweep-zg-1109w, the Son was still at 100% 7 s before the siphon)
 constexpr uint32_t kSiphonKillStopMs = 3000;      // ... up to this close to it
 constexpr float kSonDeathReach = 8.0f;            // Poisonous Blood reaches this far from the dying Son (SpellRadius 14)
 constexpr float kGatherYards = 4.0f;              // a bot gathering on the Son stands this close to it

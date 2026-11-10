@@ -135,7 +135,7 @@ namespace Playerbot::Raid {
         r.controlledMember.push_back({ 24327 });
         r.noDispel.push_back(24321);
         r.retaunt.push_back(14834);
-        // Poisonous Blood before each Blood Siphon is scripted (RaidMechanics_ZG.cpp, ZgHakkar.h): the DPS kill one Son 25 s before the
+        // Poisonous Blood before each Blood Siphon is scripted (RaidMechanics_ZG.cpp, ZgHakkar.h): the DPS kill one Son 45 s before the
         // siphon is due and the raid gathers on it as it dies (its death gives everyone within 8 y the poison).
 
         // ---------------------------------------------------------------------------------------------------------------

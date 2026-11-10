@@ -68,6 +68,10 @@ struct RaidOrder
     // Melee soak (Patchwerk): keep attacking this enemy whatever the rotation would pick.
     ObjectGuid attack_target;
 
+    // The bot carries the enemy on it to its tank instead of dropping threat (Feign Death, Vanish, Fade): the bot that pulled a Son of
+    // Hakkar brings it up to the raid, where the off-tank picks it up and it dies next to the crowd.
+    bool keep_aggro = false;
+
     // Mind-controlled creature (Razuvious' understudies): what the bot makes it do. The bot itself only holds the channel.
     ObjectGuid charm_attack;      // attack and chase this enemy
     uint32_t   charm_spell = 0;   // cast this creature spell now (Taunt, Shield Wall)

@@ -1081,7 +1081,9 @@ bool LooseMobEscape(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const
     const float mdx = mob->x - bx, mdy = mob->y - by, mdz = mob->z - bz;
     const float mob_d2 = mdx * mdx + mdy * mdy + mdz * mdz;
 
-    if (!s.is_casting())
+    // A bot the raid brain told to keep the mob (the Son of Hakkar puller) drops no threat: it only walks the mob to its tank.
+    bool const keep_aggro = s.raw().raid_order.active && s.raw().raid_order.keep_aggro;
+    if (!s.is_casting() && !keep_aggro)
     {
         uint32 drop = 0;
         bool on_target = false;
