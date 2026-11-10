@@ -57,6 +57,7 @@
 #include "Bot/ChannelChat.h"
 #include "Bot/GroupOrderText.h"
 #include "Bot/CcDeny.h"
+#include "Bot/Raid/BossTactics.h"
 #include "Util.h"
 #include "Bot/AddonHint.h"
 #include "Bot/BotTextMgr.h"
@@ -4394,14 +4395,19 @@ void Module::OnPartyChat(Player* sender, Group* group, std::string const& msg, b
     {
         // The owner's crowd-control orders ("no fear", "@warlock no fear", "@mages no sheep", "off cc"): stored once for the
         // sender, answered once, from a player who commands a bot in this group (anyone else's "no fear" stays chatter).
-        if (CcDeny::ParseOrder(msg))
+        // The same for a boss plan ("tactics Lucifron: adds first, no aoe, tank here"; Bot/Raid/BossTactics.h).
+        bool const cc_order = CcDeny::ParseOrder(msg).has_value();
+        bool const tactics_order = !cc_order && Raid::ParseTacticsOrder(msg).has_value();
+        if (cc_order || tactics_order)
         {
             bool commands_a_bot = false;
             for (GroupReference const& itr : group->GetMembers())
                 if (Player const* m = itr.GetSource(); m && m != sender && Services::Registry().has(m->GetGUID().GetCounter()) &&
                                                        BotCommandParser::ControlsForGroupOrder(sender, m))
                 { commands_a_bot = true; break; }
-            if (commands_a_bot && BotCommandParser::ApplyCcOrder(sender, msg, "party"))
+            if (commands_a_bot && cc_order && BotCommandParser::ApplyCcOrder(sender, msg, "party"))
+                return;
+            if (commands_a_bot && tactics_order && BotCommandParser::ApplyTacticsOrder(sender, msg, raid_chat ? "raid" : "party"))
                 return;
         }
         // A bare group order ("follow", "stay", ...) in party or raid chat goes to every bot of the sender's in the

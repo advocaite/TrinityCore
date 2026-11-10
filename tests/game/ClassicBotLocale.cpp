@@ -127,6 +127,15 @@ TEST_CASE("BotLocale: raid callouts", "[BotLocale]")
     CHECK(Translate(Lang::Ru, "wipe, run back to the entrance") == "вайп, бегите ко входу");
 }
 
+TEST_CASE("BotLocale: boss tactics answers", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Tactics for Lucifron: adds first, no AoE, tank at your spot. Your bots use them every time you fight Lucifron.")
+          == "Тактика на Lucifron: сначала адды, без АоЕ, танк на вашем месте. Ваши боты применяют её в каждом бою с Lucifron.");
+    CHECK(Translate(Lang::Ru, "Tactics for Baron Geddon: boss first.") == "Тактика на Baron Geddon: сначала босс.");
+    CHECK(Translate(Lang::Ru, "Tactics for Lucifron cleared.") == "Тактика на Lucifron удалена.");
+    CHECK(Translate(Lang::Ru, "Bosses here: Lucifron, Magmadar.") == "Боссы здесь: Lucifron, Magmadar.");
+}
+
 TEST_CASE("BotLocale: unknown lines come back in English", "[BotLocale]")
 {
     CHECK(Translate(Lang::Ru, "Perf: ticks=5 emit=3") == "Perf: ticks=5 emit=3");

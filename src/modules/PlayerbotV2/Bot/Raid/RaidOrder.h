@@ -90,6 +90,10 @@ struct RaidOrder
     // Pause the rotation (Nefarian's priest call). Movement and elected jobs still run.
     bool hold_rotation = false;
 
+    // The player's boss plan (BossTactics "no fear", "no sheep"): CcDeny kinds left out during this fight, added to the owner's own
+    // crowd-control orders by the snapshot builder.
+    uint16_t cc_deny = 0;
+
     // A boss fight script (RaidFightScript.h) owns this DPS bot's target and start: the tank-first threat holds and the skull / kill-focus
     // pickers stand down, the bot attacks script_focus (empty: the generic rules pick). Never set on tanks or healers.
     bool script_owns = false;

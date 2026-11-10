@@ -9710,7 +9710,11 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // Same writer-before-parallel-barrier contract as the PvE order above.
     if (Services::Initialized())
         if (auto const* rord = Raid::GetBrain().OrderFor(p->GetGUID().GetCounter()))
+        {
             snap->raid_order = *rord;
+            // The player's boss plan ("tactics Lucifron: no fear"): left out for this fight, on top of his standing orders.
+            snap->cc_deny = uint16(snap->cc_deny | rord->cc_deny);
+        }
 
     // ---- Bank capacity ----
     // Tab count via PlayerData; free slots by walking the bank-bag bags

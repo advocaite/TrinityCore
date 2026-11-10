@@ -395,6 +395,13 @@ inline AvoidBreath const* HoverBreath(RaidRules const& rules, uint32_t enemy, fl
 // Registry. Returns nullptr when the map has no rules.
 RaidRules const* RulesForMap(uint32_t mapId);
 
+// The maps that have rules, in map id order.
+std::vector<uint32_t> RuleMaps();
+
+// True when the map's rules already put the tank that holds <boss> on a place of its own (a TankSpot row, or a Stand rule for a tank):
+// the player's "tank here" (BossTactics) is not used for that boss, the two would pull the tank back and forth.
+bool RulesPlaceTank(uint32_t mapId, uint32_t boss);
+
 // True when the raid layer decides what happens to <aura> on this map: it elects the dispel itself (dispel,
 // controlledMember) or nobody may remove it (noDispel). The generic dispel assignment leaves these alone.
 bool OwnsAura(uint32_t mapId, uint32_t aura);

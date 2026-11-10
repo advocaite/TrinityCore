@@ -41,6 +41,10 @@ public:
     // when `line` is one, stores it for the sender's account (OwnerRegistry::SetCcDeny, the marked-CC switch for "off cc" / "on cc"),
     // answers the sender once and returns true. The bots pick it up with their next snapshot. World thread.
     static bool ApplyCcOrder(Player* sender, std::string const& line, char const* via);
+    // The owner's plan for a raid boss ("tactics Lucifron: adds first, no aoe, tank here"; Raid/BossTactics.h): when `line` is one, stores it
+    // for the sender's account and that boss (OwnerRegistry::SetBossTactics), or shows what is kept, answers the sender once and returns
+    // true. The raid brain applies it whenever that boss is in the fight. World thread.
+    static bool ApplyTacticsOrder(Player* sender, std::string const& line, char const* via);
     // The owner's "ignore target" (toggles the selected mob on the sender's ignore list; the panel's Ignore target button and key) and
     // "ignore clear" (empties it): the sender's bots never attack a mob on it (OwnerRegistry::ToggleFightIgnore). Stored once for the sender's
     // account and answered once. Returns false for any other line.

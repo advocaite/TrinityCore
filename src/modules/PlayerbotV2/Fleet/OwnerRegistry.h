@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -114,6 +115,13 @@ public:
     // immediately. Migration 0025.
     uint8 OwnerGearMode(uint32 account_id) const;
     void  SetOwnerGearMode(uint32 account_id, uint8 mode);
+
+    // The owner's plan per raid boss ("tactics Lucifron: adds first, no aoe"; Bot/Raid/BossTactics.h), in its stored form
+    // (SerializeTactics), "" = none. Kept across restarts (migration 0039, playerbot_v2_owner_tactics); an empty plan deletes the row.
+    // Any thread.
+    std::string BossTacticsOf(uint32 account_id, uint32 boss_entry) const;
+    void        SetBossTactics(uint32 account_id, uint32 boss_entry, std::string const& stored);
+    std::vector<std::pair<uint32, std::string>> AllBossTactics(uint32 account_id) const;
 
     // The owner's crowd-control switch (the ForeverBots panel's CC icon, group order "crowdcontrol on|off"): whether the bots of the
     // groups this account leads mark and hold crowd-control targets (Playerbot.Behavior.MarkCc must be on as well). On when never
@@ -245,6 +253,7 @@ private:
     std::unordered_map<BotId, uint16>        order_;
     std::unordered_map<BotId, uint8>         subgroup_;   // 0-based raid sub-group
     std::unordered_map<uint32, uint8>        owner_gear_mode_;
+    std::unordered_map<uint32, std::unordered_map<uint32, std::string>> boss_tactics_;   // account -> boss entry -> stored plan
     std::unordered_set<uint32>               cc_disabled_;
     static constexpr uint16 kDefaultCcDenied = 1u;   // CcDeny::Fear
     struct CcDenyState

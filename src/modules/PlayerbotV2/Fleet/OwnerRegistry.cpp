@@ -3,6 +3,7 @@
 #include "DatabaseEnv.h"
 #include "Log.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_set>
@@ -20,10 +21,19 @@ size_t OwnerRegistry::LoadFromDb()
         "FROM playerbot_v2_character "
         "WHERE owner_account_id != 0 OR companion_role != 0");
     auto gear_modes = Db().Query("SELECT owner_account_id, gear_mode FROM playerbot_v2_owner_gear");
+    auto tactics = Db().Query("SELECT owner_account_id, boss_entry, tactics FROM playerbot_v2_owner_tactics");
     std::unique_lock lk(mtx_);
     owner_gear_mode_.clear();
     if (gear_modes)
         do { Field* g = gear_modes->Fetch(); owner_gear_mode_[g[0].GetUInt32()] = g[1].GetUInt8(); } while (gear_modes->NextRow());
+    boss_tactics_.clear();
+    if (tactics)
+        do
+        {
+            Field* t = tactics->Fetch();
+            if (std::string s = t[2].GetString(); !s.empty())
+                boss_tactics_[t[0].GetUInt32()][t[1].GetUInt32()] = std::move(s);
+        } while (tactics->NextRow());
     owners_.clear();
     starter_pet_granted_.clear();
     gear_varied_.clear();
@@ -279,6 +289,54 @@ void OwnerRegistry::SetOwnerGearMode(uint32 account_id, uint8 mode)
         owner_gear_mode_[account_id] = mode;
     }
     Db().DirectPExecute("REPLACE INTO playerbot_v2_owner_gear (owner_account_id, gear_mode) VALUES ({}, {})", account_id, uint32(mode));
+}
+
+std::string OwnerRegistry::BossTacticsOf(uint32 account_id, uint32 boss_entry) const
+{
+    std::shared_lock lk(mtx_);
+    auto const a = boss_tactics_.find(account_id);
+    if (a == boss_tactics_.end())
+        return {};
+    auto const b = a->second.find(boss_entry);
+    return b == a->second.end() ? std::string() : b->second;
+}
+
+void OwnerRegistry::SetBossTactics(uint32 account_id, uint32 boss_entry, std::string const& stored)
+{
+    // The stored form is SerializeTactics': letters, digits and . , - = ; only. Anything else is never written into the query.
+    for (char c : stored)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '.' && c != ',' && c != '-' && c != '=' && c != ';')
+        {
+            TC_LOG_ERROR("playerbot.v2", "[tactics] refused to store a plan with '{}' in it for account {}", c, account_id);
+            return;
+        }
+    {
+        std::unique_lock lk(mtx_);
+        auto& plans = boss_tactics_[account_id];
+        if (stored.empty())
+        {
+            plans.erase(boss_entry);
+            if (plans.empty())
+                boss_tactics_.erase(account_id);
+        }
+        else
+            plans[boss_entry] = stored;
+    }
+    if (stored.empty())
+        Db().PExecute("DELETE FROM playerbot_v2_owner_tactics WHERE owner_account_id = {} AND boss_entry = {}", account_id, boss_entry);
+    else
+        Db().PExecute("REPLACE INTO playerbot_v2_owner_tactics (owner_account_id, boss_entry, tactics) VALUES ({}, {}, '{}')", account_id,
+                      boss_entry, stored);
+}
+
+std::vector<std::pair<uint32, std::string>> OwnerRegistry::AllBossTactics(uint32 account_id) const
+{
+    std::vector<std::pair<uint32, std::string>> out;
+    std::shared_lock lk(mtx_);
+    if (auto const a = boss_tactics_.find(account_id); a != boss_tactics_.end())
+        out.assign(a->second.begin(), a->second.end());
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 bool OwnerRegistry::CcEnabled(uint32 account_id) const

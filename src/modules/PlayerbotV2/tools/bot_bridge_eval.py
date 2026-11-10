@@ -81,6 +81,8 @@ def score(b, case, reply):
         checks.append(("no action but an emote", not do or do == "emote"))
     elif isinstance(want, list):
         checks.append(("action " + "/".join(want), do in want))
+    if exp.get("order"):
+        checks.append(("order starts " + exp["order"], str((reply or {}).get("order", "")).startswith(exp["order"])))
     if exp.get("say_any"):
         checks.append(("says one of " + ", ".join(exp["say_any"]), any(has_word(say, w) for w in exp["say_any"])))
     for w in exp.get("say_not", []):

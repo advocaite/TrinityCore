@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "BossTactics.h"
 #include "RaidEncounters.h"
 #include "RaidOrder.h"
 #include "ObjectGuid.h"
@@ -45,6 +46,10 @@ struct Plan
     std::vector<Unit*> enemies;    // alive creatures in combat with the group, sorted by guid
     bool emergency = false;        // somebody under 45% health: healers keep healing
     ObjectGuid ruleFocus;          // kill focus an encounter rule demands (Brain::FocusFor), set by PublishTargets
+    // The player's boss plans (BossTactics, "tactics Lucifron: adds first") for the bosses in this fight that have one, from the
+    // group's real players (the leader's first).
+    std::vector<std::pair<Unit*, BossTactics>> tactics;
+    uint16_t tacticsCcDeny = 0;    // the CcDeny kinds those plans leave out (the crowd-control election skips them)
 };
 
 bool Matches(Who who, Member const& m, Player* mainTank);

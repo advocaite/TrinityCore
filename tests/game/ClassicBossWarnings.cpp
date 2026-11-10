@@ -19,8 +19,10 @@
 
 #include "../../src/modules/PlayerbotV2/Bot/Raid/BossWarningData_MC.h"
 #include "../../src/modules/PlayerbotV2/Bot/Raid/RaidCallouts.h"
+#include "../../src/modules/PlayerbotV2/Bot/Raid/BossTactics.h"
 
 using namespace Playerbot::Raid;
+namespace CcDeny = Playerbot::CcDeny;
 
 namespace
 {
@@ -180,6 +182,121 @@ TEST_CASE("Raid callout: the line for each decision", "[ClassicBossWarnings]")
     CHECK(PickCallout(quiet).kind == CalloutKind::None);
     quiet.move_reason = "role position";
     CHECK(PickCallout(quiet).kind == CalloutKind::None);
+}
+
+TEST_CASE("Boss tactics: the player's words", "[ClassicBossWarnings]")
+{
+    auto o = ParseTacticsOrder("tactics Lucifron: adds first, no aoe and tank here");
+    REQUIRE(o.has_value());
+    CHECK(o->boss == "lucifron");
+    CHECK((o->kill == BossTactics::Kill::AddsFirst));
+    CHECK(o->no_aoe == true);
+    CHECK(o->tank_here);
+    CHECK(o->unknown.empty());
+
+    o = ParseTacticsOrder("Tactics for Baron Geddon: boss first, no fear, no sheep.");
+    REQUIRE(o.has_value());
+    CHECK(o->boss == "baron geddon");
+    CHECK((o->kill == BossTactics::Kill::BossFirst));
+    CHECK(o->cc_add == (CcDeny::Fear | CcDeny::Polymorph));
+
+    o = ParseTacticsOrder("tactics: kill the adds first");      // the target
+    REQUIRE(o.has_value());
+    CHECK(o->boss.empty());
+    CHECK((o->kill == BossTactics::Kill::AddsFirst));
+
+    o = ParseTacticsOrder("tactics adds first, no aoe");        // no colon, the target
+    REQUIRE(o.has_value());
+    CHECK(o->boss.empty());
+    CHECK((o->kill == BossTactics::Kill::AddsFirst));
+    CHECK(o->no_aoe == true);
+
+    o = ParseTacticsOrder("tactics on lucifron adds first, no aoe");   // the name in front, no colon
+    REQUIRE(o.has_value());
+    CHECK(o->boss == "lucifron");
+    CHECK((o->kill == BossTactics::Kill::AddsFirst));
+    CHECK(o->no_aoe == true);
+
+    o = ParseTacticsOrder("tactics lucifron");                  // show
+    REQUIRE(o.has_value());
+    CHECK(o->boss == "lucifron");
+    CHECK(o->Show());
+
+    o = ParseTacticsOrder("tactics");                           // list
+    REQUIRE(o.has_value());
+    CHECK(o->boss.empty());
+    CHECK(o->Show());
+
+    o = ParseTacticsOrder("tactics geddon: clear");
+    REQUIRE(o.has_value());
+    CHECK(o->clear);
+
+    o = ParseTacticsOrder("tactics: adds first, dance in a circle");
+    REQUIRE(o.has_value());
+    REQUIRE(o->unknown.size() == 1);
+    CHECK(o->unknown[0] == "dance in a circle");
+    CHECK_FALSE(o->Show());
+
+    o = ParseTacticsOrder("tactics: fear ok, aoe on, tank anywhere");
+    REQUIRE(o.has_value());
+    CHECK(o->cc_remove == CcDeny::Fear);
+    CHECK(o->no_aoe == false);
+    CHECK(o->spot_off);
+
+    CHECK_FALSE(ParseTacticsOrder("tacticsss").has_value());
+    CHECK_FALSE(ParseTacticsOrder("no fear").has_value());
+    CHECK_FALSE(ParseTacticsOrder("what tactics do you know").has_value());
+}
+
+TEST_CASE("Boss tactics: kept, changed and read back", "[ClassicBossWarnings]")
+{
+    BossTactics t;
+    ApplyTacticsOrder(t, *ParseTacticsOrder("tactics lucifron: adds first, no aoe, no fear, tank here"), 409, 1012.46f, -480.24f, -180.0f);
+    CHECK((t.kill == BossTactics::Kill::AddsFirst));
+    CHECK(t.no_aoe);
+    CHECK(t.cc_deny == CcDeny::Fear);
+    CHECK(t.spot);
+    CHECK(t.spot_map == 409);
+    CHECK(DescribeTactics(t) == "adds first, no AoE, no fear, tank at your spot");
+
+    std::string const stored = SerializeTactics(t);
+    CHECK(stored == "kill=adds;aoe=0;cc=1;spot=409,1012.5,-480.2,-180.0");
+    BossTactics const back = ParseStoredTactics(stored);
+    CHECK((back.kill == t.kill));
+    CHECK(back.no_aoe);
+    CHECK(back.cc_deny == CcDeny::Fear);
+    CHECK(back.spot_map == 409);
+    CHECK(back.x == Catch::Approx(1012.5f));
+    CHECK(back.y == Catch::Approx(-480.2f));
+
+    // A later order changes only what it names.
+    ApplyTacticsOrder(t, *ParseTacticsOrder("tactics: aoe ok, fear ok"), 409, 0, 0, 0);
+    CHECK((t.kill == BossTactics::Kill::AddsFirst));
+    CHECK_FALSE(t.no_aoe);
+    CHECK(t.cc_deny == 0);
+    CHECK(t.spot);
+
+    ApplyTacticsOrder(t, *ParseTacticsOrder("tactics: clear"), 409, 0, 0, 0);
+    CHECK(t.Empty());
+    CHECK(SerializeTactics(t).empty());
+    CHECK(DescribeTactics(t) == "nothing");
+    CHECK(ParseStoredTactics("").Empty());
+    CHECK((ParseStoredTactics("kill=adds;future=7;spot=bad").kill == BossTactics::Kill::AddsFirst));   // unknown parts left out
+    CHECK_FALSE(ParseStoredTactics("spot=bad").spot);
+}
+
+TEST_CASE("Boss tactics: boss names as players type them", "[ClassicBossWarnings]")
+{
+    CHECK(BossNameMatches("lucifron", "Lucifron"));
+    CHECK(BossNameMatches("geddon", "Baron Geddon"));
+    CHECK(BossNameMatches("baron geddon", "Baron Geddon"));
+    CHECK(BossNameMatches("majo", "Majordomo Executus"));
+    CHECK(BossNameMatches("rag", "Rag"));                  // the whole name, however short
+    CHECK_FALSE(BossNameMatches("rag", "Ragnaros"));       // too short to be sure
+    CHECK(BossNameMatches("ragnaros", "Ragnaros"));
+    CHECK_FALSE(BossNameMatches("magmadar", "Lucifron"));
+    CHECK_FALSE(BossNameMatches("baron magmadar", "Baron Geddon"));
+    CHECK(BossNameMatches("venoxis", "High Priest Venoxis"));
 }
 
 TEST_CASE("Raid callout: rate limits per bot and per raid", "[ClassicBossWarnings]")

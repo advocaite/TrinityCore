@@ -766,8 +766,9 @@ bool SafeOrder(std::string const& raw, std::string& norm, std::string& why)
     // Orders with words after them: an object to use, a quest to drop, an item to put on, something to make or conjure for the asker
     // ("craft water 20": PlayerCraftOrders, the same as his whisper).
     // "formation circle", "spacing tight", "distance 10" set how the group stands (BotCommandParser OrderFormation / OrderDistance).
+    // "tactics lucifron: adds first, no aoe" keeps the player's plan for a raid boss (Raid/BossTactics.h).
     static constexpr std::string_view kWithArgs[] = { "use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ",
-                                                      "follow distance " };
+                                                      "follow distance ", "tactics " };
     for (std::string_view w : kWithArgs)
         if (norm.size() > w.size() && norm.compare(0, w.size(), w) == 0)
             return true;

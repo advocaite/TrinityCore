@@ -21,6 +21,8 @@
 #include "dtQueryFilterTC.h"     // /roadstats reads RoadStats counters
 #include "../Fleet/OwnerRegistry.h"
 #include "CcDeny.h"
+#include "Raid/BossTactics.h"
+#include "Raid/RaidEncounters.h"
 #include "OwnerPicks.h"
 #include "../Fleet/PlayerCraftOrders.h"
 #include "../Api/BotTradeShop.h"   // CountBagRot for "sell junk"
@@ -1884,6 +1886,151 @@ bool BotCommandParser::ApplyCcOrder(Player* sender, std::string const& line, cha
     return true;
 }
 
+namespace {
+
+std::string BossName(uint32 entry)
+{
+    CreatureTemplate const* ct = sObjectMgr->GetCreatureTemplate(entry);
+    return ct ? ct->Name : std::to_string(entry);
+}
+
+// The raid boss a "tactics" line is about: the typed name among every raid the bots know (the player's own raid first, so a name
+// shared by two raids means the one he stands in), else his target when it is one of his raid's bosses. 0 = none.
+uint32 TacticsBoss(Player* sender, std::string const& typed, uint32& bossMap)
+{
+    uint32 const here = sender->GetMapId();
+    std::vector<uint32_t> maps = Raid::RuleMaps();
+    std::stable_partition(maps.begin(), maps.end(), [here](uint32_t m) { return m == here; });
+    if (!typed.empty())
+    {
+        for (uint32_t m : maps)
+            if (Raid::RaidRules const* rules = Raid::RulesForMap(m))
+                for (uint32_t boss : rules->bosses)
+                    if (Raid::BossNameMatches(typed, BossName(boss)))
+                    {
+                        bossMap = m;
+                        return boss;
+                    }
+        return 0;
+    }
+    if (Raid::RaidRules const* rules = Raid::RulesForMap(here))
+        if (Unit const* target = sender->GetSelectedUnit(); target && target->GetTypeId() == TYPEID_UNIT)
+            if (std::find(rules->bosses.begin(), rules->bosses.end(), target->GetEntry()) != rules->bosses.end())
+            {
+                bossMap = here;
+                return target->GetEntry();
+            }
+    return 0;
+}
+
+std::string BossList(uint32 mapId)
+{
+    std::string out;
+    if (Raid::RaidRules const* rules = Raid::RulesForMap(mapId))
+        for (uint32_t boss : rules->bosses)
+            out += (out.empty() ? "" : ", ") + BossName(boss);
+    return out;
+}
+
+constexpr char const* kTacticsWords = "adds first, boss first, any order, no aoe, aoe ok, no fear (or sheep, banish, shackle, sap, cc), "
+                                      "fear ok, tank here, tank anywhere, clear";
+
+} // namespace
+
+bool BotCommandParser::ApplyTacticsOrder(Player* sender, std::string const& line, char const* via)
+{
+    auto const order = Raid::ParseTacticsOrder(line);
+    if (!order || !sender || !sender->GetSession())
+        return false;
+    // Plain party or raid chat that only starts with the word ("tactics are hard lol") is talk, not an order: it is answered only
+    // when it changes a plan, names a boss the bots know, or is the bare word. A whisper or a ';' line is always answered.
+    bool const chat = via && (std::strcmp(via, "party") == 0 || std::strcmp(via, "raid") == 0);
+    if (chat && !order->Changes() && !order->unknown.empty())
+        return false;
+    uint32 const account = sender->GetSession()->GetAccountId();
+    if (account == 0)
+        return false;
+    OwnerRegistry& owners = Services::Owners();
+    Playerbot::BotLanguage::LocalizedHandler say(sender->GetSession());
+    // Each sentence is its own line, so each one is found in the language catalog as it is.
+    auto const tell = [&say](std::string const& line) { say.PSendSysMessage("%s", line.c_str()); };
+
+    // "tactics" alone, nothing targeted: every boss this account has a plan for.
+    uint32 bossMap = 0;
+    uint32 const boss = TacticsBoss(sender, order->boss, bossMap);
+    if (!boss && order->boss.empty() && order->Show())
+    {
+        std::string list;
+        for (auto const& [entry, stored] : owners.AllBossTactics(account))
+            list += (list.empty() ? "" : "; ") + BossName(entry) + " (" + Raid::DescribeTactics(Raid::ParseStoredTactics(stored)) + ")";
+        std::string const answer = list.empty()
+            ? std::string("You have no boss tactics yet. Example: tactics Lucifron: adds first, no aoe, tank here")
+            : "Your boss tactics: " + list + ".";
+        tell(answer);
+        return true;
+    }
+    if (!boss && chat && !order->Changes())
+        return false;
+    if (!boss)
+    {
+        std::string const here = BossList(sender->GetMapId());
+        tell(order->boss.empty() ? std::string("Which boss? Target the boss, or name it: tactics Lucifron: adds first.")
+                                 : fmt::format("I don't know a raid boss called \"{}\".", order->boss));
+        tell(here.empty() ? std::string("Boss tactics are for the raids the bots know (Molten Core, Onyxia, Blackwing Lair, Zul'Gurub, "
+                                        "Ahn'Qiraj, Naxxramas).")
+                          : "Bosses here: " + here + ".");
+        return true;
+    }
+
+    std::string const name = BossName(boss);
+    Raid::BossTactics plan = Raid::ParseStoredTactics(owners.BossTacticsOf(account, boss));
+    if (order->Show())
+    {
+        std::string const answer = plan.Empty()
+            ? fmt::format("No tactics for {} yet. Example: tactics {}: adds first, no aoe, tank here", name, name)
+            : fmt::format("Tactics for {}: {}.", name, Raid::DescribeTactics(plan));
+        tell(answer);
+        return true;
+    }
+
+    std::vector<std::string> notes;
+    Raid::TacticsOrder use = *order;
+    if (use.tank_here && sender->GetMapId() != bossMap)
+    {
+        use.tank_here = false;
+        notes.emplace_back("Say \"tank here\" inside the raid, standing where the boss should be tanked.");
+    }
+    else if (use.tank_here && Raid::RulesPlaceTank(bossMap, boss))
+    {
+        use.tank_here = false;
+        notes.emplace_back("\"tank here\" is not used: the bots already have a set tank place for this fight.");
+    }
+    if (!use.unknown.empty())
+    {
+        std::string unknown;
+        for (std::string const& u : use.unknown)
+            unknown += (unknown.empty() ? "\"" : ", \"") + u + "\"";
+        notes.push_back(fmt::format("Not a tactic I know: {}. Words: {}.", unknown, kTacticsWords));
+    }
+    if (use.Changes())
+    {
+        Raid::ApplyTacticsOrder(plan, use, sender->GetMapId(), sender->GetPositionX(), sender->GetPositionY(), sender->GetPositionZ());
+        owners.SetBossTactics(account, boss, Raid::SerializeTactics(plan));
+        TC_LOG_INFO("playerbot.v2", "[tactics] {} ({}): {} = {}", sender->GetName(), via ? via : "?", name, Raid::SerializeTactics(plan));
+    }
+    std::string answer;
+    if (!use.Changes())
+        answer = fmt::format("Tactics for {} unchanged ({}).", name, Raid::DescribeTactics(plan));
+    else if (plan.Empty())
+        answer = fmt::format("Tactics for {} cleared.", name);
+    else
+        answer = fmt::format("Tactics for {}: {}. Your bots use them every time you fight {}.", name, Raid::DescribeTactics(plan), name);
+    tell(answer);
+    for (std::string const& note : notes)
+        tell(note);
+    return true;
+}
+
 bool BotCommandParser::ApplyIgnoreOrder(Player* sender, std::string const& line, char const* via)
 {
     std::string n = line;
@@ -2215,6 +2362,9 @@ bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& 
         return true;
     // A crowd-control order ("@warlock no fear", "off cc") is the owner's, not each bot's: stored once, answered once.
     if (ApplyCcOrder(sender, msg, via))
+        return true;
+    // A boss plan ("tactics Lucifron: adds first, no aoe") is the owner's too.
+    if (ApplyTacticsOrder(sender, msg, via))
         return true;
     // Resolve squad-address prefix (all:/tank:/mage:/Areon:/...).
     // Single-recipient is the most common path — short-circuit so we

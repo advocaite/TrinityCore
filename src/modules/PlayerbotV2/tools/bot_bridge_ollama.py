@@ -63,7 +63,7 @@ ORDERS = ["follow", "stay", "hold", "resume", "come", "disengage", "flee", "atta
           "wear your best gear", "gear", "inventory", "stats", "who", "buff", "heal", "jump", "wave", "salute", "dance",
           "pull", "pull back", "pullback", "fall back", "fallback", "back", "rally here", "spread", "spread out", "spaced out",
           "stack", "tight", "close", "max dps", "save mana", "normal"]
-ORDER_PREFIXES = ["use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ", "follow distance "]
+ORDER_PREFIXES = ["use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ", "follow distance ", "tactics "]
 # step: the ways a bot can move a few yards, and the words a model or a player uses for them.
 STEP_DIRS = {"back": "back", "backward": "back", "backwards": "back", "behind": "back", "forward": "forward",
              "forwards": "forward", "ahead": "forward", "front": "forward", "left": "left", "right": "right", "away": "away",
@@ -672,7 +672,10 @@ def static_rules(actions_on, swearing):
               "emote needs \"emote\", one of: " + ", ".join(EMOTES) + ".\n"
               "order gives one of your own bot orders, exactly these words: \"order\": one of " + ", ".join(ORDERS) +
               ", or \"use <object>\", \"drop quest <name>\", \"equip <item>\", \"craft <item> <count>\" (make or conjure "
-              "something for him: \"craft water 20\", \"craft food 20\", a potion; you hand it over when it is done). Use it for "
+              "something for him: \"craft water 20\", \"craft food 20\", a potion; you hand it over when it is done), or "
+              "\"tactics <boss>: <plan>\" when he tells the group how to fight a raid boss; it is kept for that boss (\"on "
+              "Lucifron kill the adds before him and nobody fear\" is \"tactics lucifron: adds first, no fear\"; plan words: "
+              "adds first, boss first, no aoe, no fear, no sheep, tank here, clear). Use it for "
               "what the player asks that no other action covers (come here, jump, loot, repair, sell grey, buff me, heal me, use "
               "the altar, make me water...).\n"
               "trade opens a trade window with the player and puts in things from your bags: \"items\": what he asked for "

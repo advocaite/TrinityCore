@@ -465,6 +465,9 @@ TEST_CASE("BotBridge: an order is one of the safe parser words", "[BotBridge]")
     CHECK(SafeOrder("Craft water 20", norm, why));
     CHECK(norm == "craft water 20");
     CHECK_FALSE(SafeOrder("craft", norm, why));
+    CHECK(SafeOrder("Tactics Lucifron: adds first, no fear", norm, why));   // the player's plan for a raid boss
+    CHECK(norm == "tactics lucifron: adds first, no fear");
+    CHECK_FALSE(SafeOrder("tactics", norm, why));
     for (char const* w : { "pull", "Pull back!", "fall back", "rally here", "spread out", "stack", "max dps", "save mana" })
         CHECK(SafeOrder(w, norm, why));
     CHECK(SafeOrder("formation circle", norm, why));

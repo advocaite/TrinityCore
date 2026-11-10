@@ -197,6 +197,15 @@ All of these are group-allowed (party/raid chat) and whisperable.
   plays as a dungeon. The log names why a bot stood idle in a fight (`[group_idle]`).
 - **Marks need an order** (`MarksNeedOrder`, default on): putting an icon on a mob never starts a fight by itself.
   Bots engage after `attack`, `pull`, `pull back`, `pull rti` or `focus`.
+- **Boss tactics, kept per boss**: `tactics Lucifron: adds first, no aoe, tank here`. Your plan for a raid boss, in plain words; the
+  bots follow it every time that boss is in the fight, and it is kept (per account, across restarts). Words: `adds first` (the damage
+  dealers leave the boss to the tanks while one of his adds is up), `boss first` (they stay on the boss, the tanks keep the adds),
+  `any order`, `no aoe` / `aoe ok`, `no fear` / `no sheep` / `no banish` ... (that crowd control is not used in that fight; `fear ok`
+  takes it back), `tank here` (the tank holding the boss drags him to where you stand; say it inside the raid), `tank anywhere`,
+  `clear`. Without a name: the boss you have targeted (`tactics: boss first`). `tactics Lucifron` shows his plan, `tactics` lists
+  all of yours. Party / raid chat, a whisper to any of your bots, or `;` lines; one answer. With the bot bridge on, a free sentence
+  works too ("on Lucifron kill the adds before him and nobody fear"). Raids the bots know: Molten Core, Onyxia, Blackwing Lair,
+  Zul'Gurub, Ahn'Qiraj, Naxxramas. A boss whose fight already has a set tank place (Majordomo) keeps it.
 - **Crowd control on and off, per class**: `@warlock no fear`, `@mages no sheep`, then `@warlock yes fear`, `@mage yes sheep` to
   allow it again. Without a class the order is for every bot (`no fear`, `yes fear`). `off cc` / `on cc` (also `cc off` / `cc on`)
   stops or allows all crowd control for every bot, and `@warlock off cc` for one class. Party / raid chat, a whisper to any of your

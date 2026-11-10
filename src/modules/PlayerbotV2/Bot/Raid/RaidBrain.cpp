@@ -3032,6 +3032,9 @@ bool Election::Assign(Unit* target, std::vector<Ranks const*> const& families, b
             for (Ranks const* family : families)
             {
                 uint32_t const id = KnownRank(m.p, *family);
+                // The player's boss plan said "no sheep" (BossTactics): that kind is nobody's job in this fight.
+                if (kind == RaidOrder::CastKind::CrowdControl && (CcDeny::KindOfSpell(id) & plan.tacticsCcDeny))
+                    continue;
                 if (!Ready(m.p, id, target, hostile))
                     continue;
                 RaidOrder* o = OrderOf(m.p);
@@ -3760,6 +3763,31 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
         if (!enemy->GetVictim())
             continue; // unpulled: the tank owns first contact
         candidates.push_back(enemy);
+    }
+    // The player's boss plan (BossTactics, "tactics Lucifron: adds first"): "adds first" leaves the boss to the tanks while one of his adds
+    // is up, "boss first" leaves the adds to the tanks while he is up. Only among the enemies the rules let the raid attack (candidates), so a
+    // rule's never-target or spared add stays out of it and never holds the boss back.
+    for (auto const& [boss, t] : plan.tactics)
+    {
+        if (t.kill == BossTactics::Kill::Any || std::find(candidates.begin(), candidates.end(), boss) == candidates.end())
+            continue;
+        bool addUp = false;
+        for (Unit* c : candidates)
+            addUp = addUp || (c != boss && c->GetEntry() != boss->GetEntry());
+        if (!addUp)
+            continue;
+        if (t.kill == BossTactics::Kill::AddsFirst)
+        {
+            forbiddenDps.push_back(boss->GetGUID());
+            candidates.erase(std::remove(candidates.begin(), candidates.end(), boss), candidates.end());
+        }
+        else
+        {
+            for (Unit* c : candidates)
+                if (c != boss)
+                    forbiddenDps.push_back(c->GetGUID());
+            candidates.assign(1, boss);
+        }
     }
     // First matching entry per enemy wins; a gated entry needs a living gate enemy inside its health window.
     auto const priorityFor = [&](Member const& m, Unit* enemy)
@@ -4581,6 +4609,82 @@ void EndQuietPulls(uint32_t now_ms)
     }
 }
 
+// The player's boss plans for the bosses in this fight (BotCommandParser::ApplyTacticsOrder stores them per account): the group
+// leader's plan first, then the other real players' in the group.
+void LoadTactics(Plan& plan, Group* group)
+{
+    std::vector<uint32> accounts;
+    auto const add = [&accounts](Player const* p)
+    {
+        if (!p || !p->GetSession() || Services::Lifecycle().is_bot(p->GetGUID().GetCounter()))
+            return;
+        uint32 const a = p->GetSession()->GetAccountId();
+        if (a && std::find(accounts.begin(), accounts.end(), a) == accounts.end())
+            accounts.push_back(a);
+    };
+    add(ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID()));
+    for (GroupReference const& ref : group->GetMembers())
+        add(ref.GetSource());
+    if (accounts.empty())
+        return;
+    for (Unit* enemy : plan.enemies)
+    {
+        if (std::find(plan.rules->bosses.begin(), plan.rules->bosses.end(), enemy->GetEntry()) == plan.rules->bosses.end())
+            continue;
+        for (uint32 a : accounts)
+            if (std::string const stored = Services::Owners().BossTacticsOf(a, enemy->GetEntry()); !stored.empty())
+            {
+                BossTactics const t = ParseStoredTactics(stored);
+                if (t.Empty())
+                    continue;
+                plan.tactics.emplace_back(enemy, t);
+                plan.tacticsCcDeny = uint16_t(plan.tacticsCcDeny | t.cc_deny);
+                break;
+            }
+    }
+}
+
+// The player's "tank here" (BossTactics): the tank that holds a boss with a plan spot walks there, every 2 s at most, and the boss
+// follows it. Never into a hazard circle, and not where the raid rules place that tank themselves (RulesPlaceTank).
+std::unordered_map<uint64_t, uint32_t> g_lastTacticSpot;
+std::unordered_map<uint64_t, uint32_t> g_lastTacticSpotLog;
+
+void TacticTankSpot(Plan const& plan, Member const& m, uint32_t now, std::vector<Circle> const& circles, RaidOrder& out)
+{
+    if (!m.tank || plan.tactics.empty())
+        return;
+    Unit* victim = m.p->GetVictim();
+    if (!victim)
+        return;
+    for (auto const& [boss, t] : plan.tactics)
+    {
+        if (boss != victim || !t.spot || t.spot_map != plan.mapId || boss->GetVictim() != m.p || RulesPlaceTank(plan.mapId, boss->GetEntry()))
+            continue;
+        if (Dist2D(m.p->GetPositionX(), m.p->GetPositionY(), t.x, t.y) < 4.0f)
+            return;
+        uint32_t& at = g_lastTacticSpot[m.p->GetGUID().GetCounter()];
+        if (now - at < 2000)
+            return;
+        at = now ? now : 1u;
+        if (!circles.empty() && InsideAny(circles, t.x, t.y, 0.5f))
+            return;
+        float tz = 0.0f;
+        if (Usable(m.p, t.x, t.y, t.z, tz, /*urgent*/ true))
+        {
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tactics] {} drags {} to the player's spot ({:.0f},{:.0f}), {:.0f} y away", m.p->GetName(),
+                boss->GetName(), t.x, t.y, Dist2D(m.p->GetPositionX(), m.p->GetPositionY(), t.x, t.y));
+            SetMove(out, t.x, t.y, tz, "tactic: tank spot");
+        }
+        else if (uint32_t& logged = g_lastTacticSpotLog[m.p->GetGUID().GetCounter()]; now - logged >= 10000u)
+        {
+            logged = now ? now : 1u;
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tactics] {} can't take {} to the player's spot ({:.0f},{:.0f}): {}", m.p->GetName(),
+                boss->GetName(), t.x, t.y, kUsableWhyName[size_t(g_usableWhy) < std::size(kUsableWhyName) ? g_usableWhy : 0]);
+        }
+        return;
+    }
+}
+
 // Raid callouts (RaidCallouts.h): the bot says its new decision in raid chat, the way a player types "bomb on me, running out".
 CalloutGate g_callouts;
 
@@ -5021,6 +5125,9 @@ void Brain::Update(uint32_t now_ms)
 
         dump << plan.rules->name << " group " << b.group->GetGUID().GetCounter() << ": " << plan.members.size() << " members, "
              << plan.enemies.size() << " enemies\n";
+        LoadTactics(plan, b.group);
+        for (auto const& [boss, t] : plan.tactics)
+            dump << "  player's tactics for " << boss->GetName() << ": " << DescribeTactics(t) << "\n";
 
         // Change-only plan header, so a log always shows that the raid layer is running and which tanks it uses, even on a
         // pull where no bot gets a move / cast / hold (the per-bot lines below only appear when there is a decision).
@@ -5098,7 +5205,11 @@ void Brain::Update(uint32_t now_ms)
                 std::vector<Circle> const circles = HazardsFor(plan, m, now_ms);
                 nextMoveCtx[m.p->GetGUID().GetCounter()] = BuildMoveContext(plan, m, circles);
                 if (!m.p->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+                {
                     DecideMove(plan, m, now_ms, circles, o);
+                    if (!o.move)
+                        TacticTankSpot(plan, m, now_ms, circles, o);
+                }
                 ApplyKeepOut(plan, m, circles, o);
                 ApplyFrontArcGuard(plan, m, now_ms, o);
                 if (!plan.rules->hideBeforeBreath.empty())
@@ -5110,6 +5221,16 @@ void Brain::Update(uint32_t now_ms)
                         if (enemy->GetEntry() == rule.enemy && m.p->GetDistance(enemy) < 40.0f)
                             o.no_aoe = true;
             }
+
+        // The player's boss plan (BossTactics): no AoE and the crowd control it leaves out, for every bot while that boss fights.
+        for (auto const& [boss, t] : plan.tactics)
+            for (Member const& m : plan.members)
+                if (m.bot)
+                {
+                    RaidOrder& o = next[m.p->GetGUID().GetCounter()];
+                    o.no_aoe = o.no_aoe || t.no_aoe;
+                    o.cc_deny = uint16_t(o.cc_deny | t.cc_deny);
+                }
 
         // A bot that has to move does not also get a cast job.
         Election e{ plan, next, {}, dump };
@@ -5200,6 +5321,10 @@ void Brain::Update(uint32_t now_ms)
         lastSignature.clear();
     if (g_callouts.Tracked() > 256)
         g_callouts.Prune(now_ms);
+    if (g_lastTacticSpot.size() > 256)
+        g_lastTacticSpot.clear();
+    if (g_lastTacticSpotLog.size() > 256)
+        g_lastTacticSpotLog.clear();
 
     EndQuietPulls(now_ms);
     orders_.swap(next);
