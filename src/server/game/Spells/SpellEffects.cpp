@@ -4765,8 +4765,9 @@ void Spell::EffectSalvageItem()
     itemTarget = nullptr;
     m_targets.SetItemTarget(nullptr);
 
-    // skill-ups of the deciphering skill (SkillLineAbility trivial ranks of the spell)
-    player->UpdateCraftSkill(m_spellInfo);
+    // skill-ups of the deciphering skill (SkillLineAbility trivial ranks of the spell; the rows name no SkillupSkillLineID, so the
+    // spell's own skill line, Comprehension 3012, is the one that goes up)
+    player->UpdateCraftSkill(m_spellInfo, true);
 
     if (!loot.AutoStore(player, NULL_BAG, NULL_SLOT, true))
     {

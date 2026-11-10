@@ -5908,7 +5908,7 @@ inline int SkillGainChance(uint32 SkillValue, uint32 GrayLevel, uint32 GreenLeve
     return sWorld->getIntConfig(CONFIG_SKILL_CHANCE_ORANGE)*10;
 }
 
-bool Player::UpdateCraftSkill(SpellInfo const* spellInfo)
+bool Player::UpdateCraftSkill(SpellInfo const* spellInfo, bool skillLineIsSkillup /*= false*/)
 {
     if (spellInfo->HasAttribute(SPELL_ATTR1_NO_SKILL_INCREASE))
         return false;
@@ -5920,10 +5920,16 @@ bool Player::UpdateCraftSkill(SpellInfo const* spellInfo)
 
     for (SkillLineAbilityMap::const_iterator _spell_idx = bounds.first; _spell_idx != bounds.second; ++_spell_idx)
     {
-        if (_spell_idx->second->SkillupSkillLineID)
+        uint32 skillupLine = _spell_idx->second->SkillupSkillLineID;
+        // Classic 1.60: the mage's Decipher spells (SkillLine 3012 Comprehension) have skill-ups and trivial ranks but no
+        // SkillupSkillLineID; the caller says the row's own skill line is the one that goes up
+        if (!skillupLine && skillLineIsSkillup && _spell_idx->second->NumSkillUps > 0)
+            skillupLine = _spell_idx->second->SkillLine;
+
+        if (skillupLine)
         {
             // Classic 1.60: skill-ups go to the profession itself (the recipe data points at the expansion child line)
-            uint32 skillupSkill = GetClassicProfessionSkill(_spell_idx->second->SkillupSkillLineID);
+            uint32 skillupSkill = GetClassicProfessionSkill(skillupLine);
             uint32 SkillValue = GetPureSkillValue(skillupSkill);
 
             // Alchemy Discoveries here
