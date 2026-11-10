@@ -203,6 +203,12 @@ Options: `--url`, `--model`, `--key`, `--workers` (model calls at once, default 
 `--no-typing-delay`, `--minds`, `--think` (let thinking models think), `--log FILE` (also write what it prints to a file),
 `--backup-url`, `--backup-model`, `--backup-key` (or `BOT_BRIDGE_BACKUP_KEY`).
 
+Chat test set: `tools/bot_bridge_eval.py` scores a model on `tools/bot_bridge_eval_cases.jsonl` (45 cases: talk, Russian,
+honest "what are you doing", orders, trades and full bags, refusals, group orders, guild asks, safety) through this program's
+own prompt and checks, without a server: `python bot_bridge_eval.py --model qwen2.5:14b --compare <last result file>`.
+Each update and each tier model is run against it; the result file keeps every answer. Real lines that went wrong are added
+as new cases.
+
 Backup service (optional, off by default): a second OpenAI-style service the player sets up, in `backup.txt` next to
 the program (`url = `, `model = `, `key = `; the repack ships it empty, from `tools/bot_bridge_backup.txt`) or with the
 `--backup-*` options. It answers a player's line only when the local model is not running, fails or times out, or is so
