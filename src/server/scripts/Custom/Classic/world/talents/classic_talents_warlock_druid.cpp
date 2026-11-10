@@ -26,12 +26,15 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Random.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include <cmath>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 
@@ -278,13 +281,12 @@ namespace ClassicTalentsWarlockDruid
         player->m_Events.AddEventAtOffset([player]() { SyncDemonTalents(player); }, delay);
     }
 
-    bool IsAfflictionSpell(uint32 spellId)
+    // Corruption (warlock family flag [0] 0x2), Bane of Agony ([0] 0x400) and Siphon Life ([1] 0x1): the effects Wrack speeds up and
+    // Soul Siphon counts since the 1.60.1.70888 client
+    bool IsWarlockDotForWrack(SpellInfo const* spellInfo)
     {
-        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
-        for (auto itr = bounds.first; itr != bounds.second; ++itr)
-            if (itr->second->SkillLine == SKILL_CWD_AFFLICTION)
-                return true;
-        return false;
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK
+            && ((spellInfo->SpellFamilyFlags[0] & 0x402) || (spellInfo->SpellFamilyFlags[1] & 0x1));
     }
 
     bool IsThickHideForm(ShapeshiftForm form)
@@ -594,8 +596,9 @@ class classic_talent_warl_pyroclasm : public AuraScript
 
 // 689, 699, 709, 7651, 11699, 11700 - Drain Life; 1120, 8288, 8289, 11675 - Drain Soul; 1316697 - Wrack
 // 17804 - Soul Siphon: "Increases the damage done or health drained by your Drain Life, Drain Soul, and Wrack spells by $s1% per each
-// of your other Affliction effects active on the target, up to a maximum increase of ${$m1*3}%." Affliction effects: the warlock's auras
-// on the target from the Affliction skill line (355). Drain Life heals for the damage it deals, so the health drained follows.
+// of your Corruption, Siphon Life, and Bane of Agony effects active on the target, up to a maximum increase of ${$m1*3}%." (live
+// tooltip since the 1.60.1.70888 hotfixes; before, every other Affliction effect counted). Drain Life heals for the damage it deals,
+// so the health drained follows.
 class classic_talent_warl_soul_siphon : public AuraScript
 {
     void CalcDamage(AuraEffect const* aurEff, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
@@ -618,7 +621,7 @@ class classic_talent_warl_soul_siphon : public AuraScript
             if (spellId == GetId() || aura->GetCasterGUID() != caster->GetGUID())
                 continue;
 
-            if (IsAfflictionSpell(spellId))
+            if (IsWarlockDotForWrack(aura->GetSpellInfo()))
                 ++effects;
         }
 
@@ -633,6 +636,65 @@ class classic_talent_warl_soul_siphon : public AuraScript
     {
         DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_talent_warl_soul_siphon::CalcDamage, EFFECT_ALL, SPELL_AURA_ANY);
     }
+};
+
+// 1316697 - Wrack: "Tears the target apart from within for $d, inflicting $s1 Shadow damage every $t sec. While channeling, your Siphon
+// Life, Corruption, and Bane of Agony effects on the target deal their periodic damage $s2% faster." (since the 1.60.1.70888 hotfixes;
+// effect 2 is a dummy aura). While the channel runs, the warlock's running Corruption, Siphon Life and Bane of Agony on the target tick
+// every period / (1 + $s2%), keeping their expiry, so they gain ticks; their normal period comes back when the channel ends. An effect
+// cast during the channel ends it, so it never starts sped up. Measured the same way by wowsims/forever (MIT), sim/warlock/wrack.go.
+class classic_spell_warl_wrack : public AuraScript
+{
+    void Retime(AuraEffect const* aurEff, bool apply)
+    {
+        Unit* target = GetTarget();
+        ObjectGuid const casterGuid = GetCasterGUID();
+        double const speedup = 1.0 + double(aurEff->GetAmount()) / 100.0;
+
+        for (AuraType type : { SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_LEECH })
+        {
+            for (AuraEffect* dot : target->GetAuraEffectsByType(type))
+            {
+                if (dot->GetCasterGUID() != casterGuid || !IsWarlockDotForWrack(dot->GetSpellInfo()))
+                    continue;
+
+                std::pair<uint32, uint8> const key(dot->GetId(), uint8(dot->GetEffIndex()));
+                if (apply)
+                {
+                    if (speedup <= 1.0)
+                        continue;
+
+                    int32 const normalPeriod = dot->GetPeriod();
+                    _normalPeriods[key] = normalPeriod;
+                    dot->ChangePeriodKeepingExpiry(std::max<int32>(int32(std::lround(normalPeriod / speedup)), 1));
+                }
+                else if (auto itr = _normalPeriods.find(key); itr != _normalPeriods.end())
+                    dot->ChangePeriodKeepingExpiry(itr->second);
+            }
+        }
+
+        if (!apply)
+            _normalPeriods.clear();
+    }
+
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Retime(aurEff, true);
+    }
+
+    void HandleRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Retime(aurEff, false);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_warl_wrack::HandleApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_warl_wrack::HandleRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+
+    // the normal period of each sped-up effect (spell, effect index): the warlock has one of each on the target
+    std::map<std::pair<uint32, uint8>, int32> _normalPeriods;
 };
 
 // 1120, 8288, 8289, 11675 - Drain Soul
@@ -2142,6 +2204,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_pyroclasm);
     RegisterSpellScript(classic_spell_warl_curse_of_agony);
     RegisterSpellScript(classic_talent_warl_soul_siphon);
+    RegisterSpellScript(classic_spell_warl_wrack);
     RegisterSpellScript(classic_talent_warl_soul_harvest);
     RegisterSpellScript(classic_talent_warl_demon_talent_sync);
     RegisterSpellScript(classic_talent_warl_summon_demon);

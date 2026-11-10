@@ -64,6 +64,9 @@ class TC_GAME_API AuraEffect
 
         int32 GetPeriodicTimer() const { return _periodicTimer; }
         void SetPeriodicTimer(int32 periodicTimer) { _periodicTimer = periodicTimer; }
+        // re-times a running periodic effect: the time already run towards the next tick keeps its share of the period, the expiry does
+        // not move, and the effect ticks as often as the new period still fits before it (CalculatePeriodic goes back to the normal period)
+        void ChangePeriodKeepingExpiry(int32 period);
 
         SpellEffectValue CalculateAmount(Unit* caster);
         static Optional<SpellEffectValue> CalculateEstimatedAmount(Unit const* caster, Unit* target, SpellInfo const* spellInfo, SpellEffectInfo const& spellEffectInfo, SpellEffectValue amount, uint8 stack, AuraEffect const* aurEff);
@@ -120,6 +123,7 @@ class TC_GAME_API AuraEffect
         int32 _periodicTimer;
         int32 _period;          // time between consecutive ticks
         uint32 _ticksDone;      // ticks counter
+        int32 _tickAdjust;      // ticks added to (or taken from) the count the duration gives, after ChangePeriodKeepingExpiry
 
         bool m_canBeRecalculated;
         bool m_isPeriodic;
