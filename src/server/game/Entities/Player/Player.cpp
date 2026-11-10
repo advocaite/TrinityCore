@@ -12875,6 +12875,8 @@ void Player::VisualizeItem(uint8 slot, Item* pItem)
         if (IsInWorld())
             GetSession()->GetCollectionMgr()->AddItemAppearance(pItem);
     }
+    else if (pItem->GetBonding() == BIND_NONE && IsInWorld())
+        GetSession()->GetCollectionMgr()->AddItemAppearance(pItem);
 
     TC_LOG_DEBUG("entities.player.items", "Player::SetVisibleItemSlot: Player '{}' ({}), Slot: {}, Item: {}",
         GetName(), GetGUID().ToString(), slot, pItem->GetEntry());
