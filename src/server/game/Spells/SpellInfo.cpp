@@ -5142,6 +5142,8 @@ bool _isPositiveEffectImpl(SpellInfo const* spellInfo, SpellEffectInfo const& ef
                 break;
             case SPELL_AURA_MOD_ATTACKSPEED:            // some buffs have negative bp, check both target and bp
             case SPELL_AURA_MOD_MELEE_HASTE:
+            case SPELL_AURA_MOD_MELEE_HASTE_2:
+            case SPELL_AURA_MOD_MELEE_HASTE_3:          // Classic 1.60 Thunder Clap: -20% attack speed on enemies
             case SPELL_AURA_MOD_DAMAGE_DONE:
             case SPELL_AURA_MOD_RESISTANCE:
             case SPELL_AURA_MOD_RESISTANCE_PCT:
