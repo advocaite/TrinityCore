@@ -3504,6 +3504,44 @@ SOAP.IP = "127.0.0.1"
 SOAP.Port = 7878
 
 #
+#    StatusServer.Token
+#        Description: Secret for the read-only status endpoint (GET http://<BindIP>:<Port>/status).
+#                     It answers JSON with up/stalled state, uptime, online counts and world lag,
+#                     for a launcher's realm status or "server is down" alerts. It cannot run
+#                     commands or change anything.
+#                     Empty turns the endpoint off. Use at least 16 random characters.
+#                     Send it as "Authorization: Bearer <token>", "X-Status-Token: <token>"
+#                     or "?token=<token>" (the header is better: query strings can end up in logs).
+#                     HTTP 200 while players can play, 503 while starting, stalled or stopping,
+#                     401 without the right token.
+#        Default:     "" - (Disabled)
+
+StatusServer.Token = ""
+
+#
+#    StatusServer.BindIP
+#        Description: Bind the status endpoint to IP/hostname. Plain HTTP: keep it on 127.0.0.1
+#                     unless a firewall or HTTPS proxy sits in front of it.
+#        Default:     "127.0.0.1" - (Bind to localhost)
+
+StatusServer.BindIP = "127.0.0.1"
+
+#
+#    StatusServer.Port
+#        Description: TCP port of the status endpoint. Give every realm on one PC its own port.
+#        Default:     8087
+
+StatusServer.Port = 8087
+
+#
+#    StatusServer.StallSeconds
+#        Description: Report "stalled" (HTTP 503) when the world loop has not finished an update
+#                     for this many seconds, even though the process still answers.
+#        Default:     10
+
+StatusServer.StallSeconds = 10
+
+#
 ###################################################################################################
 
 ###################################################################################################

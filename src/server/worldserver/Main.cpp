@@ -47,6 +47,7 @@
 #include "ScriptMgr.h"
 #include "ScriptReloadMgr.h"
 #include "SecretMgr.h"
+#include "ServerStatusService.h"
 #include "TCSoap.h"
 #include "TerrainMgr.h"
 #include "ThreadPool.h"
@@ -431,6 +432,12 @@ int main(int argc, char** argv)
     // Set server online (allow connecting now)
     LoginDatabase.DirectPExecute("UPDATE realmlist SET flag = flag & ~{}, population = 0 WHERE id = '{}'", Trinity::Legacy::REALM_FLAG_OFFLINE, realmId);
 
+    // Read-only status/heartbeat endpoint for launchers and down alerts, off unless StatusServer.Token is set
+    if (std::shared_ptr<Realm const> currentRealm = sRealmList->GetCurrentRealm())
+        sServerStatus.Start(*ioContext, realmId, currentRealm->Name);
+
+    auto sServerStatusHandle = Trinity::make_unique_ptr_with_deleter<&ServerStatus::StatusService::Stop>(&sServerStatus);
+
     // Start the freeze check callback cycle in 5 seconds (cycle itself is 1 sec)
     std::shared_ptr<FreezeDetector> freezeDetector;
     if (int coreStuckTime = sConfigMgr->GetIntDefault("MaxCoreStuckTime", 60))
@@ -590,6 +597,8 @@ void WorldUpdateLoop()
 
         sWorld->Update(diff);
         realPrevTime = realCurrTime;
+
+        sServerStatus.OnWorldTick(diff);
 
 #ifdef _WIN32
         if (m_ServiceStatus == 0)
