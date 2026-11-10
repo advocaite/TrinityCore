@@ -11683,6 +11683,8 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     pet->GetCharmInfo()->SetPetNumber(sObjectMgr->GeneratePetNumber(), true);
     // this enables pet details window (Shift+P)
     pet->InitPetCreateSpells();
+    // Classic 1.60 (vanilla): the beast keeps the abilities it had in the wild
+    pet->LearnTameSpells();
 
     // Classic 1.60: a freshly tamed beast is unhappy until it is fed
     if (pet->HasHappiness())

@@ -131,6 +131,15 @@ class TC_GAME_API Pet final : public Guardian
         bool KnowsSpellOrHigherRank(uint32 spellId) const;
         uint32 UntrainTrainerSpells();                                   // spells removed
 
+        // Classic 1.60 (vanilla): a tamed beast keeps the abilities it had in the wild (classic_pet_tame_spell: Blizzard's
+        // CreatureSpellData through the creature's PetSpellDataId), and when it uses one in combat the hunter may learn the
+        // Beast Training rank that teaches it to other pets (10% a use, VMaNGOS / CMaNGOS Pet::CheckLearning).
+        static std::vector<uint32> const* GetTameSpells(uint32 creatureEntry);  // nullptr = the beast comes with no ability
+        static uint32 GetBeastTrainingTeachSpell(uint32 petSpellId);           // 0 = no Beast Training rank teaches it
+        void LearnTameSpells();
+        bool KnowsActiveSpell() const;                                    // any spell besides passives (auto attack is no spell)
+        void CheckLearning(uint32 spellId);
+
         void SetDuration(int32 dur) { m_duration = dur; }
         int32 GetDuration() const { return m_duration; }
 

@@ -4013,6 +4013,12 @@ void Spell::_cast(bool skipCheck)
 
     CallScriptAfterCastHandlers();
 
+    // Classic 1.60 (vanilla): a hunter pet using an ability it knew in the wild may teach it to its hunter
+    if (!IsTriggered())
+        if (Unit* unitCaster = m_caster->ToUnit())
+            if (Pet* pet = unitCaster->ToPet())
+                pet->CheckLearning(m_spellInfo->Id);
+
     if (std::vector<int32> const* spell_triggered = sSpellMgr->GetSpellLinked(SPELL_LINK_CAST, m_spellInfo->Id))
     {
         for (int32 id : *spell_triggered)
