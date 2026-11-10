@@ -20,6 +20,7 @@
 #include "../../src/modules/PlayerbotV2/Bot/Raid/BossWarningData_MC.h"
 #include "../../src/modules/PlayerbotV2/Bot/Raid/RaidCallouts.h"
 #include "../../src/modules/PlayerbotV2/Bot/Raid/BossTactics.h"
+#include "../../src/modules/PlayerbotV2/Bot/Raid/RaidBanter.h"
 
 using namespace Playerbot::Raid;
 namespace CcDeny = Playerbot::CcDeny;
@@ -329,4 +330,103 @@ TEST_CASE("Raid callout: rate limits per bot and per raid", "[ClassicBossWarning
     // Prune forgets the old state.
     cap.Prune(t + 200000);
     CHECK(cap.Tracked() == 0);
+}
+
+TEST_CASE("Raid banter: the leader's lines", "[ClassicBossWarnings]")
+{
+    CHECK(LeaderLine(Mishap::StoodInBad, BanterLevel::Off, "Karrz", 0).empty());
+    CHECK(LeaderLine(Mishap::Count, BanterLevel::Harsh, "Karrz", 0).empty());
+    CHECK(LeaderLine(Mishap::StoodInBad, BanterLevel::Mild, "Karrz", 0) == "Karrz, out of the bad stuff pls");
+    CHECK(LeaderLine(Mishap::StoodInBad, BanterLevel::Harsh, "Karrz", 0) == "Karrz GET OUT OF IT");
+    CHECK(LeaderLine(Mishap::MissedKick, BanterLevel::Harsh, "Shadow Bolt", 0) == "NOBODY KICKED Shadow Bolt??");
+    CHECK(LeaderLine(Mishap::BrokeCc, BanterLevel::Mild, "Gun", 1) == "careful Gun, that was cc'd");
+    CHECK(LeaderLine(Mishap::BrokeCc, BanterLevel::Harsh, "", 0) == "WHO BROKE THE CC");          // nobody seen: the nameless lines
+    CHECK(LeaderLine(Mishap::ExtraPull, BanterLevel::Mild, "", 2) == "adds incoming, tanks");
+    CHECK(LeaderLine(Mishap::ExtraPull, BanterLevel::Harsh, "Brok", 1) == "Brok has adds, tanks GRAB THEM");
+    // A wipe or a kill with nobody to name skips the lines that need a name.
+    CHECK(LeaderLine(Mishap::Wipe, BanterLevel::Mild, "", 2) == "wipe, it happens. run back and rebuff");
+    CHECK(LeaderLine(Mishap::Wipe, BanterLevel::Harsh, "", 0) == "that was a mess. run back and stay out of the bad stuff");
+    CHECK(LeaderLine(Mishap::Wipe, BanterLevel::Harsh, "Brok", 0) == "WIPE. Brok died first. again");
+    CHECK(LeaderLine(Mishap::BossDown, BanterLevel::Mild, "", 2) == "gg, nice one everyone");
+    CHECK(LeaderLine(Mishap::BossDown, BanterLevel::Harsh, "Brok", 2) == "gg. Brok, we'll talk about dying later");
+
+    // Standing in the bad stuff and a missed kick are always about someone (a raider, a spell): no line without the name.
+    CHECK(LeaderLine(Mishap::StoodInBad, BanterLevel::Mild, "", 0).empty());
+    CHECK(LeaderLine(Mishap::MissedKick, BanterLevel::Harsh, "", 1).empty());
+
+    // Every line, every pick: never empty when on (a name is there, or the mishap has nameless lines), never a leftover slot.
+    for (uint8_t m = 0; m < uint8_t(Mishap::Count); ++m)
+        for (BanterLevel l : { BanterLevel::Mild, BanterLevel::Harsh })
+            for (uint32_t pick = 0; pick < 6; ++pick)
+                for (char const* name : { "", "Brok" })
+                {
+                    std::string const s = LeaderLine(Mishap(m), l, name, pick);
+                    INFO(int(m) << " " << int(l) << " " << pick << " " << name);
+                    bool const needsName = Mishap(m) == Mishap::StoodInBad || Mishap(m) == Mishap::MissedKick;
+                    CHECK(s.empty() == (needsName && !*name));
+                    CHECK(s.find("{}") == std::string::npos);
+                }
+}
+
+TEST_CASE("Raid banter: after a wipe", "[ClassicBossWarnings]")
+{
+    CHECK(WipeReply(BanterLevel::Off, "Brok", false, 0).empty());
+    CHECK(WipeReply(BanterLevel::Mild, "Brok", true, 0) == "my bad");
+    CHECK(WipeReply(BanterLevel::Harsh, "Brok", true, 3) == "i was rooted ok");
+    CHECK(WipeReply(BanterLevel::Harsh, "Brok", false, 0) == "that was Brok's fault");
+    CHECK(WipeReply(BanterLevel::Mild, "", false, 5) == "healers?");                    // no one to blame: the next nameless line
+    for (BanterLevel l : { BanterLevel::Mild, BanterLevel::Harsh })
+        for (uint32_t pick = 0; pick < 14; ++pick)
+            for (char const* blame : { "", "Brok" })
+            {
+                std::string const s = WipeReply(l, blame, false, pick);
+                CHECK_FALSE(s.empty());
+                CHECK(s.find("{}") == std::string::npos);
+            }
+}
+
+TEST_CASE("Raid banter: what the program is told", "[ClassicBossWarnings]")
+{
+    CHECK(MishapDetail(Mishap::StoodInBad, "Karrz", "Ragnaros") == "Karrz keeps standing in a damaging area (fighting Ragnaros)");
+    CHECK(MishapDetail(Mishap::MissedKick, "Shadow Bolt", "") == "nobody interrupted the enemy cast Shadow Bolt");
+    CHECK(MishapDetail(Mishap::BrokeCc, "", "") == "someone broke a crowd-controlled enemy early");
+    CHECK(MishapDetail(Mishap::ExtraPull, "Brok", "") == "an extra pack of enemies was pulled into the fight, they attack Brok");
+    CHECK(MishapDetail(Mishap::Wipe, "Brok", "Lucifron") == "the raid just wiped (fighting Lucifron); Brok died first");
+    CHECK(MishapDetail(Mishap::BossDown, "", "Lucifron") == "the raid just killed the boss Lucifron");
+    CHECK(MishapDetail(Mishap::BossDown, "Brok", "Lucifron") == "the raid just killed the boss Lucifron; Brok died during the fight");
+    CHECK(std::string(MishapWord(Mishap::BrokeCc)) == "broke_cc");
+    CHECK(std::string(MishapWord(Mishap::Count)) == "mishap");
+}
+
+TEST_CASE("Raid banter: config and rate limits", "[ClassicBossWarnings]")
+{
+    CHECK((BanterLevelFromConfig(0) == BanterLevel::Off));
+    CHECK((BanterLevelFromConfig(-3) == BanterLevel::Off));
+    CHECK((BanterLevelFromConfig(1) == BanterLevel::Mild));
+    CHECK((BanterLevelFromConfig(2) == BanterLevel::Harsh));
+    CHECK((BanterLevelFromConfig(9) == BanterLevel::Harsh));
+    CHECK(std::string(BanterLevelWord(BanterLevel::Harsh)) == "harsh");
+
+    uint32_t const t = 100000;
+    BanterGate g;
+    CHECK_FALSE(g.Allow(1, Mishap::StoodInBad, "Karrz", BanterLevel::Off, t));
+    CHECK(g.Allow(1, Mishap::StoodInBad, "Karrz", BanterLevel::Mild, t));
+    CHECK_FALSE(g.Allow(1, Mishap::MissedKick, "Bolt", BanterLevel::Mild, t + 5000));                        // leader gap
+    CHECK(g.Allow(2, Mishap::MissedKick, "Bolt", BanterLevel::Mild, t + 5000));                              // another raid
+    CHECK(g.Allow(1, Mishap::MissedKick, "Bolt", BanterLevel::Mild, t + BanterGate::kLeaderGapMs));
+    CHECK_FALSE(g.Allow(1, Mishap::StoodInBad, "Gun", BanterLevel::Mild, t + BanterGate::kLeaderGapMs * 2)); // same kind
+    CHECK(g.Allow(1, Mishap::StoodInBad, "Gun", BanterLevel::Mild, t + BanterGate::kSameKindMs));
+    CHECK_FALSE(g.Allow(1, Mishap::StoodInBad, "Karrz", BanterLevel::Mild, t + 2 * BanterGate::kSameKindMs - 1000));
+    CHECK(g.Allow(1, Mishap::StoodInBad, "Karrz", BanterLevel::Mild, t + BanterGate::kSameNameMs + 1000));   // same raider, later
+
+    // Harsh speaks more often; the wipe and the kill always get their line, once per fight end.
+    BanterGate h;
+    CHECK(h.Allow(3, Mishap::StoodInBad, "A", BanterLevel::Harsh, t));
+    CHECK(h.Allow(3, Mishap::BrokeCc, "B", BanterLevel::Harsh, t + BanterGate::kLeaderGapHarshMs));
+    CHECK(h.Allow(3, Mishap::Wipe, "", BanterLevel::Harsh, t + BanterGate::kLeaderGapHarshMs + 500));
+    CHECK_FALSE(h.Allow(3, Mishap::BossDown, "", BanterLevel::Harsh, t + BanterGate::kLeaderGapHarshMs + 900));
+    CHECK(h.Allow(3, Mishap::BossDown, "", BanterLevel::Harsh, t + BanterGate::kLeaderGapHarshMs + 500 + BanterGate::kFightEndMs));
+
+    h.Prune(t + 500000);
+    CHECK(h.Tracked() == 0);
 }

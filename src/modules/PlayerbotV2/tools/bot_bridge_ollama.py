@@ -416,9 +416,9 @@ class ChatApi:
             log("model service %s: %s" % (self.url, "ready, model " + self.model if self.up else "not reachable, fixed answers for now"))
         return self.up
 
-    def chat(self, system, user, timeout=None):
+    def chat(self, system, user, timeout=None, max_tokens=None):
         # 160 tokens is room for the longest answer (a line, an action and a memory); fewer would cut the JSON off
-        body = {"model": self.model, "temperature": 0.8, "max_tokens": 160,
+        body = {"model": self.model, "temperature": 0.8, "max_tokens": max_tokens or 160,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         for attempt in (0, 1, 2):
             if self.json_mode:
@@ -1168,6 +1168,65 @@ def answer_talk(event, api, minds, opts):
     log("%s [%s, %.1f s]: %s" % (bot, "talk" if channel == "say" else channel, time.time() - started, say))
 
 
+def answer_raid_line(event, api, opts):
+    """A bot's raid chat line about something that just happened in the fight (the raid leader reacting to a mistake, a raider
+    after a wipe). Fast or nothing: the server says its fixed line itself when this one is not back within wait_ms (2.5 s), so
+    the prompt is short, the answer is a few words, and a slow model simply loses. No persona text of anyone's goes in: the
+    lines stay game banter, never about a person, never a slur (check_line still filters what comes back)."""
+    api = getattr(api, "primary", api)   # never the paid backup for banter
+    started = event["_seen"]
+    budget = int(event.get("wait_ms", 2500) or 2500) / 1000.0 - 0.3
+    if budget - (time.time() - started) < 0.4 or not api.check():
+        return
+    bot = event.get("bot", "")
+    swearing = bool(event.get("swearing")) and not opts.no_swearing
+    harsh = str(event.get("mood", "mild")) == "harsh"
+    leader = str(event.get("role", "")) == "raid leader"
+    russian = str(event.get("locale", "")).lower() == "ruru"
+    system = ("You are %s, a level %s %s in a World of Warcraft raid, writing in raid chat like a real player. %s "
+              "Write ONE short line (at most 12 words), lowercase, no emoji, no quotes. Only about the game and this mistake: "
+              "never about the person behind the character, never insults about real life, never slurs, no threats. "
+              "Answer as JSON: {\"say\": \"...\"}."
+              % (bot, event.get("level", "60"), event.get("class", ""),
+                 ("You are the raid leader and you %s." % ("freak out at every mistake, loud and dramatic, CAPS now and then, but it "
+                                                           "is all in good fun" if harsh else "tease people about mistakes, "
+                                                           "calm and a bit dry")) if leader else
+                 ("You just wiped with your raid; you %s." % ("blame someone a bit, half joking" if harsh else
+                                                              "make an excuse, a joke or own up"))))
+    if russian:
+        system += " " + language_line(True)
+    user = "Just now: %s.\nThe kind of line meant (don't copy it): %s" % (event.get("detail", "something happened"), event.get("example", ""))
+    if russian:
+        user += "\n(Answer in Russian.)"
+    try:
+        data = parse_json(api.chat(system, user, timeout=max(0.4, budget - (time.time() - started)), max_tokens=48))
+    except (OSError, ValueError) as e:
+        log("raid line of %s: no line in time (%s); the server says its own" % (bot, e))
+        return
+    say = str((data or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:160]
+    if ":" in say[:24] and say.split(":", 1)[0].strip().lower() == bot.lower():
+        say = say.split(":", 1)[1].strip()
+    say, why = check_line(say, swearing)
+    if why:
+        log("raid line of %s %s" % (bot, why))
+    if not say or (russian and not mostly_cyrillic(say)):
+        return
+    took = time.time() - started
+    if took > budget:
+        log("raid line of %s came after %.1f s; the server says its own" % (bot, took))
+        return
+    delay = max(0, int(event.get("delay_ms", 0) or 0) - int(took * 1000))
+    write_reply(event["_folder"], {"reply_to": event["id"], "say": say, "channel": event.get("channel", "raid"), "delay_ms": delay})
+    log("%s [raid %s, %.1f s]: %s" % (bot, event.get("what", ""), took, say))
+
+
+def safe_raid_line(event, api, opts):
+    try:
+        answer_raid_line(event, api, opts)
+    except Exception as e:   # a raid line is never worth stopping the program for; the server says its fixed line
+        log("raid line for %s failed: %r" % (event.get("bot"), e))
+
+
 def safe_talk(event, api, minds, opts):
     try:
         answer_talk(event, api, minds, opts)
@@ -1314,6 +1373,13 @@ def main():
                         continue
                     e["_seen"], e["_folder"] = time.time(), folder
                     pending.add(pool.submit(safe_talk, e, api, minds, opts))
+                elif kind == "raid_line":
+                    # A raid line has 2.5 s or the server says its fixed one: only when the model is free right now.
+                    pending = {p for p in pending if not p.done()}
+                    if len(pending) >= opts.workers:
+                        continue
+                    e["_seen"], e["_folder"] = time.time(), folder
+                    pending.add(pool.submit(safe_raid_line, e, api, opts))
                 elif kind == "action_result":
                     log("action %s for %s: %s" % (e.get("act"), e.get("bot"),
                         "done, " + e.get("detail", "") if e.get("ok") else "refused, " + e.get("why", "")))

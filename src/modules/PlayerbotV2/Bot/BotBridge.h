@@ -75,6 +75,15 @@ public:
     // add a short /say line to him (a greeting, a word about his mount). Counted with the talk (Gathering.ChatModelPerMinute).
     static bool QueueGreet(BotId bot, ObjectGuid player);
 
+    // World thread (Raid/RaidBanter.h). With a program answering chat, asks it for `bot`'s raid chat line about something that just
+    // happened in the fight: `what` a word (wipe, stood_in_bad ...), `detail` in plain words, `example` the fixed line, `mood` mild or
+    // harsh, `role` "raid leader" or "raider", `delay_ms` when the line should show. A line that comes back later than wait_ms after
+    // the ask is dropped, so the caller can say `example` itself at that time when RaidLineAnswered(id) is still false. 0: not asked.
+    static uint64 AskRaidLine(Player* bot, std::string const& what, std::string const& detail, std::string const& example,
+                              std::string const& mood, std::string const& role, uint32 delay_ms, uint32 wait_ms);
+    // True once when the program answered ask `id` in time (the answer is forgotten then).
+    static bool RaidLineAnswered(uint64 id);
+
     // Any thread (the bot worker's channel suggestions, BotTextMgr Suggest). With Talk on, a world bot's post in General (channel 1)
     // or Trade (2) is written by the program from `detail` (what it is about, in words); `link_name` / `link`: an item or quest whose
     // name in the line becomes its link; `example` the fixed line, said when the model leaves the name out. Now and then another

@@ -20,6 +20,7 @@
 #ifdef TESTS_HAVE_PLAYERBOT_V2
 
 #include "../../src/modules/PlayerbotV2/Util/BotLocaleText.h"
+#include "../../src/modules/PlayerbotV2/Bot/Raid/RaidBanter.h"
 #include <set>
 #include <string>
 
@@ -125,6 +126,38 @@ TEST_CASE("BotLocale: raid callouts", "[BotLocale]")
     CHECK(Translate(Lang::Ru, "Polymorph on Flamewaker Healer, don't break it") == "Polymorph на Flamewaker Healer, не сбивайте");
     CHECK(Translate(Lang::Ru, "spread out") == "расходимся");
     CHECK(Translate(Lang::Ru, "wipe, run back to the entrance") == "вайп, бегите ко входу");
+}
+
+TEST_CASE("BotLocale: raid leader banter", "[BotLocale]")
+{
+    using namespace Playerbot::Raid;
+    CHECK(Translate(Lang::Ru, "Karrz GET OUT OF IT") == "Karrz, ВЫЙДИ ОТТУДА");
+    CHECK(Translate(Lang::Ru, "NOBODY KICKED Shadow Bolt??") == "НИКТО НЕ СБИЛ Shadow Bolt??");
+    CHECK(Translate(Lang::Ru, "WIPE. Brok died first. again") == "ВАЙП. Brok - опять первый труп");
+    CHECK(Translate(Lang::Ru, "that was Brok's fault") == "это вина Brok");
+    CHECK(Translate(Lang::Ru, "i was rooted ok") == "меня зарутило, ок");
+
+    // Every fixed line the leader or a raider can say has its Russian form.
+    Catalog const& ru = Russian();
+    for (uint8_t m = 0; m < uint8_t(Mishap::Count); ++m)
+        for (BanterLevel l : { BanterLevel::Mild, BanterLevel::Harsh })
+            for (uint32_t pick = 0; pick < 3; ++pick)
+                for (char const* name : { "", "Brok" })
+                {
+                    std::string const s = LeaderLine(Mishap(m), l, name, pick);
+                    INFO(s);
+                    CHECK((s.empty() || ru.Knows(s)));
+                }
+    for (BanterLevel l : { BanterLevel::Mild, BanterLevel::Harsh })
+        for (uint32_t pick = 0; pick < 8; ++pick)
+            for (char const* blame : { "", "Brok" })
+                for (bool self : { false, true })
+                {
+                    std::string const s = WipeReply(l, blame, self, pick);
+                    INFO(s);
+                    CHECK_FALSE(s.empty());
+                    CHECK(ru.Knows(s));
+                }
 }
 
 TEST_CASE("BotLocale: boss tactics answers", "[BotLocale]")

@@ -57,6 +57,7 @@ public:
     bool   raid_enabled() const { return raid_enabled_; }
     bool   boss_warnings_enabled() const { return boss_warnings_enabled_; }
     bool   raid_callouts_enabled() const { return raid_callouts_enabled_; }
+    int32  raid_banter() const { return raid_banter_; }   // 0 off, 1 mild, 2 harsh (Raid/RaidBanter.h)
     bool   raid_auto_accept_rez() const { return raid_auto_accept_rez_; }
 
     // Housing
@@ -608,6 +609,7 @@ private:
     bool   raid_enabled_     = true;
     bool   boss_warnings_enabled_ = true;
     bool   raid_callouts_enabled_ = true;
+    int32  raid_banter_ = 1;
     bool   raid_auto_accept_rez_ = true;
 
     bool   housing_enabled_  = true;

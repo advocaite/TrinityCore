@@ -131,7 +131,10 @@ uint32      g_bad_lines = 0;
 uint32      g_last_bad_warn_ms = 0;
 struct ChatAsk { BotId bot = 0; std::string sender; ObjectGuid sender_guid; bool sender_is_bot = false; std::string channel; uint32 asked_ms = 0;
                  uint64 talk_key = 0;         // a bot-to-bot talk line (AskTalk), kept for TakeTalk
-                 std::vector<BotId> group; }; // a group order (AskGroupOrder): the other bots that take the answer's action too
+                 std::vector<BotId> group;    // a group order (AskGroupOrder): the other bots that take the answer's action too
+                 uint32 deadline_ms = 0; };   // a raid line (AskRaidLine): an answer at or after this time is dropped (the fixed line was said)
+// Raid lines the program answered in time (AskRaidLine / RaidLineAnswered), by event id.
+std::unordered_set<uint64> g_raid_answered;
 // The group's part of a group order: each other bot runs the answer's action a moment after the first (HandleGroupFollowups).
 struct GroupFollowup { BotId bot = 0; ChatAsk ask; Reply reply; uint32 read_ms = 0, due_ms = 0; };
 std::vector<GroupFollowup> g_group_followups;
@@ -1786,6 +1789,13 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
                 continue;
             }
             ask = it->second;
+            if (ask.deadline_ms && int32(now_ms - ask.deadline_ms) >= 0)
+            {
+                // A raid line that came too late: the caller said its fixed line at the deadline.
+                TC_LOG_INFO("playerbot.v2", "[bridge] raid line {} came {} ms late, dropped", r.reply_to, now_ms - ask.deadline_ms);
+                g_chat.erase(it);
+                continue;
+            }
             bot = ask.bot;
             if (Player* p = FindBot(bot))
                 bot_name = p->GetName();
@@ -1840,6 +1850,12 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
                 channel = "whisper";   // a "sorry" goes to the one who asked, not to the whole street
                 to = ask.sender;
             }
+        }
+        if (!text.empty() && ask.deadline_ms)
+        {
+            if (g_raid_answered.size() > 512)
+                g_raid_answered.clear();
+            g_raid_answered.insert(r.reply_to);
         }
         if (!text.empty())
         {
@@ -2537,6 +2553,60 @@ bool BotBridge::AskTalk(Player* bot, std::string const& scene, std::string const
     g_chat[e.id] = ChatAsk{ bot->GetGUID().GetCounter(), std::string(), ObjectGuid::Empty, false, "say", now_ms, key ? key : kNoTalkKey };
     g_talk_minute.push_back(now_ms);
     return true;
+}
+
+uint64 BotBridge::AskRaidLine(Player* bot, std::string const& what, std::string const& detail, std::string const& example,
+                              std::string const& mood, std::string const& role, uint32 delay_ms, uint32 wait_ms)
+{
+    if (!ChatOn() || !bot || !bot->GetGroup())
+        return 0;
+    uint32 const now_ms = GameTime::GetGameTimeMS();
+    // Players come first: while two of their lines wait for an answer, the fixed line is said.
+    std::size_t waiting = 0;
+    for (auto const& kv : g_chat)
+        if (!kv.second.talk_key && !kv.second.deadline_ms && !kv.second.sender_is_bot && !kv.second.sender.empty() &&
+            now_ms - kv.second.asked_ms < 20000)
+            ++waiting;
+    if (waiting >= 2)
+        return 0;
+    Group const* group = bot->GetGroup();
+    std::string const channel = group->isRaidGroup() ? "raid" : "party";
+    // The language most of the group's real players read (one line goes to all of them).
+    std::array<uint32, TOTAL_LOCALES> count{};
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && m->GetSession() && !Services::Registry().has(m->GetGUID().GetCounter()))
+            if (LocaleConstant const l = m->GetSession()->GetSessionDbcLocale(); l < TOTAL_LOCALES)
+                ++count[l];
+    std::size_t best = 0;
+    for (std::size_t l = 0; l < count.size(); ++l)
+        if (count[l] > count[best])
+            best = l;
+    Event e;
+    e.type = "raid_line";
+    FillBot(e, bot, 0);
+    e.fields.emplace_back("what", what);
+    e.fields.emplace_back("detail", detail);
+    e.fields.emplace_back("example", example);
+    e.fields.emplace_back("mood", mood);
+    e.fields.emplace_back("role", role);
+    e.fields.emplace_back("channel", channel);
+    e.fields.emplace_back("locale", best < TOTAL_LOCALES ? localeNames[best] : "enUS");
+    e.numbers.emplace_back("delay_ms", delay_ms);
+    e.numbers.emplace_back("wait_ms", wait_ms);
+    if (Services::Config().bridge().swearing)
+        e.numbers.emplace_back("swearing", 1);
+    Write(e);
+    if (g_chat.size() > 2048)
+        g_chat.clear();
+    ChatAsk ask{ bot->GetGUID().GetCounter(), std::string(), ObjectGuid::Empty, true, channel, now_ms };
+    ask.deadline_ms = now_ms + wait_ms;
+    g_chat[e.id] = std::move(ask);
+    return e.id;
+}
+
+bool BotBridge::RaidLineAnswered(uint64 id)
+{
+    return id && g_raid_answered.erase(id) > 0;
 }
 
 bool BotBridge::QueueGreet(BotId bot, ObjectGuid player)

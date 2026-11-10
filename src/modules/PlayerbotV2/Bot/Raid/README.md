@@ -27,6 +27,10 @@ Port of Karrz's raid10-revamp ike3 raid logic (Karrz1/wow-1.12, src/game/PlayerB
 - `RaidCallouts.h`: bots say their new decision in raid chat like players ("Living Bomb on me, running out", "taunting
   Flamegor", "Polymorph on X, don't break it", "spread out"), from the change-only decision log at the end of `Brain::Update`.
   No model; rate limited per bot and per raid; Russian readers get the catalog lines. `Playerbot.Raid.Callouts` (default 1).
+- `RaidBanter.h`: a raid leader bot who reacts to mistakes (stood in the bad stuff, missed kick, broken cc, extra pull) and bots
+  that blame and excuse themselves after a wipe; `SpotMishaps` / `TrackPull` / `EndQuietPulls` in RaidBrain.cpp find them.
+  Fixed lines with a mild and a harsh set, rate limited by `BanterGate`; with the bridge on, a `raid_line` event asks the program
+  first and the fixed line is said when its answer is not back in `kModelWaitMs` (2.5 s). `Playerbot.Raid.Banter` (0 / 1 / 2).
 - `BossTactics.h`: the player's own plan per boss in plain words (`tactics Lucifron: adds first, no aoe, no fear, tank here`), kept per
   account and boss (OwnerRegistry, migration 0039). While that boss fights: kill order (`PublishTargets` takes the boss or the adds
   off the DPS candidates), `no_aoe`, `cc_deny` (left out of the crowd-control election and added to the snapshot's deny), and the

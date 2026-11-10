@@ -573,6 +573,13 @@ Playerbot.Raid.BossWarnings = 1
 # lines come from the raid rules, and they are rate limited (a few lines a minute). 0 turns them off.
 Playerbot.Raid.Callouts = 1
 
+# A raid leader bot who reacts to mistakes in raid chat (someone standing in the bad stuff, a cast nobody kicked, broken crowd
+# control, an extra pull) and bots that argue a little after a wipe ("healers?", "that was X's fault", "my bad"). Game mistakes
+# only, in good fun, never a slur. Works without a model; with the bot bridge answering chat the program may word the lines
+# (a line not back within 2.5 s is said the fixed way). At most one leader line every 20 s (mild) or 10 s (harsh).
+#   0 = off, 1 = mild (teasing), 2 = harsh (a leader who freaks out at every mishap)
+Playerbot.Raid.Banter = 1
+
 # A resurrection a bot casts on you is accepted for you after 3 s without an answer (the 70205 client shows no accept popup).
 Playerbot.Raid.AutoAcceptOwnerRez = 1
 

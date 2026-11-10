@@ -332,6 +332,15 @@ World bots are ambient characters with no owner (`Playerbot.World.Enable = 1` sp
   walks past; it only invites other bots. A player invites the bot himself (or whispers `invite` to it). 1 = the old way (invites players within 30 yards).
 - Companion banter (`PartyBanter`): a short lowercase line now and then on ready check, wipe, rez, death, boss
   kill; never in a group over 15 or with `Playerbot.Chatter.Enabled = 0`.
+- **Raid leader banter** (`Playerbot.Raid.Banter`: 0 off, 1 mild (default), 2 harsh): in a group with a real player, one bot
+  leads the raid's chat (the group leader if that is a bot, else an assistant bot, else the first bot) and reacts to mistakes:
+  standing in fire or another bad area, a cast nobody kicked, a broken crowd control (named when the server saw who hit it), an
+  extra pull. After a wipe one or two other bots answer (blame, excuses, "my bad"), and the kill gets a "gg". Mild teases, harsh
+  is a leader who freaks out at every mishap. Game mistakes only, never about the person, never a slur. Rate limited (one line
+  every 20 s, 10 s on harsh; the same mistake once in 45 s; the same raider once in 90 s). In a party of 15 or fewer with
+  `PartyBanter` on, the wipe and kill lines are the companions' own. No model needed; with the bot bridge answering chat, the
+  program may say it in the bot's own words, and a line not back within 2.5 s is the fixed line instead. Russian clients get
+  Russian.
 - Hostile-faction world bots can be placed near you (`Playerbot.World.FriendlyPct` and the per-zone `*FriendlyPct` keys, all 100 = none by default); lower them to
   get them (they fight on a PvP realm).
 
@@ -365,6 +374,8 @@ Defaults are those of `conf/playerbot.conf.dist`. Behaviour switches are read wh
 | `Playerbot.Pve.Coordinator.Enable` | 1 |
 | `Playerbot.Raid.Enable` | 1 |
 | `Playerbot.Raid.BossWarnings` | 1 |
+| `Playerbot.Raid.Callouts` | 1 |
+| `Playerbot.Raid.Banter` | 1 (0 off, 1 mild, 2 harsh) |
 | `Playerbot.Behavior.DungeonFlow` / `DungeonAutopilot` / `DungeonLoot` | 1 / 1 / 1 |
 | `Playerbot.Behavior.PullRecover` / `WipeReleaseWait` / `ReadyCheckInfo` | 1 / 1 / 1 |
 | `Playerbot.TankThreatMultiplier` | 3.0 |

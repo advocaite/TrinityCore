@@ -10,7 +10,9 @@
 #include "Api/BotLanguage.h"
 #include "DispelWorth.h"
 #include "RaidBrainInternal.h"
+#include "RaidBanter.h"
 #include "RaidCallouts.h"
+#include "../BotBridge.h"
 #include "RaidEncounters.h"
 #include "RaidGeometry.h"
 #include "RaidReadiness.h"
@@ -4153,6 +4155,237 @@ Brain& GetBrain()
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// Raid banter (RaidBanter.h): the raid leader bot reacts to mistakes, bots argue a little after a wipe.
+// ---------------------------------------------------------------------------
+
+BanterLevel BanterNow() { return BanterLevelFromConfig(Services::Config().raid_banter()); }
+
+bool GroupHasHuman(Group const* group)
+{
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            return true;
+    return false;
+}
+
+// `from` speaks in the group's chat: raid chat in a raid group, the sub-group's party chat otherwise; each reader reads it in his
+// language (BotLanguage, the Russian catalog).
+void SayInGroupChat(Player* from, Group* group, std::string const& text)
+{
+    bool const raid = group->isRaidGroup();
+    bool const leader = group->IsLeader(from->GetGUID());
+    ChatMsg const type = raid ? (leader ? CHAT_MSG_RAID_LEADER : CHAT_MSG_RAID) : (leader ? CHAT_MSG_PARTY_LEADER : CHAT_MSG_PARTY);
+    BotLanguage::GroupChat(from, group, type, text, raid ? -1 : group->GetMemberGroup(from->GetGUID()));
+}
+
+// The raid leader's voice on `map`: the group's leader when that is a bot, else an assistant bot, else the first bot by guid (alive
+// or not: a dead leader still talks). Null: no bot of the group there.
+Player* BanterLeader(Group* group, Map* map)
+{
+    Player* assistant = nullptr;
+    Player* first = nullptr;
+    for (GroupReference const& ref : group->GetMembers())
+    {
+        Player* m = ref.GetSource();
+        if (!m || !m->IsInWorld() || m->GetMap() != map || !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            continue;
+        if (group->IsLeader(m->GetGUID()))
+            return m;
+        if (!assistant && group->IsAssistant(m->GetGUID()))
+            assistant = m;
+        if (!first || m->GetGUID() < first->GetGUID())
+            first = m;
+    }
+    return assistant ? assistant : first;
+}
+
+// A line waiting for its time: the fixed text, said at `due` unless the program's own line for `ask` came back in time.
+struct BanterSay { uint32_t due = 0; ObjectGuid group; ObjectGuid bot; std::string text; uint64 ask = 0; };
+std::vector<BanterSay> g_banterQueue;
+BanterGate g_banter;
+
+void QueueBanter(Group* group, Player* bot, Mishap m, std::string const& name, std::string const& boss, std::string const& text,
+                 bool leader, BanterLevel level, uint32_t delayMs, uint32_t now)
+{
+    if (text.empty() || !bot || g_banterQueue.size() >= 64)
+        return;
+    uint64 const ask = BotBridge::AskRaidLine(bot, MishapWord(m), MishapDetail(m, name, boss), text, BanterLevelWord(level),
+                                              leader ? "raid leader" : "raider", delayMs, kModelWaitMs);
+    g_banterQueue.push_back({ now + (ask ? std::max(delayMs, kModelWaitMs) : delayMs), group->GetGUID(), bot->GetGUID(), text, ask });
+    TC_LOG_INFO("playerbot.v2.raid", "[raid_banter] {} ({}{}): {}{}", bot->GetName(), MishapWord(m), leader ? ", leader" : "", text,
+        ask ? " (asked the program first)" : "");
+}
+
+// World thread, every plan pass: the fixed lines whose time has come.
+void SayDueBanter(uint32_t now)
+{
+    for (auto it = g_banterQueue.begin(); it != g_banterQueue.end();)
+    {
+        if (int32_t(now - it->due) < 0)
+        {
+            ++it;
+            continue;
+        }
+        if (!it->ask || !BotBridge::RaidLineAnswered(it->ask))
+            if (Player* bot = ObjectAccessor::FindConnectedPlayer(it->bot))
+                if (Group* group = bot->GetGroup(); group && group->GetGUID() == it->group)
+                    SayInGroupChat(bot, group, it->text);
+        it = g_banterQueue.erase(it);
+    }
+}
+
+// The leader reacts to a mishap (rate limited per raid by BanterGate). `name`: the raider (or spell) it is about.
+void LeaderReacts(Group* group, Map* map, Mishap m, std::string const& name, std::string const& boss, uint32_t now)
+{
+    BanterLevel const level = BanterNow();
+    if (level == BanterLevel::Off || !group || !map || !GroupHasHuman(group))
+        return;
+    Player* leader = BanterLeader(group, map);
+    if (!leader || !g_banter.Allow(group->GetGUID().GetCounter(), m, name, level, now))
+        return;
+    QueueBanter(group, leader, m, name, boss, LeaderLine(m, level, name, urand(0, 2)), true, level, urand(600, 1600), now);
+}
+
+// After a wipe: the leader's line, then one or two other bots (blame, excuses, "my bad").
+void WipeBanter(Group* group, Map* map, std::string const& firstDead, std::string const& boss, uint32_t now)
+{
+    BanterLevel const level = BanterNow();
+    if (level == BanterLevel::Off || !group || !map || !GroupHasHuman(group))
+        return;
+    Player* leader = BanterLeader(group, map);
+    if (!leader || !g_banter.Allow(group->GetGUID().GetCounter(), Mishap::Wipe, std::string(), level, now))
+        return;
+    QueueBanter(group, leader, Mishap::Wipe, firstDead, boss, LeaderLine(Mishap::Wipe, level, firstDead, urand(0, 2)), true, level,
+        urand(1500, 3000), now);
+    std::vector<Player*> others;
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player* m = ref.GetSource(); m && m != leader && m->IsInWorld() && m->GetMap() == map &&
+                                         Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            others.push_back(m);
+    for (size_t i = others.size(); i > 1; --i)
+        std::swap(others[i - 1], others[urand(0, uint32(i - 1))]);
+    // The one who died first answers first when it is a bot ("my bad"); then somebody else.
+    for (size_t i = 0; i < others.size(); ++i)
+        if (others[i]->GetName() == firstDead)
+            std::swap(others[0], others[i]);
+    size_t const speakers = std::min<size_t>(others.size(), urand(1, 2));
+    uint32_t at = urand(4000, 6500);
+    for (size_t i = 0; i < speakers; ++i)
+    {
+        bool const self = others[i]->GetName() == firstDead;
+        std::string const blame = firstDead == others[i]->GetName() ? std::string() : firstDead;
+        QueueBanter(group, others[i], Mishap::Wipe, firstDead, boss, WipeReply(level, blame, self, urand(0, 31)), false, level, at, now);
+        at += urand(2500, 4500);
+    }
+}
+
+// Per raid group: what the banter watches between plan passes.
+struct BanterWatch
+{
+    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> bad;   // member -> (inside a hazard since, health then)
+    struct Cast { uint32_t spell = 0; int32_t left = 0; };
+    std::map<ObjectGuid, Cast> casts;                                  // enemy -> its interrupt-first cast in progress
+    struct Cc { int32_t left = 0; std::string hitter; };
+    std::map<ObjectGuid, Cc> cc;                                       // enemy -> its long crowd control, and a member hitting it
+    uint32_t seen = 0;
+};
+std::unordered_map<uint64_t, BanterWatch> g_banterWatch;
+
+// A member stands inside one of the hazard circles the raid rules put around it (noted by the movement pass for bots, and for the
+// humans at the end of the plan pass).
+void BanterNoteBad(uint64_t key, Player* p, bool inside, uint32_t now)
+{
+    auto& bad = g_banterWatch[key].bad;
+    uint64_t const id = p->GetGUID().GetCounter();
+    if (!inside)
+        bad.erase(id);
+    else if (!bad.count(id))
+        bad[id] = { now ? now : 1u, uint32_t(p->GetHealth()) };
+}
+
+int32_t LongestCcLeft(Unit* u)
+{
+    int32_t left = u->IsPolymorphed() ? 10000 : 0;
+    for (Ranks const* ranks : { &kBanish, &kShackle, &kHibernate, &kPolymorph })
+        for (uint32_t id : *ranks)
+            if (Aura const* a = u->GetAura(id))
+                left = std::max(left, a->GetDuration());
+    return left;
+}
+
+// The mishaps of one plan pass: a raider in the bad stuff for 3 s and hurt, an interrupt-first cast that went off, a long crowd control
+// broken under someone's damage. (Extra pulls: TrackPull; wipes and kills: EndQuietPulls.)
+void SpotMishaps(Plan const& plan, Group* group, uint64_t key, Map* map, uint32_t now)
+{
+    BanterWatch& w = g_banterWatch[key];
+    w.seen = now;
+    if (BanterNow() == BanterLevel::Off)
+        return;
+    std::string boss;
+    for (Unit* u : plan.enemies)
+        if (Creature* c = u->ToCreature(); c && IsBoss(c, plan.rules))
+            boss = c->GetName();
+
+    for (Member const& m : plan.members)
+    {
+        auto it = w.bad.find(m.p->GetGUID().GetCounter());
+        if (it == w.bad.end() || now - it->second.first < 3000 || m.p->GetHealth() >= it->second.second)
+            continue;
+        it->second = { now, uint32_t(m.p->GetHealth()) };   // the next call for the same raider needs another 3 s in it
+        LeaderReacts(group, map, Mishap::StoodInBad, m.p->GetName(), boss, now);
+    }
+
+    std::map<ObjectGuid, BanterWatch::Cast> casts;
+    std::map<ObjectGuid, BanterWatch::Cc> cc;
+    ObjectGuid const skull = group->GetTargetIcon(7);
+    for (Unit* enemy : plan.enemies)
+    {
+        if (Spell const* s = enemy->GetCurrentSpell(CURRENT_GENERIC_SPELL); s && InterruptFirst(plan.mapId, s->GetSpellInfo()->Id))
+            casts[enemy->GetGUID()] = { s->GetSpellInfo()->Id, s->GetTimer() };
+        if (Controlled(enemy))
+        {
+            BanterWatch::Cc c{ LongestCcLeft(enemy), {} };
+            for (Member const& m : plan.members)
+                if (m.p->GetVictim() == enemy)
+                    c.hitter = m.p->GetName();
+            cc[enemy->GetGUID()] = c;
+        }
+    }
+    // A cast that was nearly done and is gone without a school lockout on its caster went off: nobody kicked it.
+    for (auto const& [guid, was] : w.casts)
+    {
+        if (casts.count(guid) && casts[guid].spell == was.spell)
+            continue;
+        Unit* enemy = ObjectAccessor::GetUnit(*plan.members.front().p, guid);
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(was.spell, DIFFICULTY_NONE);
+        if (!enemy || !enemy->IsAlive() || !info || was.left > 700 || enemy->GetSpellHistory()->IsSchoolLocked(info->GetSchoolMask()))
+            continue;
+        char const* spellName = info->SpellName ? info->SpellName->Str[LOCALE_enUS] : nullptr;
+        LeaderReacts(group, map, Mishap::MissedKick, spellName ? spellName : "the cast", enemy->GetName(), now);
+    }
+    // A crowd control with more than 3 s left that is gone while its target lives: somebody broke it (the skull on it is the owner's
+    // call to kill it, not a mistake).
+    for (auto const& [guid, was] : w.cc)
+    {
+        if (cc.count(guid) || was.left <= 3000 || guid == skull)
+            continue;
+        Unit* enemy = ObjectAccessor::GetUnit(*plan.members.front().p, guid);
+        if (enemy && enemy->IsAlive() && enemy->IsInCombat())
+            LeaderReacts(group, map, Mishap::BrokeCc, was.hitter, boss, now);
+    }
+    w.casts = std::move(casts);
+    w.cc = std::move(cc);
+}
+
+void ForgetBanterWatch(uint32_t now)
+{
+    for (auto it = g_banterWatch.begin(); it != g_banterWatch.end();)
+        it = now - it->second.seen > 60000u ? g_banterWatch.erase(it) : std::next(it);
+    if (g_banter.Tracked() > 128)
+        g_banter.Prune(now);
+}
+
 // Pull log for the test-night digest (scripts/bot-log-digest.ps1). One [raid_encounter] line when a group on a raid map
 // enters combat and one when the fight is over (no enemy for 4 s): what was pulled, how long it took and how it ended.
 // World thread only, a few map operations per raid group every plan pass.
@@ -4174,6 +4407,9 @@ struct PullLog
     std::unordered_map<uint64_t, std::string> hitBy;
     std::string firstDead, firstCause;
     uint32_t deaths = 0;
+    // Extra pulls (RaidBanter): new mobs that are no summons joining after the pull's first seconds, counted in a 5 s window.
+    uint32_t newMobsFrom = 0, newMobs = 0;
+    std::string newMobsOn;   // the raider the first of them attacks
 };
 std::unordered_map<uint64_t, PullLog> g_pulls;
 constexpr uint32_t kPullEndQuietMs = 4000;
@@ -4461,6 +4697,29 @@ void TrackPull(uint64_t key, Group* group, detail::Plan const& plan, Map* map, u
         bool const boss = detail::IsBoss(c, plan.rules);
         pl.engaged.emplace(c->GetGUID(), PullLog::Mob{ c->GetEntry(), c->GetName(), boss });
         added = true;
+        // A pack joining a fight that runs (not the boss's own summons, not in the pull's first 8 s): an extra pull.
+        if (!boss && !c->IsSummon() && now_ms - pl.startMs >= 8000)
+        {
+            if (!pl.newMobsFrom || now_ms - pl.newMobsFrom > 5000)
+            {
+                pl.newMobsFrom = now_ms ? now_ms : 1u;
+                pl.newMobs = 0;
+                pl.newMobsOn.clear();
+            }
+            ++pl.newMobs;
+            if (pl.newMobsOn.empty())
+                if (Unit* v = c->GetVictim(); v && v->IsPlayer())
+                    pl.newMobsOn = v->GetName();
+        }
+    }
+    if (pl.newMobs >= 2)
+    {
+        std::string boss;
+        for (auto const& [eg, em] : pl.engaged)
+            if (em.boss && boss.empty())
+                boss = em.name;
+        LeaderReacts(group, map, Mishap::ExtraPull, pl.newMobsOn, boss, now_ms);
+        pl.newMobs = 0;
     }
     for (auto& [eg, em] : pl.engaged)
         if (Creature* ec = map->GetCreature(eg))
@@ -4548,6 +4807,20 @@ void EndQuietPulls(uint32_t now_ms)
         // The boss dead is a kill even with its adds still standing (Garr's Firesworn, Ragnaros' Sons of Flame): the left list names them.
         bool const bossKilled = bosses > 0 && bossesDead == bosses;
         char const* result = killed == pl.engaged.size() || bossKilled ? "kill" : ((alive * 4 <= pl.startAlive && mostDead) || humanDeadNoneAlive ? "wipe" : "reset");
+        // The raid leader's word on it, and after a wipe the others' (RaidBanter). A group of 15 or fewer has the companions' own
+        // wipe and kill lines (PartyBanter) instead.
+        if (Group* bg = sGroupMgr->GetGroupByGUID(ObjectGuid::Create<HighGuid::Party>(pl.groupLow));
+            bg && map && (bg->GetMembersCount() > 15 || !Services::Config().behavior_party_banter()))
+        {
+            std::string bossName;
+            for (auto const& [guid, mob] : pl.engaged)
+                if (mob.boss && bossName.empty())
+                    bossName = mob.name;
+            if (bossKilled)
+                LeaderReacts(bg, map, Mishap::BossDown, pl.firstDead, bossName, now_ms);
+            else if (std::strcmp(result, "wipe") == 0)
+                WipeBanter(bg, map, pl.firstDead, bossName, now_ms);
+        }
         TC_LOG_INFO("playerbot.v2.raid", "[raid_encounter] ts={} map={} group={} pull end: result={} dur={}s killed={}/{} alive={}/{} deaths={} | {}{}{}",
             uint64_t(GameTime::GetGameTime()), pl.mapId, pl.groupLow, result, (pl.lastSeenMs - pl.startMs) / 1000, killed,
             uint32_t(pl.engaged.size()), alive, pl.startAlive, pl.deaths, PullLabel(pl), left.empty() ? "" : " | left: ", left);
@@ -5009,6 +5282,7 @@ void Brain::Update(uint32_t now_ms)
 
     LogDeadHumanReleaseState(now_ms);
     EndAbandonedEncounters(now_ms);
+    SayDueBanter(now_ms);
 
     // Bucket bots on raid maps that have rules by (group, map).
     struct Bucket { Group* group = nullptr; uint32_t mapId = 0; uint64_t refBot = 0; Player* ref = nullptr; };
@@ -5204,6 +5478,7 @@ void Brain::Update(uint32_t now_ms)
                 o.active = true;
                 std::vector<Circle> const circles = HazardsFor(plan, m, now_ms);
                 nextMoveCtx[m.p->GetGUID().GetCounter()] = BuildMoveContext(plan, m, circles);
+                BanterNoteBad(key, m.p, !circles.empty() && InsideAny(circles, m.p->GetPositionX(), m.p->GetPositionY(), 0.0f), now_ms);
                 if (!m.p->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
                 {
                     DecideMove(plan, m, now_ms, circles, o);
@@ -5285,6 +5560,19 @@ void Brain::Update(uint32_t now_ms)
         ApplyFightScript(plan, next, now_ms, dump);
         PublishMeleeSoak(plan, next);
         PublishAuraReactions(plan, next);
+
+        // The raid leader's eye (RaidBanter): the humans' hazard circles too (the bots' were noted by the movement pass), then the
+        // mishaps of this pass. Last in the pass, so the hazard pass's per-member scratch state is no longer read by anything.
+        if (BanterNow() != BanterLevel::Off)
+        {
+            for (Member const& m : plan.members)
+                if (!m.bot)
+                {
+                    std::vector<Circle> const circles = HazardsFor(plan, m, now_ms);
+                    BanterNoteBad(key, m.p, !circles.empty() && InsideAny(circles, m.p->GetPositionX(), m.p->GetPositionY(), 0.0f), now_ms);
+                }
+            SpotMishaps(plan, b.group, key, b.ref->GetMap(), now_ms);
+        }
     }
 
     // Change-only decision log (WARN so it shows with the usual Logger.playerbot.v2=3 test setup):
@@ -5321,6 +5609,7 @@ void Brain::Update(uint32_t now_ms)
         lastSignature.clear();
     if (g_callouts.Tracked() > 256)
         g_callouts.Prune(now_ms);
+    ForgetBanterWatch(now_ms);
     if (g_lastTacticSpot.size() > 256)
         g_lastTacticSpot.clear();
     if (g_lastTacticSpotLog.size() > 256)
