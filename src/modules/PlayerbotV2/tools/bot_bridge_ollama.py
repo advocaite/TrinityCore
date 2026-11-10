@@ -470,6 +470,88 @@ class ChatApi:
             pass
 
 
+class BackupApi:
+    """The local model first, a second service only when needed (optional, off by default): when the local one is not
+    running, fails or times out, or when it is so busy that a player would get the quick fixed line. The second service is
+    whatever the player set in BotBridge\\backup.txt (or --backup-url): his own key for an online service (DeepSeek, Willzor's
+    API, any OpenAI-style one) or a bigger model on another PC. Nothing goes there unless he set it."""
+
+    def __init__(self, primary, backup):
+        self.primary, self.backup = primary, backup
+        self.used = 0
+
+    def __getattr__(self, name):          # avg_s, timeout, up, warm, no_think, next_check... are the local model's
+        return getattr(self.primary, name)
+
+    def __setattr__(self, name, value):
+        if name in ("primary", "backup", "used"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.primary, name, value)
+
+    def check(self):
+        return self.primary.check() or self.backup.check()
+
+    def chat(self, system, user, timeout=None, backup_first=False):
+        if backup_first or not self.primary.check():
+            return self._backup(system, user, timeout, "the local model is busy" if backup_first else "the local model is down")
+        try:
+            return self.primary.chat(system, user, timeout)
+        except (OSError, ValueError) as e:
+            return self._backup(system, user, timeout, "the local model failed (%s)" % e)
+
+    def _backup(self, system, user, timeout, why):
+        if not self.backup.check():
+            raise OSError("%s and the backup service is not reachable" % why)
+        self.used += 1
+        if self.used <= 3 or self.used % 50 == 0:
+            log("backup service answers (%s; %d so far)" % (why, self.used))
+        return self.backup.chat(system, user, timeout)
+
+    def for_event(self, event):
+        """This event's model: the backup first when the main loop sent it there (the local model is too busy)."""
+        return _BackupFirst(self) if event.get("_backup") else self
+
+
+class _BackupFirst:
+    def __init__(self, api):
+        self._api = api
+
+    def __getattr__(self, name):
+        return getattr(self._api, name)
+
+    def chat(self, system, user, timeout=None):
+        return self._api.chat(system, user, timeout, backup_first=True)
+
+
+def read_backup_settings(folder, opts):
+    """url / model / key of the optional second service: --backup-url etc., else backup.txt next to this program (the
+    repack's bot-bridge folder, beside models.txt) or in the BotBridge folder ("url = ...", "model = ...", "key = ..." lines,
+    # comments). Empty url: no second service (the default)."""
+    got = {"url": opts.backup_url or "", "model": opts.backup_model or "", "key": opts.backup_key or ""}
+    if got["url"]:
+        return got
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup.txt"), os.path.join(folder, "backup.txt")):
+        found = {}
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.split("#", 1)[0].strip()
+                    if "=" in line:
+                        k, v = (x.strip() for x in line.split("=", 1))
+                        if k.lower() in got and v:
+                            found[k.lower()] = v.strip('"')
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            log("could not read %s (%s)" % (path, e))
+            continue
+        if found.get("url"):        # the shipped template (url empty) does not hide the other file
+            got.update({k: found.get(k, "") or got[k] for k in got})
+            return got
+    return got
+
+
 # ---- prompt and answer ----
 
 def spell_key(name):
@@ -915,6 +997,7 @@ def typing_delay(say, rng, acting):
 
 
 def answer(event, api, actions_on, minds, opts):
+    api = api.for_event(event) if hasattr(api, "for_event") else api
     started = time.time()
     bot, player = event.get("bot", ""), event.get("from", "")
     swearing = bool(event.get("swearing")) and not opts.no_swearing
@@ -1029,6 +1112,8 @@ def answer(event, api, actions_on, minds, opts):
 def answer_talk(event, api, minds, opts):
     """A world bot's next line in a talk with other bots (a gathering by the city gate): the scene and the lines so far come
     from the server; the bot's own persona decides how it writes. No line when the model is down or busy: the talk just ends."""
+    # Bots' own talk and posts never go to the backup service: it is there for players' answers (and may cost its owner).
+    api = getattr(api, "primary", api)
     started = time.time()
     bot = event.get("bot", "")
     if not api.check():
@@ -1123,6 +1208,10 @@ def main():
     ap.add_argument("--no-typing-delay", action="store_true", help="answer as soon as the model is done")
     ap.add_argument("--minds", default=None, help="where personas, memories and opinions are kept (default FOLDER\\minds)")
     ap.add_argument("--think", action="store_true", help="let thinking models think before they answer (slower; off by default)")
+    ap.add_argument("--backup-url", default=None, help="a second OpenAI-style service, used only when the local model is down, "
+                    "fails or is too busy (off by default; also BotBridge\\backup.txt)")
+    ap.add_argument("--backup-model", default=None, help="the second service's model name")
+    ap.add_argument("--backup-key", default=os.environ.get("BOT_BRIDGE_BACKUP_KEY", ""), help="the second service's key")
     ap.add_argument("--log", default=None, help="write what this program prints to this file too (the launcher's ai-bots\\program.log)")
     opts = ap.parse_args()
     if opts.log:
@@ -1139,11 +1228,22 @@ def main():
     actions_on = not opts.no_actions
     api = ChatApi(url, opts.model, opts.key, opts.timeout)
     api.no_think = not opts.think
+    backup = read_backup_settings(folder, opts)
+    has_backup = bool(backup["url"] and backup["model"])
+    if backup["url"] and not backup["model"]:
+        log("backup service %s has no model name: not used (add \"model = ...\")" % backup["url"])
+    if has_backup:
+        second = ChatApi(backup["url"], backup["model"], backup["key"], min(opts.timeout, 30))
+        second.no_think = True
+        second.can_warm = False
+        api = BackupApi(api, second)
+        log("backup service: %s at %s, only when the local model is down, fails or is too busy" % (backup["model"], backup["url"]))
     minds = Minds(opts.minds or os.path.join(folder, "minds"))
     if api.check():
         threading.Thread(target=api.warm, daemon=True).start()   # loads the model now, not on the first player's line
     last_warm, last_chat = time.time(), 0.0
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, opts.workers) + 1)   # one more for warm()
+    # one more for warm(); with a backup service, room for the answers it takes while the local model is busy
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, opts.workers) * (2 if has_backup else 1) + 1)
     pending, chat_pending = set(), set()
     log("bot bridge: folder %s, model %s at %s, actions %s" % (folder, opts.model, url, "on" if actions_on else "off"))
 
@@ -1183,7 +1283,11 @@ def main():
                     e["_seen"], e["_folder"] = time.time(), folder
                     # The model can't keep up (a slow PC, or a crowd talking at once): when this one would wait more than
                     # MAX_WAIT_S for its turn, it gets the quick fixed answer instead.
-                    if len(pending) >= opts.workers * 4 or len(pending) * api.avg_s / max(1, opts.workers) > MAX_WAIT_S:
+                    busy = len(pending) >= opts.workers * 4 or len(pending) * api.avg_s / max(1, opts.workers) > MAX_WAIT_S
+                    if busy and has_backup and len(pending) < opts.workers * 8:
+                        e["_backup"] = True     # the second service answers this one instead of the quick fixed line
+                        busy = False
+                    if busy:
                         reply = fixed_answer(e)
                         if reply is None:
                             continue

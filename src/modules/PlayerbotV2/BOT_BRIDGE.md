@@ -200,10 +200,17 @@ in the player guide (`BOT_BRIDGE_PLAYERS.txt`).
 - Thinking models are asked to answer at once (`reasoning_effort: "none"`; a service that refuses the field is asked
   without it). Left to think, they spend the whole answer on hidden reasoning and the content comes back empty.
 Options: `--url`, `--model`, `--key`, `--workers` (model calls at once, default 2), `--timeout`, `--no-actions`, `--no-swearing`,
-`--no-typing-delay`, `--minds`, `--think` (let thinking models think), `--log FILE` (also write what it prints to a file).
+`--no-typing-delay`, `--minds`, `--think` (let thinking models think), `--log FILE` (also write what it prints to a file),
+`--backup-url`, `--backup-model`, `--backup-key` (or `BOT_BRIDGE_BACKUP_KEY`).
+
+Backup service (optional, off by default): a second OpenAI-style service the player sets up, in `backup.txt` next to
+the program (`url = `, `model = `, `key = `; the repack ships it empty, from `tools/bot_bridge_backup.txt`) or with the
+`--backup-*` options. It answers a player's line only when the local model is not running, fails or times out, or is so
+busy that the player would get the quick fixed line; then that line goes to that service, which may charge for it. Bots'
+talk with each other and channel posts never use it. program.log says "backup service answers (why; N so far)".
 
 In the repack both programs, this guide, the player guide (`BOT_BRIDGE_PLAYERS.txt`, as `README.txt`) and
-`tools/bot_bridge_models.txt` (as `models.txt`) are in `repack\bot-bridge\`. The launcher's AI BOTS tab (`repack/launcher/AiBots.cs`,
+`tools/bot_bridge_models.txt` (as `models.txt`) and `tools/bot_bridge_backup.txt` (as `backup.txt`) are in `repack\bot-bridge\`. The launcher's AI BOTS tab (`repack/launcher/AiBots.cs`,
 `AiBotsTab.cs`) runs the program for players: it takes its tiers from `models.txt`, keeps its choice in `config\ai-bots.txt`,
 writes the bridge lines into the player's `zz-9-local.conf`, and starts the program with the launcher's own Python
 (`ai-bots\python`, python.org's embeddable package, SHA-256 checked against python.org's own list) whenever the realm runs;

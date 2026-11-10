@@ -34,6 +34,7 @@ What is in this folder (repack\bot-bridge\)
   bot_bridge_ollama.py    the program with Ollama: bots talk and act with a language model
   bot_bridge_example.py   a tiny program with fixed answers: a starting point for your own program
   models.txt              the model behind each tier of the launcher's AI BOTS tab (you can change them)
+  backup.txt              optional: a second service for when your PC is too slow or Ollama is off (empty = never used)
   BOT_BRIDGE.md           the full technical guide: every file, field, action and limit
 
 What you need
@@ -137,6 +138,13 @@ Your own program
 - server\BotBridge\status.json says every 10 seconds that the server is up.
 - The easy way: copy bot_bridge_example.py and replace its answer() with your own code.
 Everything else is in BOT_BRIDGE.md.
+
+A backup service (optional)
+---------------------------
+On a slow PC, or when Ollama is not running, bots answer with a short fixed line. If you have a key for an online service
+(DeepSeek, OpenRouter, ...) or a bigger PC at home running Ollama, put it in backup.txt (url, model, key) and restart the
+AI bots. Then only those lines go there; everything else stays on your PC. An online service may charge for what it
+answers. Bots chatting with each other never use it. Leave url empty and nothing is ever sent anywhere.
 
 To turn it off
 --------------

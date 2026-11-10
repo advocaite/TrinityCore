@@ -1,0 +1,13 @@
+# A second AI service for the talking bots, used ONLY when the local model (Ollama) is not running, fails, or is too busy
+# to answer a player in time. Off by default: leave "url" empty and nothing ever goes anywhere else.
+#
+# Fill in the three lines to turn it on, then restart the AI bots. Players' chat with the bots is then sent to that
+# service when it is used, and an online service may charge for it. Bots chatting with each other never use it.
+#
+# Examples (any service that speaks the OpenAI-style chat API works):
+#   DeepSeek:            url = https://api.deepseek.com/v1          model = deepseek-chat
+#   OpenRouter:          url = https://openrouter.ai/api/v1         model = qwen/qwen-2.5-7b-instruct
+#   A bigger PC at home: url = http://192.168.1.20:11434/v1         model = qwen2.5:14b      (no key)
+url =
+model =
+key =
