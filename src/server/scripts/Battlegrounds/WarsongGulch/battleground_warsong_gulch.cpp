@@ -23,6 +23,7 @@
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -616,6 +617,8 @@ namespace ClassicWarsongGulch
     static constexpr uint32 MaxTeamScore = 3;
     static constexpr Milliseconds FlagRespawnTime = 23s;    // after a capture
     static constexpr Milliseconds FlagDropTime = 10s;       // dropped flag returns to its base
+    static constexpr Milliseconds BuffCheckInterval = 200ms;
+    static constexpr float BuffPickupRadius = 3.0f;
     static constexpr float CaptureRadius = 6.0f;            // areatrigger radius 5 + tolerance
     static constexpr std::array<Position, PVP_TEAMS_COUNT> CapturePoints =
     { {
@@ -753,6 +756,11 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
     {
         if (gameObject->GetEntry() >= ClassicWarsongGulch::GO_DOOR_FIRST && gameObject->GetEntry() <= ClassicWarsongGulch::GO_DOOR_LAST)
             _doors.insert(gameObject->GetGUID());
+        // A rune enters the map at the start and again when its respawn time has run down (Map::ProcessRespawns).
+        if (gameObject->HasStringId("bg_buff_object"))
+            TC_LOG_INFO("bg.buffs", "[bg_buff] WSG instance {} rune {} ({}) spawn {} in the world at ({:.1f}, {:.1f}, {:.1f})",
+                battleground->GetInstanceID(), gameObject->GetEntry(), gameObject->GetGOInfo()->name, gameObject->GetSpawnId(),
+                gameObject->GetPositionX(), gameObject->GetPositionY(), gameObject->GetPositionZ());
     }
 
     void OnUpdate(uint32 diff) override
@@ -762,6 +770,27 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
             return;
 
         Milliseconds const elapsed(diff);
+
+        // Speed / Restoration / Berserking buffs: the classic client's buff area triggers are not all in the client data (the flag
+        // zones had to be added the same way), so a player who walks over a buff object is found here, as the capture is, instead of
+        // through at_battleground_buffs.
+        _buffTimer -= elapsed;
+        if (_buffTimer <= 0ms)
+        {
+            _buffTimer = BuffCheckInterval;
+            for (auto const& [guid, bgPlayer] : battleground->GetPlayers())
+                if (Player* player = ObjectAccessor::GetPlayer(battlegroundMap, guid))
+                    if (player->IsAlive())
+                        if (GameObject* buff = player->FindNearestGameObjectWithOptions(BuffPickupRadius, { .StringId = "bg_buff_object" }))
+                        {
+                            TC_LOG_INFO("bg.buffs", "[bg_buff] WSG instance {} {} takes rune {} ({}) spawn {} at {:.1f} y (dz {:.1f}), respawn in {} s",
+                                battleground->GetInstanceID(), player->GetName(), buff->GetEntry(), buff->GetGOInfo()->name, buff->GetSpawnId(),
+                                player->GetExactDist(buff), player->GetPositionZ() - buff->GetPositionZ(),
+                                buff->GetGameObjectData() ? buff->GetGameObjectData()->spawntimesecs : 0);
+                            buff->ActivateObject(GameObjectActions::Disturb, 0, player);
+                            buff->DespawnOrUnsummon();
+                        }
+        }
 
         if (_respawnTimer > 0ms)
         {
@@ -1094,14 +1123,17 @@ private:
         battleground->EndBattleground(winner);
     }
 
-    static constexpr uint32 PVP_STAT_FLAG_CAPTURES = 928;
-    static constexpr uint32 PVP_STAT_FLAG_RETURNS = 929;
+    // PVPStat ids of map 489 in the 1.60 client (928 / 929 are the 2106 remake's): a stat the map does not list is dropped, which left
+    // the Flag Captures / Flag Returns columns empty
+    static constexpr uint32 PVP_STAT_FLAG_CAPTURES = 42;
+    static constexpr uint32 PVP_STAT_FLAG_RETURNS = 44;
 
     std::array<ClassicWarsongGulch::WsgFlagState, PVP_TEAMS_COUNT> _flagStates = { { ClassicWarsongGulch::WsgFlagState::OnBase, ClassicWarsongGulch::WsgFlagState::OnBase } };
     std::array<ObjectGuid, PVP_TEAMS_COUNT> _flagKeepers;
     std::array<ObjectGuid, PVP_TEAMS_COUNT> _droppedFlags;
     std::array<Milliseconds, PVP_TEAMS_COUNT> _dropTimers = { { 0ms, 0ms } };
     Milliseconds _respawnTimer = 0ms;
+    Milliseconds _buffTimer = 0ms;
     GuidSet _doors;
     bool _isWeekend = false;
     uint32 _reputationCapture = 35;

@@ -366,6 +366,8 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
 
         uint32 GetId() const;
         bool Instanceable() const;
+        // true if this map keeps creature/gameobject respawn times in the characters.respawn table
+        virtual bool PersistsRespawnTimes() const;
         bool IsWorldMap() const;
         bool IsDungeon() const;
         bool IsNonRaidDungeon() const;
@@ -443,6 +445,11 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         GameObject* GetGameObject(ObjectGuid const& guid);
         Pet* GetPet(ObjectGuid const& guid);
         Transport* GetTransport(ObjectGuid const& guid);
+        // Read-only access to the map's MO-transport set (ships/zeppelins).
+        // These live in _transports, NOT the grid, so Cell::VisitGridObjects
+        // never returns them — the Playerbot AI needs this to find a nearby
+        // docked ship to board for cross-continent travel.
+        std::set<Transport*> const& GetTransports() const { return _transports; }
         Creature* GetCreatureBySpawnId(ObjectGuid::LowType spawnId) const;
         GameObject* GetGameObjectBySpawnId(ObjectGuid::LowType spawnId) const;
         AreaTrigger* GetAreaTriggerBySpawnId(ObjectGuid::LowType spawnId) const;
@@ -577,12 +584,15 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
 
         void AddUpdateObject(BaseEntity* obj)
         {
-            _updateObjects.insert(obj);
+            // Null check only - BaseEntity is forward declared, can't call methods here
+            if (obj)
+                _updateObjects.insert(obj);
         }
 
         void RemoveUpdateObject(BaseEntity* obj)
         {
-            _updateObjects.erase(obj);
+            if (obj)
+                _updateObjects.erase(obj);
         }
 
         size_t GetActiveNonPlayersCount() const
@@ -903,6 +913,7 @@ class TC_GAME_API InstanceMap : public Map
         void UpdateInstanceLock(UpdateAdditionalSaveDataEvent const& updateSaveDataEvent);
         void CreateInstanceLockForPlayer(Player* player);
         TransferAbortParams CannotEnter(Player* player) override;
+        bool PersistsRespawnTimes() const override;
 
         uint32 GetMaxPlayers() const;
         TeamId GetTeamIdInInstance() const;
@@ -916,7 +927,10 @@ class TC_GAME_API InstanceMap : public Map
 
         std::string GetDebugInfo() const override;
     private:
+        void BindPlayerOnEntry(Player* player);
+
         Optional<SystemTimePoint> i_instanceExpireEvent;
+        bool i_respawnsPersisted = false; // a real player is bound to this raid instance, dead creatures stay dead until the lockout resets
         InstanceScript* i_data;
         uint32 i_script_id;
         std::unique_ptr<InstanceScenario> i_scenario;

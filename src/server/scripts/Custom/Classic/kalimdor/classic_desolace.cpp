@@ -700,7 +700,7 @@ enum GizeltonCaravan
     QUEST_BOTTOM            = 5943,
     QUEST_TOP               = 5821,
 
-    // SetGUID id: a (future) npc_rigger_gizelton port calls cork->AI()->SetGUID(player->GetGUID(), DATA_RIGGER_QUEST_ACCEPTED)
+    // SetGUID id: classic_npc_rigger_gizelton calls cork->AI()->SetGUID(player->GetGUID(), DATA_RIGGER_QUEST_ACCEPTED)
     DATA_RIGGER_QUEST_ACCEPTED = 1
 };
 
@@ -1049,7 +1049,7 @@ struct classic_npc_cork_gizelton : public EscortAI
             ResumePath(player);
     }
 
-    // VMaNGOS QuestAccept_npc_rigger_gizelton (script "npc_rigger_gizelton" is not part of this port) calls ResumePath on Cork
+    // VMaNGOS QuestAccept_npc_rigger_gizelton (classic_npc_rigger_gizelton) calls ResumePath on Cork
     void SetGUID(ObjectGuid const& guid, int32 id) override
     {
         if (id == DATA_RIGGER_QUEST_ACCEPTED)
@@ -1203,10 +1203,27 @@ private:
     bool _rigger;
 };
 
+// Rigger Gizelton: summoned by Cork with the caravan (no spawn of his own). VMaNGOS QuestAccept_npc_rigger_gizelton: taking
+// Gizelton Caravan (5943) from him at the southern camp sets the caravan off.
+struct classic_npc_rigger_gizelton : public ScriptedAI
+{
+    classic_npc_rigger_gizelton(Creature* creature) : ScriptedAI(creature) { }
+
+    void OnQuestAccept(Player* player, Quest const* quest) override
+    {
+        if (quest->GetQuestId() != QUEST_BOTTOM)
+            return;
+
+        if (Creature* cork = me->FindNearestCreature(NPC_CORK_GIZELTON, 100.0f))
+            cork->AI()->SetGUID(player->GetGUID(), DATA_RIGGER_QUEST_ACCEPTED);
+    }
+};
+
 void AddSC_classic_desolace()
 {
     RegisterGameObjectAI(classic_go_hand_of_iruxos_crystal);
     RegisterCreatureAI(classic_npc_melizza_brimbuzzle);
     RegisterCreatureAI(classic_npc_dalinda_malem);
     RegisterCreatureAI(classic_npc_cork_gizelton);
+    RegisterCreatureAI(classic_npc_rigger_gizelton);
 }

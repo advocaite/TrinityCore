@@ -301,6 +301,9 @@ class TC_GAME_API Group
         bool IsFull() const;
         bool isLFGGroup()  const;
         bool isRaidGroup() const;
+        bool HasBotMember() const;
+        // a raid that blocks normal quests: one with more players than a party holds (bots alone do not make a raid for quests)
+        bool IsRaidForQuests() const;
         bool isBGGroup()   const;
         bool isBFGroup()   const;
         bool IsCreated()   const;
@@ -352,7 +355,11 @@ class TC_GAME_API Group
 
         void ChangeMembersGroup(ObjectGuid guid, uint8 group);
         void SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid);
+        // Puts the member list in the given order (a client lists a raid sub-group in list order). Guids not in the group are ignored;
+        // members not named keep their relative order behind the named ones. Sends the group update.
+        void ReorderMembers(std::vector<ObjectGuid> const& order);
         void SetTargetIcon(uint8 symbol, ObjectGuid target, ObjectGuid changedBy);
+        ObjectGuid GetTargetIcon(uint8 symbol) const { return symbol < TARGET_ICONS_COUNT ? m_targetIcons[symbol] : ObjectGuid::Empty; }
         void SetGroupMemberFlag(ObjectGuid guid, bool apply, GroupMemberFlags flag);
         void RemoveUniqueGroupMemberFlag(GroupMemberFlags flag);
 

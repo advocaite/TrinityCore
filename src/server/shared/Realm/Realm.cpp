@@ -38,6 +38,13 @@ void Realm::SetName(std::string name)
 
 boost::asio::ip::address Realm::GetAddressForClient(boost::asio::ip::address const& clientAddr) const
 {
+    // A game on the server's own PC (or a friend coming in through the launcher's tunnel, which also arrives on this PC)
+    // always reaches the world server at 127.0.0.1: both BindIP settings the repack uses (127.0.0.1 and 0.0.0.0) listen there.
+    // Picking a network address instead tied the login to whatever network card was up when the server started: with a VPN
+    // on at start, the realm handed out the VPN's address and logins broke once the VPN was turned off.
+    if (clientAddr.is_loopback())
+        return boost::asio::ip::address_v4::loopback();
+
     if (auto addressIndex = Trinity::Net::SelectAddressForClient(clientAddr, Addresses))
         return Addresses[*addressIndex];
 

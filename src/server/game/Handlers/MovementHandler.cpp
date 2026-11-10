@@ -618,19 +618,14 @@ void WorldSession::HandleMovementOpcode(OpcodeClient opcode, MovementInfo& movem
         {
             if (!(plrMover->GetBattleground() && plrMover->GetBattleground()->HandlePlayerUnderMap(_player)))
             {
-                // NOTE: this is actually called many times while falling
-                // even after the player has been teleported away
-                /// @todo discard movement packets after the player is rooted
-                if (plrMover->IsAlive())
+                // NOTE: this is actually called many times while falling, so the repop is requested once per teleport.
+                // Falling out of the world is not the player's fault: an alive player goes back to the nearest graveyard
+                // instead of dying (RepopAtGraveyard revives at the teleport when he is below the map's minimum height)
+                if (plrMover->IsAlive() && !plrMover->IsBeingTeleported())
                 {
-                    TC_LOG_DEBUG("entities.player.falldamage", "FALLDAMAGE Below map. Map min height: {} , Player debug info:\n{}", plrMover->GetMap()->GetMinHeight(plrMover->GetPhaseShift(), movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY()), plrMover->GetDebugInfo());
+                    TC_LOG_DEBUG("entities.player.falldamage", "FALLDAMAGE Below map. Map min height: {} , Player debug info:\n{}", minHeight, plrMover->GetDebugInfo());
                     plrMover->SetPlayerFlag(PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
-                    plrMover->EnvironmentalDamage(DAMAGE_FALL_TO_VOID, GetPlayer()->GetMaxHealth());
-                    // player can be alive if GM/etc
-                    // change the death state to CORPSE to prevent the death timer from
-                    // starting in the next player update
-                    if (plrMover->IsAlive())
-                        plrMover->KillPlayer();
+                    plrMover->RepopAtGraveyard();
                 }
             }
         }

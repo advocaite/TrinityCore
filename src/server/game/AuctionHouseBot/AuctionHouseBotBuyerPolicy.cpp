@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseBotBuyerPolicy.h"
+#include "AuctionHouseBotVanilla.h"
 #include "AuctionHouseMgr.h"
 #include "Common.h"
 #include "Config.h"
@@ -41,12 +42,20 @@ namespace
     uint32 _maxBuysPerHour = 0;       // 0 = unlimited
     bool _fair = false;
     float _fairMinChance = 35.0f;     // percent at the price cap
+    uint32 _dropFloorPerLevel = 0;    // copper per item level, 0 = off
 
     time_t _dayStart = 0;
     uint64 _spentToday = 0;
     uint32 _boughtToday = 0;
     time_t _hourStart = 0;
     uint32 _boughtThisHour = 0;
+
+    struct Counters
+    {
+        uint32 fresh = 0, hourLimit = 0, dayLimit = 0, bought = 0, bid = 0, lostRoll = 0, overCap = 0;
+        uint32 cycles = 0, emptyCycles = 0;
+    } _counters;
+    time_t _countersLogged = 0;
 
     void RollWindows(time_t now)
     {
@@ -63,19 +72,44 @@ namespace
         }
     }
 
+    // Loot-only scrolls, potions, recipes and other drops carry a token vendor price (a scroll sells for a few copper),
+    // so their fair price came out at 1 silver and the price cap at 4 silver: a player's listing at any normal price
+    // was never bought, while crafted gear (real vendor value) sold. Give white and better consumables, recipes and
+    // miscellaneous items a floor by item level (AuctionHouseBot.Buyer.DropFloorPerLevel copper per level).
+    // Gray junk and trade goods (cloth, herbs, ore) keep their old value.
+    uint64 DropFloor(ItemTemplate const* proto)
+    {
+        if (!_dropFloorPerLevel || proto->GetQuality() < ITEM_QUALITY_NORMAL)
+            return 0;
+        switch (proto->GetClass())
+        {
+            case ITEM_CLASS_CONSUMABLE:
+            case ITEM_CLASS_RECIPE:
+            case ITEM_CLASS_MISCELLANEOUS:
+                break;
+            default:
+                return 0;
+        }
+        return uint64(std::max<uint32>(proto->GetBaseItemLevel(), 1)) * _dropFloorPerLevel;
+    }
+
     // What the item is worth per unit: the vendor buy price, or four times the vendor sell price
     // (the same stand-in the seller uses when an item has no buy price).
     uint64 FairUnitPrice(ItemTemplate const* proto)
     {
         uint64 buy = proto->GetBuyPrice() / std::max<uint32>(1, proto->GetBuyCount());
         uint64 sell = uint64(proto->GetSellPrice()) * 4;
-        return std::max<uint64>({ buy, sell, SILVER });
+        // the seller's market value when AuctionHouseBot.Vanilla.ValueCurve is on, so the buyer pays what the bot asks
+        return std::max<uint64>({ buy, sell, AuctionBotVanilla::UnitValue(proto), SILVER, DropFloor(proto) });
     }
 }
 
 void LoadConfig()
 {
-    _stacks = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Stacks", false);
+    // AuctionHouseBot.Buyer.Commodities is the name the shipped settings use (zz-0-playerbot-defaults.conf).
+    // AuctionHouseBot.Buyer.Stacks is the older name and only counts when Commodities is not set.
+    _stacks = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Commodities",
+        sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Stacks", false, true), true);
     _maxPriceMultiplier = sConfigMgr->GetFloatDefault("AuctionHouseBot.Buyer.MaxPriceMultiplier", 0.0f);
     _minDelay = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MinDelay", 0);
     _maxDelay = std::max(_minDelay, uint32(sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MaxDelay", 0)));
@@ -83,6 +117,10 @@ void LoadConfig()
     _maxBuysPerHour = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MaxBuysPerHour", 0);
     _fair = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.FairPricing", false);
     _fairMinChance = std::clamp(sConfigMgr->GetFloatDefault("AuctionHouseBot.Buyer.FairMinChance", 35.0f), 0.0f, 100.0f);
+    _dropFloorPerLevel = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.DropFloorPerLevel", 100);
+
+    TC_LOG_INFO("ahbot", "AHBot buyer: stackable items {}, fair pricing {}, price cap x{:.2f}, delay {}-{} s, max {} per hour, budget {}g a day, drop floor {} copper per item level",
+        _stacks ? "on" : "off", _fair ? "on" : "off", _maxPriceMultiplier, _minDelay, _maxDelay, _maxBuysPerHour, _dailyBudget / GOLD, _dropFloorPerLevel);
 }
 
 bool StacksEnabled()
@@ -96,14 +134,60 @@ bool Eligible(AuctionPosting const* auction)
     RollWindows(now);
 
     if (_maxBuysPerHour && _boughtThisHour >= _maxBuysPerHour)
+    {
+        Note(Outcome::SkippedHourLimit);
         return false;
+    }
     if (_dailyBudget && _spentToday >= _dailyBudget)
+    {
+        Note(Outcome::SkippedDayLimit);
         return false;
+    }
 
     // Leave new listings alone for a while; the delay differs per listing but never changes for one.
     uint32 const span = _maxDelay - _minDelay;
     uint32 const delay = _minDelay + (span ? (auction->Id * 2654435761u) % (span + 1) : 0);
-    return now - time_t(std::chrono::duration_cast<Seconds>(auction->StartTime.time_since_epoch()).count()) >= time_t(delay);
+    if (now - time_t(std::chrono::duration_cast<Seconds>(auction->StartTime.time_since_epoch()).count()) >= time_t(delay))
+        return true;
+    Note(Outcome::SkippedFresh);
+    return false;
+}
+
+void Note(Outcome outcome)
+{
+    switch (outcome)
+    {
+        case Outcome::SkippedFresh:     ++_counters.fresh; break;
+        case Outcome::SkippedHourLimit: ++_counters.hourLimit; break;
+        case Outcome::SkippedDayLimit:  ++_counters.dayLimit; break;
+        case Outcome::Bought:           ++_counters.bought; break;
+        case Outcome::Bid:              ++_counters.bid; break;
+        case Outcome::LostRoll:         ++_counters.lostRoll; break;
+        case Outcome::OverCap:          ++_counters.overCap; break;
+    }
+}
+
+void NoteCycle(uint32 eligible)
+{
+    ++_counters.cycles;
+    if (!eligible)
+        ++_counters.emptyCycles;
+}
+
+void LogCounters()
+{
+    time_t const now = GameTime::GetGameTime();
+    if (!_countersLogged)
+        _countersLogged = now;
+    if (now - _countersLogged < 10 * MINUTE)
+        return;
+    _countersLogged = now;
+
+    Counters const c = _counters;
+    _counters = Counters();
+    uint32 const fail = c.lostRoll + c.overCap;
+    TC_LOG_INFO("ahbot", "[ahbot] buyouts attempts={} ok={} fail={} (lost_roll={} over_cap={}) bids={} skipped(fresh={} hour_limit={} day_limit={}) cycles={} empty_cycles={}",
+        c.bought + c.bid + fail, c.bought, fail, c.lostRoll, c.overCap, c.bid, c.fresh, c.hourLimit, c.dayLimit, c.cycles, c.emptyCycles);
 }
 
 bool FairPricingEnabled()
@@ -161,7 +245,7 @@ void RecordBuy(AuctionPosting const* auction, uint64 totalPrice, char const* hou
     ++_boughtToday;
     ++_boughtThisHour;
 
-    TC_LOG_DEBUG("ahbot", "AHBot: buy {} x{} for {:.2f}g in {} (today: {} buys, {:.2f}g)",
+    TC_LOG_INFO("ahbot", "AHBot: buy {} x{} for {:.2f}g in {} (today: {} buys, {:.2f}g)",
         auction->Items[0]->GetTemplate()->GetName(sWorld->GetDefaultDbcLocale()), auction->GetTotalItemCount(),
         float(totalPrice) / float(GOLD), house, _boughtToday, float(_spentToday) / float(GOLD));
 }

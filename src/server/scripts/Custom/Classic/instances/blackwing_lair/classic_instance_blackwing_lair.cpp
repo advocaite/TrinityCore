@@ -29,6 +29,7 @@
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
 #include "MapReference.h"
 #include "MotionMaster.h"
@@ -95,7 +96,6 @@ enum ClassicBwlInstanceMisc : uint32
     CLASSIC_BWL_SPELL_NATURE_IMMUNITY       = 7941,
     CLASSIC_BWL_SPELL_FROST_IMMUNITY        = 7940,
     CLASSIC_BWL_SPELL_FIRE_IMMUNITY         = 7942,
-    CLASSIC_BWL_SPELL_ARCANE_IMMUNITY       = 33020, // VMaNGOS spell_mod (custom spell)
     CLASSIC_BWL_SPELL_MIND_EXHAUSTION       = 23958,
     CLASSIC_BWL_SPELL_WARMING_FLAMES        = 23040,
     CLASSIC_BWL_SPELL_DESTROY_EGG           = 19873,
@@ -784,35 +784,62 @@ struct classic_go_orbe_domination : public GameObjectAI
         unit->SetChannelVisual(visual);
     }
 
+    // Every refusal says why in the log (classic.bwl.orb): the orb used to swallow the click silently, so a player who could not
+    // take control had nothing to go on.
     bool OnGossipHello(Player* pPlayer) override
     {
-        if (InstanceScript* pInstance = me->GetInstanceScript())
+        InstanceScript* pInstance = me->GetInstanceScript();
+        if (!pInstance)
         {
-            if (!pPlayer->HasAura(CLASSIC_BWL_SPELL_MIND_EXHAUSTION))
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: no instance script", pPlayer->GetName());
+            return true;
+        }
+
+        if (pPlayer->HasAura(CLASSIC_BWL_SPELL_MIND_EXHAUSTION))
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Mind Exhaustion", pPlayer->GetName());
+            return true;
+        }
+
+        Creature* pCreature = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_RAZORGORE_GUID));
+        if (!pCreature)
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Razorgore not found", pPlayer->GetName());
+            return true;
+        }
+
+        if (pCreature->HasUnitState(UNIT_STATE_POSSESSED))
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Razorgore is already controlled", pPlayer->GetName());
+            return true;
+        }
+
+        if (pCreature->IsInEvadeMode() || !pCreature->IsAlive() || pInstance->GetData(CLASSIC_BWL_DATA_EGG) == DONE)
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, evade={} alive={} eggsDone={}", pPlayer->GetName(),
+                pCreature->IsInEvadeMode(), pCreature->IsAlive(), pInstance->GetData(CLASSIC_BWL_DATA_EGG) == DONE);
+            return true;
+        }
+
+        // The orb works from the start of the encounter. A raid that clicks it before Razorgore has been pulled starts the fight
+        // (he engages the player, JustEngagedWith sets the boss state) instead of the click being swallowed.
+        if (!pCreature->IsInCombat() && pCreature->AI())
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: Razorgore not engaged yet, engaging the player", pPlayer->GetName());
+            pCreature->AI()->AttackStart(pPlayer);
+        }
+
+        SpellCastResult exhausted = pPlayer->CastSpell(pPlayer, CLASSIC_BWL_SPELL_MIND_EXHAUSTION, true);
+        SpellCastResult possessed = pPlayer->CastSpell(pCreature, CLASSIC_BWL_SPELL_POSSESS, true);
+        TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: Mind Exhaustion cast result {}, Possess cast result {}", pPlayer->GetName(),
+            uint32(exhausted), uint32(possessed));
+
+        if (possessed == SPELL_CAST_OK)
+        {
+            if (Creature* pTrigger = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_TRIGGER_GUID)))
             {
-                if (Creature* pCreature = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_RAZORGORE_GUID)))
-                {
-                    // Already mind controlled
-                    if (pCreature->HasUnitState(UNIT_STATE_POSSESSED))
-                        return true;
-                    // Avoid bugging out
-                    if (pCreature->IsInEvadeMode())
-                        return true;
-                    if (pCreature->IsInCombat() && pInstance->GetData(CLASSIC_BWL_DATA_EGG) != DONE)
-                    {
-                        if (pPlayer->CastSpell(pPlayer, CLASSIC_BWL_SPELL_MIND_EXHAUSTION, true) == SPELL_CAST_OK)
-                        {
-                            if (pPlayer->CastSpell(pCreature, CLASSIC_BWL_SPELL_POSSESS, true) == SPELL_CAST_OK)
-                            {
-                                if (Creature* pTrigger = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_TRIGGER_GUID)))
-                                {
-                                    pCreature->GetThreatManager().AddThreat(pTrigger, 100.0f);
-                                    SetChannel(pTrigger, pCreature->GetGUID(), CLASSIC_BWL_SPELL_POSSESS_VISUAL);
-                                }
-                            }
-                        }
-                    }
-                }
+                pCreature->GetThreatManager().AddThreat(pTrigger, 100.0f);
+                SetChannel(pTrigger, pCreature->GetGUID(), CLASSIC_BWL_SPELL_POSSESS_VISUAL);
             }
         }
 
@@ -884,6 +911,39 @@ struct classic_go_oeuf_raz : public GameObjectAI
     {
         if (Unit* unitCaster = caster ? caster->ToUnit() : nullptr)
             HandleUse(unitCaster);
+    }
+};
+
+/*######
+## go_chromaggus_lever
+######*/
+
+// The lever opens Chromaggus's side portcullis; the boss script sees the open door and walks out. The template used to keep the
+// stock go_chromaggus_lever script, which belongs to the stock instance script and does nothing on our map, so a pull of the lever
+// left the door shut and Chromaggus unattackable (scenario bwl_chromaggus 2026-10-28, "still not attackable 30 s after 179148").
+// OnLootStateChanged covers every way in: a player click, a bot use, or a script calling Use().
+struct classic_go_chromaggus_lever : public GameObjectAI
+{
+    classic_go_chromaggus_lever(GameObject* go) : GameObjectAI(go) { }
+
+    void OnLootStateChanged(uint32 state, Unit* unit) override
+    {
+        if (state != GO_ACTIVATED)
+            return;
+
+        InstanceScript* pInstance = me->GetInstanceScript();
+        if (!pInstance)
+            return;
+
+        GameObject* pDoor = me->GetMap()->GetGameObject(pInstance->GetGuidData(CLASSIC_BWL_DATA_DOOR_CHROMAGGUS_SIDE));
+        if (!pDoor)
+        {
+            TC_LOG_INFO("classic.bwl.lever", "Chromaggus lever used by {}: side door not loaded", unit ? unit->GetName() : "nobody");
+            return;
+        }
+
+        pDoor->SetGoState(GO_STATE_ACTIVE);
+        TC_LOG_INFO("classic.bwl.lever", "Chromaggus lever used by {}: side door opened", unit ? unit->GetName() : "nobody");
     }
 };
 
@@ -1299,7 +1359,8 @@ struct classic_npc_corrupted_whelp : public ScriptedAI
             case CLASSIC_BWL_NPC_CORRUPTED_GREEN_WHELP:  ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_NATURE_IMMUNITY); break;
             case CLASSIC_BWL_NPC_CORRUPTED_BLUE_WHELP:   ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_FROST_IMMUNITY); break;
             case CLASSIC_BWL_NPC_CORRUPTED_RED_WHELP:    ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_FIRE_IMMUNITY); break;
-            case CLASSIC_BWL_NPC_CORRUPTED_BRONZE_WHELP: ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_ARCANE_IMMUNITY); break; // TODO(classic): 33020 is a VMaNGOS custom spell
+            // VMaNGOS gives the bronze whelp its custom spell 33020; 70532 has no arcane immunity aura, so the school immunity is set directly.
+            case CLASSIC_BWL_NPC_CORRUPTED_BRONZE_WHELP: me->ApplySpellImmune(0, IMMUNITY_SCHOOL, SPELL_SCHOOL_MASK_ARCANE, true); break;
             default: break;
         }
     }
@@ -1355,6 +1416,7 @@ void AddSC_classic_instance_blackwing_lair()
     RegisterGameObjectAI(classic_go_orbe_domination);
     RegisterGameObjectAI(classic_go_oeuf_raz);
     RegisterGameObjectAI(classic_go_suppression);
+    RegisterGameObjectAI(classic_go_chromaggus_lever);
     RegisterSpellScript(classic_spell_bwl_suppression_aura);
     new classic_at_orb_of_command();
     new classic_at_enter_vael_room();

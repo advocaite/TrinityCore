@@ -25,13 +25,20 @@
 #include "CreatureData.h"
 #include "DB2Structure.h"
 #include "GameObject.h"
+#include "GameEventSender.h"
 #include "GameObjectAI.h"
+#include "GameTime.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
+#include "MapReference.h"
 #include "MotionMaster.h"
+#include "ObjectAccessor.h"
 #include "MovementDefines.h"
 #include "Player.h"
 #include "Random.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "classic_blackrock_spire.h"
@@ -50,6 +57,15 @@ namespace
     enum ClassicBrsInstanceData : uint32
     {
         AREATRIGGER_ENTER_UBRS      = 2046,
+        EVENT_EMBERSEER_START       = 4884,                     // spell 16533, sent by the Blackrock Altar ritual
+        EVENT_SPIDER_EGGS_LOOTED    = 4799,                     // Spire Spider Egg chests 175588 / 175606 (Data6), fired when looted
+        NPC_SPIRE_SPIDERLING        = 10375,                    // VMaNGOS spell 16453 Summon Spire Spiderling (egg trap 175590); 10229 has no template
+        SPIDER_EGG_SPIDERLINGS      = 3,
+        DATA_EMBERSEER_START        = 1,                        // SmartAI 9816 "on data set 1 1": growth phase
+        SPELL_ENCAGED_EMBERSEER     = 15282,                    // creature_template_addon aura, removed 5 s into the growth
+        SPELL_EMBERSEER_GROWING     = 16048,
+        SPELL_FREEZE_ANIM           = 16245,
+        SPELL_EMBERSEER_FULL_STRENGTH = 16047,
         AREATRIGGER_STADIUM         = 2026,
 
         // Arena event dialogue intro and outro - handled by instance
@@ -303,6 +319,8 @@ public:
             _bannokSpawned = false;
             _dialogueIndex = 0;
             _dialogueTimer = 0;
+            _emberseerCheckTimer = 0;
+            _emberseerFightTimer = 0;
         }
 
         ClassicDungeonEncounterTracker _encounterTracker{ *this, ClassicBlackrockSpireEncounterBossEntries };
@@ -481,6 +499,9 @@ public:
                 case NPC_BLACKHAND_INCANCERATOR:
                     _incanceratorGUIDs.push_back(creature->GetGUID());
                     break;
+                case NPC_PYROGUARD_EMBERSEER:
+                    _emberseerGUID = creature->GetGUID();
+                    break;
                 default:
                     break;
             }
@@ -496,10 +517,38 @@ public:
             {
                 case TYPE_ROOM_EVENT:
                     if (data == DONE)
+                    {
+                        TC_LOG_INFO("scripts.classic", "UBRS room event done: opening Emberseer In ({})", _emberseerInDoorGUID.IsEmpty() ? std::string("door not spawned") : _emberseerInDoorGUID.ToString());
                         DoUseDoorOrButton(_emberseerInDoorGUID);
+                    }
                     _encounter[TYPE_ROOM_EVENT] = data;
                     break;
                 case TYPE_EMBERSEER:
+                    // VMaNGOS 2023 map event 4884 (sql/migrations/20230604191452_world.sql): the altar closes
+                    // Emberseer In and the inner Doors behind the raid; a wipe reopens them; the kill opens the
+                    // inner Doors and Emberseer Out.
+                    if (data == IN_PROGRESS)
+                    {
+                        HandleGameObject(_emberseerInDoorGUID, false);
+                        HandleGameObject(_emberseerCombatDoorGUID, false);
+                        _emberseerCheckTimer = 1200;
+                        _emberseerFightTimer = 68000;
+                    }
+                    else if (data == DONE)
+                    {
+                        HandleGameObject(_emberseerCombatDoorGUID, true);
+                        HandleGameObject(_emberseerOutDoorGUID, true);
+                        _emberseerCheckTimer = 0;
+                        _emberseerFightTimer = 0;
+                    }
+                    else
+                    {
+                        if (GetData(TYPE_ROOM_EVENT) == DONE)
+                            HandleGameObject(_emberseerInDoorGUID, true);
+                        HandleGameObject(_emberseerCombatDoorGUID, true);
+                        _emberseerCheckTimer = 0;
+                        _emberseerFightTimer = 0;
+                    }
                     _encounter[TYPE_EMBERSEER] = data;
                     break;
                 case TYPE_FLAMEWREATH:
@@ -587,6 +636,7 @@ public:
                     if (!_roomRuneGUID[i].IsEmpty())        // This check is used, to ensure which runes still need processing
                     {
                         _roomEventMobGUIDSorted[i].remove(data);
+                        TC_LOG_INFO("scripts.classic", "UBRS room event: room {} has {} mobs left after {} died", i + 1, _roomEventMobGUIDSorted[i].size(), data.ToString());
                         if (_roomEventMobGUIDSorted[i].empty())
                         {
                             DoUseDoorOrButton(_roomRuneGUID[i]);
@@ -701,9 +751,154 @@ public:
                     if (_stadiumMobsAlive == 0)
                         StartNextDialogueText(SAY_NEFARIUS_VICTORY);
                     break;
+                case NPC_BLACKHAND_SUMMONER:
+                case NPC_BLACKHAND_VETERAN:
+                    // Dragonspire Hall room event: every mob of a room must die before its rune lights and, once all
+                    // seven rooms are empty, Emberseer In opens. The Veteran script reports its own death as well
+                    // (classic_ubrs_trash.cpp); the Summoner runs SmartAI and reported nothing, so a room holding one
+                    // never emptied and the door stayed shut.
+                    SetGuidData(TYPE_ROOM_EVENT, creature->GetGUID());
+                    break;
+                case NPC_PYROGUARD_EMBERSEER:
+                    // A forced despawn also passes through JUST_DIED, so only a death during the event counts.
+                    if (GetData(TYPE_EMBERSEER) == IN_PROGRESS)
+                        SetData(TYPE_EMBERSEER, DONE);
+                    break;
                 default:
                     break;
             }
+        }
+
+        // Spell 16533 "Emberseer Start" (effect SEND_EVENT 4884), cast by the Blackrock Altar once three grouped players
+        // have used it. VMaNGOS 2023 event_scripts 4884: start the map event, close the doors, free the Incarcerators
+        // (immune flags off, combat pulse) and move Pyroguard Emberseer to his growth phase.
+        void ProcessEvent(WorldObject* obj, uint32 eventId, WorldObject* invoker) override
+        {
+            if (eventId == EVENT_SPIDER_EGGS_LOOTED)
+            {
+                HatchSpiderEggs(obj, invoker);
+                return;
+            }
+
+            if (eventId != EVENT_EMBERSEER_START)
+                return;
+            if (GetData(TYPE_EMBERSEER) == IN_PROGRESS || GetData(TYPE_EMBERSEER) == DONE)
+                return;
+            Creature* emberseer = instance->GetCreature(_emberseerGUID);
+            if (!emberseer || !emberseer->IsAlive())
+                return;
+
+            SetData(TYPE_EMBERSEER, IN_PROGRESS);
+            for (ObjectGuid const& guid : _incanceratorGUIDs)
+            {
+                Creature* incarcerator = instance->GetCreature(guid);
+                if (!incarcerator || !incarcerator->IsAlive())
+                    continue;
+                incarcerator->InterruptNonMeleeSpells(false);
+                incarcerator->SetImmuneToAll(false);
+                if (incarcerator->AI())
+                    incarcerator->AI()->DoZoneInCombat();
+            }
+            // SmartAI 9816: "on data set 1 1" enters the growth phase (5 / 35 / 65 s texts, Growing, Full Strength).
+            if (emberseer->AI())
+                emberseer->AI()->SetData(DATA_EMBERSEER_START, 1);
+        }
+
+        // A Spire Spider Egg (chest 175588 / 175606) was looted: its Data6 event 4799 hatches Spire Spiderlings on the looter.
+        // VMaNGOS ran the event from its base database (event_scripts 4799, not in the repo data); the count follows the audit's
+        // reading of that row (three per egg). They despawn with their corpses or after five minutes unlooted.
+        void HatchSpiderEggs(WorldObject* egg, WorldObject* looter)
+        {
+            if (!egg)
+                return;
+
+            Unit* target = looter ? looter->ToUnit() : nullptr;
+            for (uint8 i = 0; i < SPIDER_EGG_SPIDERLINGS; ++i)
+            {
+                Position const pos = egg->GetNearPosition(2.0f, float(i) * 2.0f * float(M_PI) / float(SPIDER_EGG_SPIDERLINGS));
+                if (Creature* spiderling = egg->SummonCreature(NPC_SPIRE_SPIDERLING, pos, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 5min))
+                    if (target && spiderling->AI())
+                        spiderling->AI()->AttackStart(target);
+            }
+        }
+
+        // VMaNGOS fail script 48842 (no player alive within 100 yards): Emberseer and the Incarcerators respawn caged,
+        // the doors reopen. The fight itself starts 68 s after the altar (65 s growth + 3 s yell), when the flags the
+        // template sets (immune to players, uninteractible) come off and he engages the room.
+        void UpdateEmberseerEvent(uint32 diff)
+        {
+            if (GetData(TYPE_EMBERSEER) != IN_PROGRESS)
+                return;
+
+            if (_emberseerFightTimer)
+            {
+                if (_emberseerFightTimer <= diff)
+                {
+                    _emberseerFightTimer = 0;
+                    if (Creature* emberseer = instance->GetCreature(_emberseerGUID))
+                    {
+                        emberseer->SetImmuneToPC(false);
+                        emberseer->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
+                        if (emberseer->AI())
+                            emberseer->AI()->DoZoneInCombat();
+                    }
+                }
+                else
+                    _emberseerFightTimer -= diff;
+            }
+
+            if (_emberseerCheckTimer <= diff)
+            {
+                _emberseerCheckTimer = 1200;
+                Creature* emberseer = instance->GetCreature(_emberseerGUID);
+                if (!emberseer)
+                    return;
+                bool playerNear = false;
+                for (MapReference const& ref : instance->GetPlayers())
+                {
+                    Player* player = ref.GetSource();
+                    if (player && player->IsAlive() && !player->IsGameMaster() && player->IsWithinDist(emberseer, 100.0f))
+                    {
+                        playerNear = true;
+                        break;
+                    }
+                }
+                if (playerNear)
+                    return;
+
+                // Wipe: reset everything to the caged state. Not Respawn(true): a forced respawn of a living creature
+                // goes through JUST_DIED and would count as the boss kill for the encounter tracker.
+                SetData(TYPE_EMBERSEER, NOT_STARTED);
+                if (emberseer->IsAlive())
+                {
+                    if (emberseer->AI())
+                        emberseer->AI()->EnterEvadeMode();
+                    emberseer->RemoveAurasDueToSpell(SPELL_EMBERSEER_GROWING);
+                    emberseer->RemoveAurasDueToSpell(SPELL_EMBERSEER_FULL_STRENGTH);
+                    emberseer->RemoveAurasDueToSpell(SPELL_FREEZE_ANIM);
+                    emberseer->CastSpell(emberseer, SPELL_ENCAGED_EMBERSEER, true);
+                    emberseer->SetImmuneToPC(true);
+                    emberseer->SetUnitFlag(UNIT_FLAG_UNINTERACTIBLE);
+                    emberseer->RestoreFaction();
+                    emberseer->SetFullHealth();
+                }
+                for (ObjectGuid const& guid : _incanceratorGUIDs)
+                {
+                    if (Creature* incarcerator = instance->GetCreature(guid))
+                    {
+                        if (!incarcerator->IsAlive())
+                            incarcerator->Respawn(true);
+                        else
+                        {
+                            incarcerator->SetImmuneToAll(true);
+                            if (incarcerator->AI())
+                                incarcerator->AI()->EnterEvadeMode();
+                        }
+                    }
+                }
+            }
+            else
+                _emberseerCheckTimer -= diff;
         }
 
         void Update(uint32 diff) override
@@ -727,6 +922,39 @@ public:
             }
             else
                 _stadiumCheckTimer -= diff;
+
+            // The door also opens by proximity: a player carrying the Seal of Ascension within 12 yards of it. The area trigger
+            // (2046) stays as it was, but it fires only when the client reports the trigger volume, and it skipped GM players.
+            if (GetData(TYPE_EVENT_DOOR_UBRS) != DONE || GetData(TYPE_ROOM_EVENT) == NOT_STARTED)
+            {
+                if (_ubrsDoorCheckTimer <= diff)
+                {
+                    _ubrsDoorCheckTimer = 1000;
+                    // The rune-room event starts with the same area trigger (2046 sorts the room mobs): start it as soon as a
+                    // player is alive in the instance, otherwise the rooms never count and the door behind them stays shut.
+                    if (GetData(TYPE_ROOM_EVENT) == NOT_STARTED)
+                        for (MapReference const& ref : instance->GetPlayers())
+                            if (Player* player = ref.GetSource())
+                                if (player->IsAlive())
+                                {
+                                    DoSortRoomEventMobs();
+                                    break;
+                                }
+                    if (GetData(TYPE_EVENT_DOOR_UBRS) != DONE)
+                        if (GameObject* door = instance->GetGameObject(_ubrsDoorGUID))
+                        for (MapReference const& ref : instance->GetPlayers())
+                        {
+                            Player* player = ref.GetSource();
+                            if (player && player->IsAlive() && player->IsWithinDist(door, 12.0f) && player->HasItemCount(ITEM_SEAL_OF_ASCENSION, 1))
+                            {
+                                SetData(TYPE_EVENT_DOOR_UBRS, DONE);
+                                break;
+                            }
+                        }
+                }
+                else
+                    _ubrsDoorCheckTimer -= diff;
+            }
 
             if (_ubrsDoorTimer)
             {
@@ -764,6 +992,8 @@ public:
                 else
                     _ubrsDoorTimer -= diff;
             }
+
+            UpdateEmberseerEvent(diff);
 
             if (GetData(TYPE_SOLAKAR) == IN_PROGRESS)
             {
@@ -838,7 +1068,10 @@ public:
 
             for (uint8 i = 0; i < MAX_ROOMS; ++i)
             {
-                if (GameObject* rune = instance->GetGameObject(_roomRuneGUID[i]))
+                GameObject* rune = instance->GetGameObject(_roomRuneGUID[i]);
+                if (!rune)
+                    TC_LOG_ERROR("scripts.classic", "UBRS room event: rune {} (room {}) is not spawned in this instance", i + 1, i + 1);
+                if (rune)
                 {
                     for (ObjectGuid const& guid : _roomEventMobGUIDs)
                     {
@@ -851,6 +1084,9 @@ public:
                 }
             }
 
+            TC_LOG_INFO("scripts.classic", "UBRS room event started: {} room mobs registered, rooms hold {} {} {} {} {} {} {}", _roomEventMobGUIDs.size(),
+                _roomEventMobGUIDSorted[0].size(), _roomEventMobGUIDSorted[1].size(), _roomEventMobGUIDSorted[2].size(), _roomEventMobGUIDSorted[3].size(),
+                _roomEventMobGUIDSorted[4].size(), _roomEventMobGUIDSorted[5].size(), _roomEventMobGUIDSorted[6].size());
             SetData(TYPE_ROOM_EVENT, IN_PROGRESS);
         }
 
@@ -1130,6 +1366,9 @@ public:
         ObjectGuid _drakkisathGUID;
         ObjectGuid _beastGUID;
         ObjectGuid _rendGUID;
+        ObjectGuid _emberseerGUID;
+        uint32 _emberseerCheckTimer;
+        uint32 _emberseerFightTimer;
 
         ObjectGuid _emberseerInDoorGUID;
         ObjectGuid _emberseerCombatDoorGUID;
@@ -1151,6 +1390,7 @@ public:
 
         uint32 _ubrsDoorTimer;
         uint32 _ubrsDoorStep;
+        uint32 _ubrsDoorCheckTimer = 1000;
 
         uint32 _stadiumEventTimer;
         uint8 _stadiumWaves;
@@ -1296,11 +1536,221 @@ class classic_spell_ubrs_freeze_rookery_egg : public SpellScript
     }
 };
 
+/*######
+## go_blackrock_altar
+######*/
+
+// The Blackrock Altar (175706, summoning ritual, three casters). The core ritual completes the instant the third player has
+// used it, so a bot that walks up and taps it looks like a lockbox. Here every user takes the altar spell (16532, "Emberseer
+// Object Visual": a 600 s aura, not a channel) and must keep it and stay at the altar; the ritual completes (event 4884) only
+// after three grouped players have held it together for three seconds. A user who dies, walks off, loses the aura or waits
+// two minutes alone leaves the ritual, and the aura comes off whoever leaves.
+struct classic_go_blackrock_altar : public GameObjectAI
+{
+    enum
+    {
+        SPELL_ALTAR_CHANNEL     = 16532,
+        EVENT_ALTAR_COMPLETE    = 4884,
+        ALTAR_CASTERS           = 3,
+        ALTAR_RANGE             = 8,
+        ALTAR_HOLD_MS           = 3000,
+        ALTAR_WAIT_MS           = 120000,
+        ALTAR_TICK_MS           = 500,
+        ALTAR_CHANNEL_MS        = 5000
+    };
+
+    struct AltarUser
+    {
+        ObjectGuid guid;
+        uint32 waitedMs = 0;
+        uint32 channelMs = 0;
+    };
+
+    classic_go_blackrock_altar(GameObject* go) : GameObjectAI(go), _tickMs(ALTAR_TICK_MS), _holdMs(0) { }
+
+    bool OnGossipHello(Player* player) override
+    {
+        InstanceScript* instance = me->GetInstanceScript();
+        if (!instance || instance->GetData(TYPE_EMBERSEER) == IN_PROGRESS || instance->GetData(TYPE_EMBERSEER) == DONE)
+            return true;
+
+        Prune();
+        if (!_users.empty())
+        {
+            Player* first = ObjectAccessor::GetPlayer(*me, _users.front().guid);
+            if (first && !player->IsInSameRaidWith(first))
+                return true;
+        }
+
+        for (AltarUser const& user : _users)
+            if (user.guid == player->GetGUID())
+                return true;
+
+        AltarUser user;
+        user.guid = player->GetGUID();
+        _users.push_back(user);
+        player->CastSpell(player, SPELL_ALTAR_CHANNEL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        ShowChannel(player, _users.back());
+        return true;
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (_users.empty())
+            return;
+
+        if (_tickMs > diff)
+        {
+            _tickMs -= diff;
+            return;
+        }
+        _tickMs = ALTAR_TICK_MS;
+
+        for (AltarUser& user : _users)
+        {
+            user.waitedMs += ALTAR_TICK_MS;
+            // The altar spell is an aura, so the channel (cast bar and beam to the altar) is drawn by hand and renewed
+            // every few seconds for as long as the user stays in the ritual.
+            if (user.channelMs <= ALTAR_TICK_MS)
+            {
+                if (Player* player = ObjectAccessor::GetPlayer(*me, user.guid))
+                    ShowChannel(player, user);
+            }
+            else
+                user.channelMs -= ALTAR_TICK_MS;
+        }
+
+        size_t const before = _users.size();
+        Prune();
+        if (_users.size() != before)
+            _holdMs = 0;
+
+        if (_users.size() < ALTAR_CASTERS)
+        {
+            _holdMs = 0;
+            return;
+        }
+
+        _holdMs += ALTAR_TICK_MS;
+        if (_holdMs < ALTAR_HOLD_MS)
+            return;
+
+        Player* starter = ObjectAccessor::GetPlayer(*me, _users.front().guid);
+        for (AltarUser const& user : _users)
+            if (Player* player = ObjectAccessor::GetPlayer(*me, user.guid))
+            {
+                player->RemoveAurasDueToSpell(SPELL_ALTAR_CHANNEL);
+                HideChannel(player);
+            }
+        _users.clear();
+        _holdMs = 0;
+        if (starter)
+            GameEvents::Trigger(EVENT_ALTAR_COMPLETE, starter, me);
+    }
+
+private:
+    void ShowChannel(Player* player, AltarUser& user)
+    {
+        SpellCastVisual visual;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(SPELL_ALTAR_CHANNEL, me->GetMap()->GetDifficultyID());
+        if (info)
+            visual.SpellXSpellVisualID = player->GetCastSpellXSpellVisualId(info);
+        // the beam needs a spell visual: when this logs "visual 0" (or no spell info) the client has nothing to draw
+        if (!user.waitedMs)
+            TC_LOG_INFO("scripts.classic", "UBRS altar: {} channels spell {}: spell info {}, visual {}, difficulty {}", player->GetName(), uint32(SPELL_ALTAR_CHANNEL),
+                info ? "found" : "MISSING", visual.SpellXSpellVisualID, uint32(me->GetMap()->GetDifficultyID()));
+        player->ClearChannelObjects();
+        player->AddChannelObject(me->GetGUID());
+        player->SetChannelSpellId(SPELL_ALTAR_CHANNEL);
+        player->SetChannelVisual(visual);
+        player->SetChannelSpellData(GameTime::GetGameTimeMS(), ALTAR_CHANNEL_MS);
+        user.channelMs = ALTAR_CHANNEL_MS - 1000;
+    }
+
+    static void HideChannel(Player* player)
+    {
+        player->ClearChannelObjects();
+        player->SetChannelSpellId(0);
+        player->SetChannelVisual({});
+        player->SetChannelSpellData(0, 0);
+    }
+
+    void Prune()
+    {
+        _users.erase(std::remove_if(_users.begin(), _users.end(), [this](AltarUser const& user)
+        {
+            Player* player = ObjectAccessor::GetPlayer(*me, user.guid);
+            bool const leaves = !player || !player->IsAlive() || !player->IsWithinDist(me, float(ALTAR_RANGE))
+                || !player->HasAura(SPELL_ALTAR_CHANNEL) || (_users.size() < ALTAR_CASTERS && user.waitedMs > ALTAR_WAIT_MS);
+            if (leaves && player)
+            {
+                player->RemoveAurasDueToSpell(SPELL_ALTAR_CHANNEL);
+                HideChannel(player);
+            }
+            return leaves;
+        }), _users.end());
+    }
+
+    std::vector<AltarUser> _users;
+    uint32 _tickMs;
+    uint32 _holdMs;
+};
+
+/*######
+## go_rookery_egg
+######*/
+
+// Rookery Egg (175124). The vanilla chain is trap spell 16474 -> trap 175622 -> spell 15745 -> Rookery Whelp 10161 and depends
+// on those spells existing in the client data. The egg's trap radius is zeroed in the database so the core trap stays quiet and
+// this script hatches the whelp itself: a living player within three yards of an egg that is not frozen (VMaNGOS radius 3).
+struct classic_go_rookery_egg : public GameObjectAI
+{
+    enum
+    {
+        NPC_ROOKERY_WHELP   = 10161,
+        EGG_RADIUS          = 3,
+        EGG_TICK_MS         = 500
+    };
+
+    classic_go_rookery_egg(GameObject* go) : GameObjectAI(go), _tickMs(EGG_TICK_MS) { }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (_tickMs > diff)
+        {
+            _tickMs -= diff;
+            return;
+        }
+        _tickMs = EGG_TICK_MS;
+
+        if (!me->isSpawned() || me->getLootState() != GO_READY || me->GetGoState() != GO_STATE_READY)
+            return;
+
+        for (MapReference const& ref : me->GetMap()->GetPlayers())
+        {
+            Player* player = ref.GetSource();
+            if (!player || !player->IsAlive() || !player->IsWithinDist(me, float(EGG_RADIUS)))
+                continue;
+
+            if (Creature* whelp = me->SummonCreature(NPC_ROOKERY_WHELP, me->GetPosition(), TEMPSUMMON_CORPSE_TIMED_DESPAWN, 30s))
+                if (whelp->AI())
+                    whelp->AI()->AttackStart(player);
+            me->DespawnOrUnsummon(0ms, 5min);
+            return;
+        }
+    }
+
+private:
+    uint32 _tickMs;
+};
+
 void AddSC_classic_instance_blackrock_spire()
 {
     new classic_instance_blackrock_spire();
     new classic_at_blackrock_spire();
     RegisterGameObjectAI(classic_go_father_flame);
+    RegisterGameObjectAI(classic_go_blackrock_altar);
+    RegisterGameObjectAI(classic_go_rookery_egg);
     new classic_at_ubrs_the_beast();
     RegisterSpellScript(classic_spell_ubrs_freeze_rookery_egg);
 }

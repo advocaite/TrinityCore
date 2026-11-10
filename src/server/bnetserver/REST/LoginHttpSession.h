@@ -28,6 +28,7 @@ namespace Battlenet
 struct LoginSessionState : public Trinity::Net::Http::SessionState
 {
     std::unique_ptr<Trinity::Crypto::SRP::BnetSRP6Base> Srp;
+    std::string SrpLogin; // account the SRP challenge was made for
 
     // password accepted, waiting for the authenticator code (client AUTHENTICATOR login state)
     uint32 AuthenticatorAccountId = 0;

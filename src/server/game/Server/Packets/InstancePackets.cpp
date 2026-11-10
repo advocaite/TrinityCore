@@ -188,6 +188,13 @@ WorldPacket const* InstanceEncounterStart::Write()
     return &_worldPacket;
 }
 
+WorldPacket const* InstanceEncounterAllowReleaseInProgress::Write()
+{
+    _worldPacket << uint32(0x80);
+
+    return &_worldPacket;
+}
+
 WorldPacket const* EncounterStart::Write()
 {
     _worldPacket << int32(EncounterID);

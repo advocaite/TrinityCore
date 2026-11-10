@@ -885,6 +885,9 @@ namespace WorldPackets
 
             ObjectGuid Player;
             DeclinedName DeclinedNames;
+            DeclinedName SurnameDeclinedNames; // Classic 1.60: read to keep the packet aligned, not stored
+            bool Parsed = true;     // false when the layout could not be read
+            std::string RawHex;     // start of such a packet, logged to learn its layout
         };
 
         class SetPlayerDeclinedNamesResult final : public ServerPacket

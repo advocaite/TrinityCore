@@ -49,6 +49,13 @@ class Player;
 class Unit;
 class WorldPacket;
 class WorldSession;
+
+namespace Playerbot {
+    class BotSession;
+    namespace V2 {
+        class BotSession;
+    }
+}
 class WorldSocket;
 struct AuctionPosting;
 struct BlackMarketTemplate;
@@ -1000,8 +1007,9 @@ class TC_GAME_API WorldSession
     public:
         WorldSession(uint32 id, std::string&& name, uint32 battlenetAccountId, std::string&& battlenetAccountEmail,
             std::shared_ptr<WorldSocket>&& sock, AccountTypes sec, uint8 expansion, time_t mute_time, std::string&& os, Minutes timezoneOffset,
-            uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter);
-        ~WorldSession();
+            uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter,
+            bool isBot = false);
+        virtual ~WorldSession();  // virtual: a module may run sessions without a client (bots)
 
         bool PlayerLoading() const { return !m_playerLoading.IsEmpty(); }
         bool PlayerLogout() const { return m_playerLogout; }
@@ -1011,7 +1019,7 @@ class TC_GAME_API WorldSession
 
         bool IsAddonRegistered(std::string_view prefix) const;
 
-        void SendPacket(WorldPacket const* packet, bool forced = false);
+        virtual void SendPacket(WorldPacket const* packet, bool forced = false);
 
         void SendNotification(char const* format, ...) ATTR_PRINTF(2, 3);
         void SendNotification(uint32 stringId, ...);
@@ -1051,6 +1059,9 @@ class TC_GAME_API WorldSession
         std::string const& GetOS() const { return _os; }
         uint32 GetClientBuild() const { return _clientBuild; }
         ClientBuild::VariantId const& GetClientBuildVariant() const { return _clientBuildVariant; }
+
+        // A session without a client, run by a module (bots): no socket, shares its owner's account.
+        bool IsBot() const { return _isBot; }
 
         bool CanAccessAlliedRaces() const;
 
@@ -1281,6 +1292,7 @@ class TC_GAME_API WorldSession
         void HandleCharEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
         void HandleCharUndeleteEnumOpcode(WorldPackets::Character::EnumCharacters& /*enumCharacters*/);
         void HandleCharDeleteOpcode(WorldPackets::Character::CharDelete& charDelete);
+        void DeleteCharacter(ObjectGuid guid);
         void HandleCharCreateOpcode(WorldPackets::Character::CreateCharacter& charCreate);
         void HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin& playerLogin);
 
@@ -1381,6 +1393,7 @@ class TC_GAME_API WorldSession
 
         void HandleSetSelectionOpcode(WorldPackets::Misc::SetSelection& packet);
         void HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateChange& packet);
+        void UpdateCampfireRest(uint8 standState);   // UnitStandStateType
         void HandleEmoteOpcode(WorldPackets::Chat::EmoteClient& packet);
 
         // Social
@@ -1733,6 +1746,8 @@ class TC_GAME_API WorldSession
         //Battleground
         void HandleBattlemasterHelloOpcode(WorldPackets::NPC::Hello& hello);
         void HandleBattlemasterJoinOpcode(WorldPackets::Battleground::BattlemasterJoin& battlemasterJoin);
+        // Queues the player (or, as leader, the group) for the battleground a queue id names; shared by the packet handlers and .playerbot bgjoin.
+        void JoinBattlegroundQueue(BattlegroundQueueTypeId bgQueueTypeId);
         void HandlePVPLogDataOpcode(WorldPackets::Battleground::PVPLogDataRequest& pvpLogDataRequest);
         void HandleBattleFieldPortOpcode(WorldPackets::Battleground::BattlefieldPort& battlefieldPort);
         void HandleBattlefieldListOpcode(WorldPackets::Battleground::BattlefieldListRequest& battlefieldList);
@@ -1991,10 +2006,21 @@ class TC_GAME_API WorldSession
         // Classic 1.60: SMSG_REGIONWIDE_CHARACTER_MAIL_DATA waits until the character list is shown (HandleCharEnum)
         std::unique_ptr<WorldPacket> _classicCharacterMailData;
         uint32 _classicCharacterMailDataTimer = 0;
+
+        // Classic 1.60: a character deleted while it is still in the world as this account's bot (HandleCharDeleteOpcode)
+        ObjectGuid _pendingCharDelete;
+        uint32 _pendingCharDeleteTimer = 0;
+
+        // Classic 1.60: a login to a character still in the world as this account's bot (HandlePlayerLoginOpcode); the character
+        // is m_playerLoading
+        bool _pendingLoginAfterBot = false;
+        uint32 _pendingLoginAfterBotTimer = 0;
         AsyncCallbackProcessor<TransactionCallback> _transactionCallbacks;
         AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;
 
     friend class World;
+    friend class Playerbot::BotSession;
+    friend class Playerbot::V2::BotSession;
     protected:
         class DosProtection
         {
@@ -2124,6 +2150,8 @@ class TC_GAME_API WorldSession
         std::unique_ptr<CollectionMgr> _collectionMgr;
 
         ConnectToKey _instanceConnectKey;
+
+        bool _isBot;
 
         WorldSession(WorldSession const& right) = delete;
         WorldSession& operator=(WorldSession const& right) = delete;

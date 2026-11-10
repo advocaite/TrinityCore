@@ -208,6 +208,9 @@ void LoginDatabaseConnection::DoPrepareStatements()
 
     PrepareStatement(LOGIN_DEL_BNET_SSO_TOKENS_EXPIRED, "DELETE FROM battlenet_sso_tokens WHERE expires < UNIX_TIMESTAMP()", CONNECTION_ASYNC);
     PrepareStatement(LOGIN_INS_BNET_SSO_TOKEN, "INSERT INTO battlenet_sso_tokens (token, battlenetAccountId, accountId, realmId, characterGuid, issued, expires, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    // Playerbot module statements
+    PrepareStatement(LOGIN_SEL_BNET_ACCOUNT_EXISTS, "SELECT ba.id FROM battlenet_accounts ba LEFT JOIN account a ON a.battlenet_account = ba.id WHERE ba.id = ? LIMIT 1", CONNECTION_SYNCH);
+    PrepareStatement(LOGIN_SEL_BOT_ACCOUNTS_ALL, "SELECT ba.id, ba.email, a.id as legacy_account_id FROM battlenet_accounts ba LEFT JOIN account a ON a.battlenet_account = ba.id WHERE ba.email LIKE '%#%' OR ba.email LIKE '%@playerbot.local' ORDER BY ba.email", CONNECTION_SYNCH);
 }
 
 LoginDatabaseConnection::LoginDatabaseConnection(MySQLConnectionInfo& connInfo, ConnectionFlags connectionFlags) : MySQLConnection(connInfo, connectionFlags)

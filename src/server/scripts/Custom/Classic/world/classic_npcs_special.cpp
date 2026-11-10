@@ -859,6 +859,7 @@ enum ConfrontLorthuna
     SPELL_ELAADRIN_OPEN_PORTAL  = 1269466,
 
     QUEST_CONFRONT_LORTHUNA     = 92646,
+    QUEST_CONFRONT_LORTHUNA_2   = 93835,    // the same quest on the other story line (same credit 256634)
     NPC_TEXT_SPIRE_AYESSA       = 20253849,
 
     SPELL_LORTHUNA_RITUAL       = 1265896,
@@ -980,10 +981,16 @@ struct classic_npc_ayessa_spire : public ScriptedAI
         }
     }
 
+    static bool HasConfrontQuest(Player* player)
+    {
+        return player->GetQuestStatus(QUEST_CONFRONT_LORTHUNA) == QUEST_STATUS_INCOMPLETE
+            || player->GetQuestStatus(QUEST_CONFRONT_LORTHUNA_2) == QUEST_STATUS_INCOMPLETE;
+    }
+
     bool OnGossipHello(Player* player) override
     {
         InitGossipMenuFor(player, 0);
-        if (player->GetQuestStatus(QUEST_CONFRONT_LORTHUNA) == QUEST_STATUS_INCOMPLETE && !_busy)
+        if (HasConfrontQuest(player) && !_busy)
             AddGossipItemFor(player, GossipOptionNpc::None, "I am ready to confront Lorthuna.", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
         SendGossipMenuFor(player, NPC_TEXT_SPIRE_AYESSA, me->GetGUID());
         return true;
@@ -992,7 +999,7 @@ struct classic_npc_ayessa_spire : public ScriptedAI
     bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 /*gossipListId*/) override
     {
         CloseGossipMenuFor(player);
-        if (_busy || player->GetQuestStatus(QUEST_CONFRONT_LORTHUNA) != QUEST_STATUS_INCOMPLETE)
+        if (_busy || !HasConfrontQuest(player))
             return true;
 
         _busy = true;
@@ -1125,6 +1132,7 @@ struct classic_npc_ayessa_spire : public ScriptedAI
                     break;
                 case EVENT_SPIRE_ROHASH_LEAVES:
                     ClassicSceneCredit(me, QUEST_CONFRONT_LORTHUNA, NPC_CONFRONT_CREDIT, 120.0f);
+                    ClassicSceneCredit(me, QUEST_CONFRONT_LORTHUNA_2, NPC_CONFRONT_CREDIT, 120.0f);
                     if (Creature* rohash = Summoned(NPC_ROHASH))
                     {
                         rohash->CastSpell(rohash, SPELL_STORM_ARRIVAL, true);

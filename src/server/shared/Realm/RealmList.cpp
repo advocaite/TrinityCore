@@ -251,6 +251,26 @@ Optional<Battlenet::RealmHandle> RealmList::GetFirstRealmId() const
     return _realms.begin()->first;
 }
 
+// A realm lists for and lets in clients of its own build. Realm.AlsoAcceptBuilds (default empty) adds client builds that use the same game data and
+// protocol as the realm's build, e.g. a realm on 70532 that 70575 clients may also join.
+static bool RealmAcceptsBuild(Realm const& realm, uint32 clientBuild)
+{
+    if (realm.Build == clientBuild)
+        return true;
+
+    static std::vector<uint32> const alsoAccepted = []()
+    {
+        std::vector<uint32> builds;
+        std::string const configured = sConfigMgr->GetStringDefault("Realm.AlsoAcceptBuilds", "");
+        for (std::string_view token : Trinity::Tokenize(configured, ',', false))
+            if (Optional<uint32> build = Trinity::StringTo<uint32>(token))
+                builds.push_back(*build);
+        return builds;
+    }();
+
+    return std::ranges::find(alsoAccepted, clientBuild) != alsoAccepted.end();
+}
+
 void RealmList::FillRealmEntry(Realm const& realm, uint32 clientBuild, AccountTypes accountSecurityLevel, JSON::RealmList::RealmEntry* realmEntry) const
 {
     realmEntry->set_wowrealmaddress(realm.Id.GetAddress());
@@ -262,8 +282,10 @@ void RealmList::FillRealmEntry(Realm const& realm, uint32 clientBuild, AccountTy
 
     realmEntry->set_cfgcategoriesid(realm.Timezone);
 
+    // a client of an also-accepted build is shown its own version, so its realm list does not see a mismatch
     JSON::RealmList::ClientVersion* version = realmEntry->mutable_version();
-    if (ClientBuild::Info const* buildInfo = ClientBuild::GetBuildInfo(realm.Build))
+    uint32 const shownBuild = RealmAcceptsBuild(realm, clientBuild) ? clientBuild : realm.Build;
+    if (ClientBuild::Info const* buildInfo = ClientBuild::GetBuildInfo(shownBuild))
     {
         version->set_versionmajor(buildInfo->MajorVersion);
         version->set_versionminor(buildInfo->MinorVersion);
@@ -275,11 +297,11 @@ void RealmList::FillRealmEntry(Realm const& realm, uint32 clientBuild, AccountTy
         version->set_versionmajor(6);
         version->set_versionminor(2);
         version->set_versionrevision(4);
-        version->set_versionbuild(realm.Build);
+        version->set_versionbuild(shownBuild);
     }
 
     RealmFlags flag = realm.Flags;
-    if (realm.Build != clientBuild)
+    if (!RealmAcceptsBuild(realm, clientBuild))
         flag |= RealmFlags::VersionMismatch;
 
     realmEntry->set_cfgrealmsid(realm.Id.Realm);
@@ -370,7 +392,7 @@ std::string RealmList::GetRealmEntryJSON(Battlenet::RealmHandle const& id, uint3
 {
     if (std::shared_ptr<Realm const> realm = GetRealm(id))
     {
-        if (realm->PopulationLevel != RealmPopulationState::Offline && realm->Build == build && accountSecurityLevel >= realm->AllowedSecurityLevel)
+        if (realm->PopulationLevel != RealmPopulationState::Offline && RealmAcceptsBuild(*realm, build) && accountSecurityLevel >= realm->AllowedSecurityLevel)
         {
             JSON::RealmList::RealmEntry realmEntry;
             FillRealmEntry(*realm, build, accountSecurityLevel, &realmEntry);
@@ -420,7 +442,7 @@ RealmJoinResult RealmList::JoinRealm(uint32 realmAddress, uint32 build, ClientBu
 {
     if (std::shared_ptr<Realm const> realm = GetRealm(realmAddress))
     {
-        if (realm->PopulationLevel == RealmPopulationState::Offline || realm->Build != build || accountSecurityLevel < realm->AllowedSecurityLevel)
+        if (realm->PopulationLevel == RealmPopulationState::Offline || !RealmAcceptsBuild(*realm, build) || accountSecurityLevel < realm->AllowedSecurityLevel)
             return { .Result = ERROR_USER_SERVER_NOT_PERMITTED_ON_REALM };
 
         boost::asio::ip::address addressForClient = realm->GetAddressForClient(clientAddress);

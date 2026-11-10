@@ -23,7 +23,11 @@
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
 #include "PathGenerator.h"
+#include "Player.h"
 #include "Unit.h"
+#include "WorldSession.h"
+
+static constexpr float CHASE_BOT_REPATH_DIST = 2.5f;
 
 static bool HasLostTarget(Unit* owner, Unit* target)
 {
@@ -72,13 +76,19 @@ ChaseMovementGenerator::ChaseMovementGenerator(Unit *target, Optional<ChaseRange
 }
 ChaseMovementGenerator::~ChaseMovementGenerator() = default;
 
-bool ChaseMovementGenerator::Initialize(Unit* /*owner*/)
+bool ChaseMovementGenerator::Initialize(Unit* owner)
 {
     RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
 
     _path = nullptr;
     _lastTargetPosition.reset();
+    // Pets and guardians of a player are throttled too: MoveSplineInit sends them the same stop packet before every new spline
+    // (PlayerSideUnit), so a pet re-pathing on every step of a walking mob was shown sliding in its run pose, as if hovering
+    // (Karrz, Ironforge 2026-10-26: a bot hunter's wolf).
+    Player const* playerOwner = owner->ToPlayer();
+    _throttleRepath = (playerOwner && playerOwner->GetSession() && playerOwner->GetSession()->IsBot())
+        || (!owner->IsPlayer() && owner->GetCharmerOrOwnerGUID().IsPlayer());
     return true;
 }
 
@@ -152,6 +162,15 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
         DoMovementInform(owner, target);
     }
 
+    // Playerbot chasers: while a chase spline is in flight, re-path only once the target has drifted CHASE_BOT_REPATH_DIST from where it stood at
+    // the last launch. The stock rule re-paths on ANY step of the target, i.e. every update while a mob walks about, and every launch of a player
+    // unit is a stop packet and a new spline: the client got ten of them a second and showed the bot sliding without the run animation (PC 20 Oct,
+    // mages and hunters ordered at a wandering mob). _lastTargetPosition is left untouched while holding, so the drift accumulates; a finished
+    // spline, a speed change (reset) or a larger drift re-paths exactly as before.
+    if (_throttleRepath && _lastTargetPosition && mutualChase == _mutualChase && owner->HasUnitState(UNIT_STATE_CHASE_MOVE) && !owner->movespline->Finalized()
+        && _lastTargetPosition->GetExactDistSq(target->GetPosition()) < CHASE_BOT_REPATH_DIST * CHASE_BOT_REPATH_DIST)
+        return true;
+
     // if the target moved, we have to consider whether to adjust
     if (!_lastTargetPosition || target->GetPosition() != _lastTargetPosition.value() || mutualChase != _mutualChase)
     {
@@ -198,12 +217,15 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
             bool success = _path->CalculatePath(x, y, z, owner->CanFly());
             if (!success || (_path->GetPathType() & (PATHFIND_NOPATH /* | PATHFIND_INCOMPLETE*/)))
             {
+                if (_noPathStreak < 255)
+                    ++_noPathStreak;
                 if (cOwner)
                     cOwner->SetCannotReachTarget(true);
                 owner->StopMoving();
                 return true;
             }
 
+            _noPathStreak = 0;
             if (shortenPath)
                 _path->ShortenPathUntilDist(PositionToVector3(target->GetPosition()), maxTarget);
 
@@ -232,7 +254,11 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
             Movement::MoveSplineInit init(owner);
             init.MovebyPath(_path->GetPath());
             init.SetWalk(walk);
-            init.SetFacing(target);
+            // A player unit (a bot driven by monster moves) is not given a facing target for the whole walk: the client shows it
+            // gliding along the path without the run animation (Onyxia's Lair 2026-10-13, tank sent to the Warder). It turns to the
+            // target on arrival (SetInFront above).
+            if (!owner->IsPlayer())
+                init.SetFacing(target);
             init.Launch();
         }
     }

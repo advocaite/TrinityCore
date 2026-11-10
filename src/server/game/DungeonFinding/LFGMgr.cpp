@@ -1071,6 +1071,36 @@ uint32 LFGMgr::AddProposal(LfgProposal& proposal)
    @param[in]     guid Player guid to update answer
    @param[in]     accept Player answer
 */
+bool LFGMgr::IsRoleCheckPending(ObjectGuid group_guid, ObjectGuid player_guid) const
+{
+    auto it = RoleChecksStore.find(group_guid);
+    if (it == RoleChecksStore.end()) return false;
+    if (it->second.state != LFG_ROLECHECK_INITIALITING && it->second.state != LFG_ROLECHECK_DEFAULT)
+        return false;
+    auto rit = it->second.roles.find(player_guid);
+    // Pending = role hasn't been set yet (PLAYER_ROLE_NONE = 0). Once
+    // UpdateRoleCheck commits a role, it shows up here non-zero and we
+    // skip — the snapshot reverts to "no pending" next tick.
+    return rit == it->second.roles.end() || rit->second == PLAYER_ROLE_NONE;
+}
+
+uint32 LFGMgr::GetActiveProposalIdForPlayer(ObjectGuid guid) const
+{
+    // Walk current proposals; return the first id where this player is in the
+    // players map and hasn't answered yet. Multiple concurrent proposals for
+    // the same player aren't really possible in Trinity's design (one queue
+    // = one proposal at a time), but we still return the first match for
+    // safety.
+    for (auto const& [pid, prop] : ProposalsStore)
+    {
+        auto it = prop.players.find(guid);
+        if (it == prop.players.end()) continue;
+        if (it->second.accept != LFG_ANSWER_PENDING) continue;
+        return pid;
+    }
+    return 0;
+}
+
 void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
 {
     // Check if the proposal exists

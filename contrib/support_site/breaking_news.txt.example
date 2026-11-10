@@ -1,0 +1,6 @@
+Welcome to our WoW Forever server!
+
+Rename this file to breaking_news.txt and write your own news here; it shows in the
+Breaking News box on the login and character screens. A blank line starts a new paragraph.
+No breaking_news.txt (or an empty one) = no Breaking News box.
+For headings, colours, links and icons use breaking_news.html instead (see breaking_news.html.example).

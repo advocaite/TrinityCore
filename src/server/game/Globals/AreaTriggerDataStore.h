@@ -21,6 +21,7 @@
 #include "Define.h"
 #include "FlatSet.h"
 #include "ObjectGuid.h"
+#include <functional>
 
 class AreaTriggerTemplate;
 class AreaTriggerCreateProperties;
@@ -38,6 +39,8 @@ public:
 
     Trinity::Containers::FlatSet<ObjectGuid::LowType> const* GetAreaTriggersForMapAndGrid(uint32 mapId, Difficulty difficulty, uint32 gridId) const;
     AreaTriggerSpawn const* GetAreaTriggerSpawn(ObjectGuid::LowType spawnId) const;
+    // Every static spawn, in no particular order (load-time data, read-only afterwards)
+    void ForEachAreaTriggerSpawn(std::function<void(AreaTriggerSpawn const&)> const& visit) const;
     AreaTriggerTemplate const* GetAreaTriggerTemplate(AreaTriggerId const& areaTriggerId) const;
     AreaTriggerCreateProperties const* GetAreaTriggerCreateProperties(AreaTriggerCreatePropertiesId const& areaTriggerCreatePropertiesId) const;
 

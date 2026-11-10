@@ -2,9 +2,10 @@
   "server_name": "Forever",
   "listen": "0.0.0.0",
   "port": 443,
+  "news_http_port": 80,
   "public_host": "trinity.actual.battle.net",
-  "cert": "F:/wow stuff/classic_re/certs/trinity_forever.cert.pem",
-  "key": "F:/wow stuff/classic_re/certs/trinity_forever.key.pem",
+  "cert": "/path/to/certs/trinity_forever.cert.pem",
+  "key": "/path/to/certs/trinity_forever.key.pem",
   "db": {
     "host": "127.0.0.1",
     "port": 3307,

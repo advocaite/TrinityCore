@@ -416,6 +416,8 @@ bool InstanceScript::SetBossState(uint32 id, EncounterState state)
                     InitializeCombatResurrections(1, resInterval);
                     SendClassicEncounterStart(bossInfo->GetDungeonEncounterForDifficulty(instance->GetDifficultyID()));
                     SendEncounterStart(1, 9, resInterval, resInterval);
+                    // Vanilla: a dead player can always release, boss fight or not.
+                    instance->SendToPlayers(WorldPackets::Instance::InstanceEncounterAllowReleaseInProgress().Write());
 
                     instance->DoOnPlayers([](Player* player)
                     {
@@ -423,6 +425,13 @@ bool InstanceScript::SetBossState(uint32 id, EncounterState state)
                     });
                     break;
                 }
+                case NOT_STARTED:
+                    // The classic boss scripts leave a fight by Reset() -> NOT_STARTED, never FAIL: without this the client was sent
+                    // the encounter start and never the end, stayed "in an encounter" and greyed out Release Spirit
+                    // ("A member of your group is in combat" after a wipe).
+                    if (bossInfo->state != IN_PROGRESS)
+                        break;
+                    [[fallthrough]];
                 case FAIL:
                 {
                     ResetCombatResurrections();
@@ -891,6 +900,8 @@ void InstanceScript::SendEncounterUnit(EncounterFrameType type, Unit const* unit
 
 void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 maxInCombatResCount /*= 0*/, uint32 inCombatResChargeRecovery /*= 0*/, uint32 nextCombatResChargeTime /*= 0*/)
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_START sent: map={} instance={} players={} in_progress=1 res={}/{}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size(), inCombatResCount, maxInCombatResCount);
     WorldPackets::Instance::InstanceEncounterStart encounterStartMessage;
     encounterStartMessage.InCombatResCount = inCombatResCount;
     encounterStartMessage.MaxInCombatResCount = maxInCombatResCount;
@@ -902,6 +913,8 @@ void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 
 
 void InstanceScript::SendEncounterEnd()
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_END sent: map={} instance={} players={}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size());
     WorldPackets::Instance::InstanceEncounterEnd encounterEndMessage;
     instance->SendToPlayers(encounterEndMessage.Write());
 }

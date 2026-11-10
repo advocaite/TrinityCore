@@ -173,7 +173,11 @@ int32 ReputationMgr::GetMaxReputation(FactionEntry const* factionEntry) const
         // Compared to a paragon reputation, DF renown reputations
         // have a maximum value of 2500 which resets with each level of renown acquired.
         // We calculate the total reputation necessary to raise the renown to the maximum
-        return GetRenownMaxLevel(factionEntry) * GetRenownLevelThreshold(factionEntry);
+        // (Classic 1.60: the level cost can grow per level, see GetRenownLevelThreshold)
+        int32 total = 0;
+        for (int32 level = 1; level <= GetRenownMaxLevel(factionEntry); ++level)
+            total += GetRenownLevelThreshold(factionEntry, level);
+        return total;
     }
 
     if (DB2Manager::FriendshipRepReactionSet const* friendshipReactions = sDB2Manager.GetFriendshipRepReactions(factionEntry->FriendshipRepID))
@@ -283,10 +287,17 @@ int32 ReputationMgr::GetRenownLevel(FactionEntry const* renownFactionEntry) cons
     return 0;
 }
 
-int32 ReputationMgr::GetRenownLevelThreshold(FactionEntry const* renownFactionEntry) const
+int32 ReputationMgr::GetRenownLevelThreshold(FactionEntry const* renownFactionEntry, int32 level) const
 {
     if (!renownFactionEntry || !IsRenownReputation(renownFactionEntry))
         return 0;
+
+    // Classic 1.60: the PvP rank track (faction 2800 "PvP Rank Points", renown currency 3473) gives every rank its own cost in
+    // RenownThresholdCurveID 103650 (rank 1 = 750, rank 2 = 900, ... rank 14 = 3000; x = the level being reached). The client's
+    // reputation pane reads the same curve ("0 of 750"), so the flat ReputationMax (20000) must not be used for it.
+    if (renownFactionEntry->RenownThresholdCurveID > 0)
+        if (int32 curveThreshold = int32(sDB2Manager.GetCurveValueAt(renownFactionEntry->RenownThresholdCurveID, float(std::max(level, 1)))); curveThreshold > 0)
+            return curveThreshold;
 
     if (int32 dataIndex = GetFactionDataIndexForRaceAndClass(renownFactionEntry); dataIndex >= 0)
         return renownFactionEntry->ReputationMax[dataIndex];
@@ -580,17 +591,33 @@ bool ReputationMgr::SetOneFactionReputation(FactionEntry const* factionEntry, in
         {
             if (CurrencyTypesEntry const* currency = sCurrencyTypesStore.LookupEntry(factionEntry->RenownCurrencyID))
             {
-                int32 renownLevelThreshold = GetRenownLevelThreshold(factionEntry);
                 int32 oldRenownLevel = GetRenownLevel(factionEntry);
+                int32 maxRenownLevel = GetRenownMaxLevel(factionEntry);
 
-                int32 totalReputation = (oldRenownLevel * renownLevelThreshold) + (standing - baseRep);
-                int32 newRenownLevel = totalReputation / renownLevelThreshold;
-                newStanding = totalReputation % renownLevelThreshold;
-
-                if (newRenownLevel >= GetRenownMaxLevel(factionEntry))
+                // walk the levels one by one: the cost of each level can differ (RenownThresholdCurveID)
+                int32 newRenownLevel = oldRenownLevel;
+                newStanding = standing - baseRep;
+                while (newStanding < 0 && newRenownLevel > 0)
+                    newStanding += GetRenownLevelThreshold(factionEntry, newRenownLevel--);
+                if (newStanding < 0)
                 {
+                    reputationChange -= newStanding;
                     newStanding = 0;
-                    reputationChange += (GetRenownMaxLevel(factionEntry) * renownLevelThreshold) - totalReputation;
+                }
+                while (newRenownLevel < maxRenownLevel)
+                {
+                    int32 levelThreshold = GetRenownLevelThreshold(factionEntry, newRenownLevel + 1);
+                    if (levelThreshold <= 0 || newStanding < levelThreshold)
+                        break;
+                    newStanding -= levelThreshold;
+                    ++newRenownLevel;
+                }
+
+                if (newRenownLevel >= maxRenownLevel)
+                {
+                    newRenownLevel = maxRenownLevel;
+                    reputationChange -= newStanding;
+                    newStanding = 0;
                 }
 
                 itr->second.VisualStandingIncrease = reputationChange;

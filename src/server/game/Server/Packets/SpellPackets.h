@@ -120,7 +120,7 @@ namespace WorldPackets
         class UpdateActionButtons final : public ServerPacket
         {
         public:
-            static std::size_t constexpr NumActionButtons = 180;
+            static std::size_t constexpr NumActionButtons = 360;
             static std::size_t constexpr ClassicNumActionButtons = 360;
 
             explicit UpdateActionButtons() : ServerPacket(SMSG_UPDATE_ACTION_BUTTONS, ClassicNumActionButtons * 8 + 1) { }
@@ -145,7 +145,7 @@ namespace WorldPackets
             void Read() override;
 
             uint64 Action = 0; ///< two packed values (action and type)
-            uint8 Index = 0;
+            uint16 Index = 0;
         };
 
         class SendUnlearnSpells final : public ServerPacket

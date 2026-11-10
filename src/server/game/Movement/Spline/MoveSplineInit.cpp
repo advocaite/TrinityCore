@@ -16,16 +16,29 @@
  */
 
 #include "MoveSplineInit.h"
+#include "Log.h"
 #include "Creature.h"
 #include "MoveSpline.h"
 #include "MovementPackets.h"
 #include "PathGenerator.h"
+#include "Timer.h"
 #include "Unit.h"
 #include "VehicleDefines.h"
 #include <cmath>
 
 namespace Movement
 {
+    namespace
+    {
+        // A unit whose movement the client has to merge with its own (a bot, or a pet / guardian of a player): these get plain, short,
+        // walkable splines (see the Launch notes). Pets of human players share the treatment: the same client assert hit a hunter pet
+        // ("Unit(Pet-...), count(11) index(4), mergePathResult(10)", WSG Alliance ramp, 2026-10-08).
+        bool PlayerSideUnit(Unit const* unit)
+        {
+            return unit->IsPlayer() || unit->GetCharmerOrOwnerGUID().IsPlayer();
+        }
+    }
+
     // Transforms coordinates from global to transport offsets
     class TransportPathTransform
     {
@@ -198,6 +211,28 @@ namespace Movement
         if (!args.Validate(unit))
             return 0;
 
+        // A player unit (a bot) that re-paths while its previous spline is still in flight: end that spline on the client first. The
+        // client otherwise merges the new path into the one running and asserts when the merged path does not fit
+        // (Unit_C.cpp(9651) "count(18) index(7) ... mergePathResult(12) splineFlags(00200000)", WSG start room 2026-10-08, with the
+        // Steering flags already off). After the stop the new spline starts on an idle unit and there is nothing to merge.
+        // The server finishes a spline before the client does (latency, and the client interpolates against its own clock), so
+        // "not finalized" misses the common case: the third WSG crash had the unit at the same spot with a 76-point merged path although
+        // this stop was already there. A player unit that got a spline in the last 3 s is stopped on the client as well. The map is
+        // thread_local (a unit is updated by one map thread at a time; a stale entry on another thread only costs an extra stop).
+        if (PlayerSideUnit(unit))
+        {
+            thread_local std::unordered_map<uint64, uint32> s_lastSplineMs;
+            uint32 const nowMs = getMSTime();
+            uint32& last = s_lastSplineMs[unit->GetGUID().GetCounter()];
+            // A pet re-paths every follow step: its window is shorter so it does not stop and start continuously.
+            bool const recent = last != 0 && (nowMs - last) < (unit->IsPlayer() ? 3000u : 1000u);
+            if (!move_spline.Finalized() || recent)
+                MoveSplineInit(unit).Stop(true);
+            last = nowMs;
+            if (s_lastSplineMs.size() > 8192)
+                s_lastSplineMs.clear();
+        }
+
         unit->m_movementInfo.SetMovementFlags(moveFlags);
         move_spline.Initialize(args);
 
@@ -279,6 +314,14 @@ namespace Movement
         args.flags.Flying = unit->HasUnitMovementFlag(MovementFlags(MOVEMENTFLAG_CAN_FLY | MOVEMENTFLAG_DISABLE_GRAVITY));
         args.flags.FastSteering = true;
         args.flags.Steering = unit->HasNpcFlag2(UNIT_NPC_FLAG_2_STEERING) || !unit->IsInCombat();
+        // Steering makes the client merge a new path into the spline still in flight; for a player unit (a bot driven by monster moves)
+        // that merge asserted on the client ("Unit(Player-...), count(11) index(5), mergePathResult(12)", splineFlags 0x11200000 =
+        // Steering | FastSteering | CanSwim). Players get plain splines: the new path replaces the old one.
+        if (PlayerSideUnit(unit))
+        {
+            args.flags.FastSteering = false;
+            args.flags.Steering = false;
+        }
     }
 
     MoveSplineInit::~MoveSplineInit() = default;

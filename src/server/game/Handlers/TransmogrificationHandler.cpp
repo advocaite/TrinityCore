@@ -524,17 +524,22 @@ void WorldSession::HandleTransmogOutfitUpdateSlots(WorldPackets::Transmogrificat
 
     if (!transmogOutfitUpdateSlots.UseAvailableDiscount)
     {
-        auto oldSlotItr = transmogOutfit->Slots.begin();
+        auto oldSlotBegin = transmogOutfit->Slots.begin();
         auto oldSlotEnd = transmogOutfit->Slots.end();
         for (WorldPackets::Transmogrification::TransmogOutfitSlotData const& slot : transmogOutfitUpdateSlots.Slots)
         {
-            oldSlotItr = std::ranges::find(oldSlotItr, oldSlotEnd,
+            // Searched from the start for every slot: the client does not always send the slots in the stored order, and a
+            // slot that is not stored yet left this pointing past the end (read as garbage, so the price came out wrong).
+            auto oldSlotItr = std::ranges::find(oldSlotBegin, oldSlotEnd,
                 std::pair(AsUnderlyingType(slot.Slot), AsUnderlyingType(slot.SlotOption)),
                 [](UF::TransmogOutfitSlotData const& slotData) { return std::pair(*slotData.Slot, *slotData.SlotOption); });
+            bool const hasOldSlot = oldSlotItr != oldSlotEnd;
+            uint32 const oldAppearance = hasOldSlot ? uint32(oldSlotItr->ItemModifiedAppearanceID) : 0;
+            uint32 const oldIllusion = hasOldSlot ? uint32(oldSlotItr->SpellItemEnchantmentID) : 0;
 
             auto [slotEntry, slotOptionEntry, _] = *TransmogMgr::GetSlotAndOption(slot.Slot, slot.SlotOption);
 
-            if (slot.AppearanceDisplayType == TransmogOutfitDisplayType::Assigned && oldSlotItr->ItemModifiedAppearanceID != slot.ItemModifiedAppearanceID)
+            if (slot.AppearanceDisplayType == TransmogOutfitDisplayType::Assigned && oldAppearance != slot.ItemModifiedAppearanceID)
             {
                 ItemModifiedAppearanceEntry const* itemModifiedAppearance = sItemModifiedAppearanceStore.LookupEntry(slot.ItemModifiedAppearanceID);
                 if (!itemModifiedAppearance || !sTransmogHolidayStore.HasRecord(itemModifiedAppearance->ItemID))
@@ -547,7 +552,7 @@ void WorldSession::HandleTransmogOutfitUpdateSlots(WorldPackets::Transmogrificat
                 }
             }
 
-            if (slot.IllusionDisplayType == TransmogOutfitDisplayType::Assigned && oldSlotItr->SpellItemEnchantmentID != slot.SpellItemEnchantmentID)
+            if (slot.IllusionDisplayType == TransmogOutfitDisplayType::Assigned && oldIllusion != slot.SpellItemEnchantmentID)
             {
                 if (slotEntry)
                     cost = static_cast<uint64>(std::floor(baseCost * slotEntry->IllusionCostMultiplier)) + cost;
@@ -555,18 +560,19 @@ void WorldSession::HandleTransmogOutfitUpdateSlots(WorldPackets::Transmogrificat
                 if (slotOptionEntry)
                     cost = static_cast<uint64>(std::floor(baseCost * slotOptionEntry->IllusionCostMultiplier)) + cost;
             }
-
-            ++oldSlotItr;
         }
 
         cost = static_cast<uint64>(std::clamp(costMultiplier, 0.0f, 1.0f) * cost);
 
+        // Classic 1.60: the client still works out a different price than this in some cases (players saw "invalid cost 210" on
+        // 0.1.27 and again on 0.1.30 after the TransmogCost curve fix), and a refused save only plays the purchase sound and
+        // keeps the old outfit. This is a single-player / friends realm, so the save is no longer refused: the price worked out
+        // here is charged, and both numbers are logged so the difference can still be found.
         if (cost != transmogOutfitUpdateSlots.Cost)
-        {
-            TC_LOG_ERROR("entities.player.cheat", "{} WorldSession::HandleTransmogOutfitUpdateSlots - player sent invalid cost {}.",
-                GetPlayerInfo(), transmogOutfitUpdateSlots.Cost);
-            return;
-        }
+            TC_LOG_WARN("entities.player", "{} WorldSession::HandleTransmogOutfitUpdateSlots - client price {} differs from server price {} "
+                "(level {}, outfit {}, {} slots), charging the server price.",
+                GetPlayerInfo(), transmogOutfitUpdateSlots.Cost, cost, _player->GetLevel(), transmogOutfitUpdateSlots.OutfitID,
+                transmogOutfitUpdateSlots.Slots.size());
 
         if (!_player->HasEnoughMoney(cost))
         {
@@ -585,8 +591,17 @@ void WorldSession::HandleTransmogOutfitUpdateSlots(WorldPackets::Transmogrificat
 
     _player->UpdateTransmogOutfitSlots(transmogOutfitUpdateSlots.OutfitID, transmogOutfitUpdateSlots.Slots);
 
-    if (transmogOutfitUpdateSlots.OutfitID == _player->m_activePlayerData->TransmogMetadata->TransmogOutfitID)
-        _player->EquipTransmogOutfit(transmogOutfitUpdateSlots.OutfitID, TransmogSituationTrigger::TransmogUpdate, {});
+    // Classic client (70707/70755): it never asks to wear an outfit (no equip outfit cast is sent when an outfit is picked
+    // in the list), so an outfit was only shown when it already was the worn one. New characters wear none (id 0), so a
+    // saved outfit never showed. Saving an outfit at the transmogrifier now also puts it on.
+    _player->EquipTransmogOutfit(transmogOutfitUpdateSlots.OutfitID, TransmogSituationTrigger::TransmogUpdate, {});
+
+    // SMSG_UPDATE_OBJECT must be received by client before transmog packet for UI to properly update
+    Player::ValuesUpdateForPlayerWithMaskSender sendUpdateObject(_player);
+    sendUpdateObject.ActivePlayerMask.MarkChanged(&UF::ActivePlayerData::TransmogOutfits);
+    sendUpdateObject.ActivePlayerMask.MarkChanged(&UF::ActivePlayerData::TransmogMetadata);
+    sendUpdateObject.ActivePlayerMask.MarkChanged(&UF::ActivePlayerData::ViewedOutfit);
+    sendUpdateObject(_player);
 
     WorldPackets::Transmogrification::TransmogOutfitSlotsUpdated transmogOutfitSlotsUpdated;
     transmogOutfitSlotsUpdated.TransmogOutfitID = transmogOutfitUpdateSlots.OutfitID;

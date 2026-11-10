@@ -1,0 +1,52 @@
+-- Quest items that Forever players saw drop from these creatures, but our loot tables lacked the row (42 rows, 15 items,
+-- 13 quests incl. Storm, Earth, and Fire 79361 totems, Harvesting the Harvesters, Murloc Gills, WANTED: Bruuz).
+-- Which creature drops what: Questie Forever traces (Questie team, Questie/QuestieDB, GPLv3), traces/foreverItemTraces.lua.
+-- Drop chances are NOT known from that source: copied from the same item's existing rows where we have them,
+-- 100 for named single creatures, otherwise 40 (25 for the four Twisted Totems). INFERRED, quest-only drops.
+-- Re-runnable: deletes exactly these rows first.
+DELETE FROM `creature_loot_template` WHERE `ItemType`=0 AND (`Entry`,`Item`) IN ((471,248004),(209797,253710),(456,254548),(458,254548),(513,254548),(515,254548),(36,255007),(114,255007),(115,255007),(480,255007),(276061,255007),(36,255010),(115,255010),(36,255155),(114,255155),(480,255155),(253195,258771),(253511,258771),(253622,258771),(256966,258771),(270201,258771),(1116,267415),(1118,267415),(1115,268548),(1117,268548),(2893,274044),(755,274045),(757,274045),(760,274045),(4358,274046),(4359,274046),(4360,274046),(4361,274046),(4362,274046),(4655,274047),(4656,274047),(4657,274047),(4658,274047),(6124,274268),(4026,277936),(4027,277936),(12579,277936));
+INSERT INTO `creature_loot_template` (`Entry`,`ItemType`,`Item`,`Chance`,`QuestRequired`,`LootMode`,`GroupId`,`MinCount`,`MaxCount`,`Comment`) VALUES
+(471,0,248004,100,1,1,0,1,1,'Mother Fang - quest item (Questie Forever traces; chance INFERRED, named)'),
+(209797,0,253710,100,1,1,0,1,1,'Bruuz - quest item (Questie Forever traces; chance INFERRED, named (WANTED))'),
+(456,0,254548,40,1,1,0,1,1,'Murloc Minor Oracle - quest item (Questie Forever traces; chance INFERRED, same as other murlocs)'),
+(458,0,254548,40,1,1,0,1,1,'Murloc Hunter - quest item (Questie Forever traces; chance INFERRED, same as other murlocs)'),
+(513,0,254548,40,1,1,0,1,1,'Murloc Netter - quest item (Questie Forever traces; chance INFERRED, same as other murlocs)'),
+(515,0,254548,40,1,1,0,1,1,'Murloc Raider - quest item (Questie Forever traces; chance INFERRED, same as other murlocs)'),
+(36,0,255007,40,1,1,0,1,1,'Harvest Golem - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(114,0,255007,40,1,1,0,1,1,'Harvest Watcher - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(115,0,255007,40,1,1,0,1,1,'Harvest Reaper - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(480,0,255007,40,1,1,0,1,1,'Rusty Harvest Golem - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(276061,0,255007,40,1,1,0,1,1,'Decrepit Harvester - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(36,0,255010,40,1,1,0,1,1,'Harvest Golem - quest item (Questie Forever traces; chance INFERRED, as on 114)'),
+(115,0,255010,40,1,1,0,1,1,'Harvest Reaper - quest item (Questie Forever traces; chance INFERRED, as on 114)'),
+(36,0,255155,40,1,1,0,1,1,'Harvest Golem - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(114,0,255155,40,1,1,0,1,1,'Harvest Watcher - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(480,0,255155,40,1,1,0,1,1,'Rusty Harvest Golem - quest item (Questie Forever traces; chance INFERRED, as 255010)'),
+(253195,0,258771,30,1,1,0,1,1,'Al''Aketh Preacher - quest item (Questie Forever traces; chance INFERRED, mid of sniffed cultist rates)'),
+(253511,0,258771,30,1,1,0,1,1,'Al''Aketh Pillager - quest item (Questie Forever traces; chance INFERRED, mid of sniffed cultist rates)'),
+(253622,0,258771,100,1,1,0,1,1,'Commander Haalien - quest item (Questie Forever traces; chance INFERRED, named)'),
+(256966,0,258771,100,1,1,0,1,1,'Skypriest Aanders - quest item (Questie Forever traces; chance INFERRED, named)'),
+(270201,0,258771,30,1,1,0,1,1,'Al''Aketh Brawler - quest item (Questie Forever traces; chance INFERRED, mid of sniffed cultist rates)'),
+(1116,0,267415,40,1,1,0,1,1,'Rockjaw Ambusher - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(1118,0,267415,40,1,1,0,1,1,'Rockjaw Backbreaker - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(1115,0,268548,40,1,1,0,1,1,'Rockjaw Skullthumper - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(1117,0,268548,40,1,1,0,1,1,'Rockjaw Bonesnapper - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(2893,0,274044,25,1,1,0,1,1,'Stonevault Bonesnapper - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(755,0,274045,25,1,1,0,1,1,'Lost One Mudlurker - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(757,0,274045,25,1,1,0,1,1,'Lost One Fisherman - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(760,0,274045,25,1,1,0,1,1,'Lost One Muckdweller - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4358,0,274046,25,1,1,0,1,1,'Mirefin Puddlejumper - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4359,0,274046,25,1,1,0,1,1,'Mirefin Murloc - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4360,0,274046,25,1,1,0,1,1,'Mirefin Warrior - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4361,0,274046,25,1,1,0,1,1,'Mirefin Muckdweller - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4362,0,274046,25,1,1,0,1,1,'Mirefin Coastrunner - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4655,0,274047,25,1,1,0,1,1,'Maraudine Wrangler - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4656,0,274047,25,1,1,0,1,1,'Maraudine Mauler - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4657,0,274047,25,1,1,0,1,1,'Maraudine Windchaser - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(4658,0,274047,25,1,1,0,1,1,'Maraudine Stormer - quest item (Questie Forever traces; chance INFERRED, no other source)'),
+(6124,0,274268,100,1,1,0,1,1,'Captain Beld - quest item (Questie Forever traces; chance INFERRED, named)'),
+(4026,0,277936,40,1,1,0,1,1,'Bloodfury Windcaller - quest item (Questie Forever traces; chance INFERRED, same as other Bloodfury)'),
+(4027,0,277936,40,1,1,0,1,1,'Bloodfury Storm Witch - quest item (Questie Forever traces; chance INFERRED, same as other Bloodfury)'),
+(12579,0,277936,40,1,1,0,1,1,'Bloodfury Ripper - quest item (Questie Forever traces; chance INFERRED, same as other Bloodfury)');
+-- Bruuz had no loot id, so nothing could drop from him.
+UPDATE `creature_template_difficulty` SET `LootID`=209797 WHERE `Entry`=209797 AND `LootID`=0;

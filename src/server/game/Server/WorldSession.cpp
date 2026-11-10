@@ -42,6 +42,7 @@
 #include "MiscPackets.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvPMgr.h"
+#include "ObjectAccessor.h"
 #include "PacketUtilities.h"
 #include "Player.h"
 #include "QueryHolder.h"
@@ -107,7 +108,8 @@ bool WorldSessionFilter::Process(WorldPacket* packet)
 /// WorldSession constructor
 WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccountId, std::string&& battlenetAccountEmail,
     std::shared_ptr<WorldSocket>&& sock, AccountTypes sec, uint8 expansion, time_t mute_time, std::string&& os, Minutes timezoneOffset,
-    uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter) :
+    uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter,
+    bool isBot) :
     m_muteTime(mute_time),
     m_timeOutTime(0),
     AntiDOS(this),
@@ -150,7 +152,8 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
     _timeSyncTimer(0),
     _calendarEventCreationCooldown(0),
     _battlePetMgr(std::make_unique<BattlePets::BattlePetMgr>(this)),
-    _collectionMgr(std::make_unique<CollectionMgr>(this))
+    _collectionMgr(std::make_unique<CollectionMgr>(this)),
+    _isBot(isBot)
 {
     if (m_Socket[CONNECTION_TYPE_REALM])
     {
@@ -158,6 +161,8 @@ WorldSession::WorldSession(uint32 id, std::string&& name, uint32 battlenetAccoun
         ResetTimeOutTime(false);
         LoginDatabase.PExecute("UPDATE account SET online = 1 WHERE id = {};", GetAccountId());     // One-time query
     }
+    else if (_isBot)
+        m_Address = "bot";
 
     _instanceConnectKey.Raw = UI64LIT(0);
 }
@@ -174,7 +179,8 @@ WorldSession::~WorldSession()
     {
         if (m_Socket[i])
         {
-            m_Socket[i]->CloseSocket();
+            if (!IsBot())  // bot sessions have no socket
+                m_Socket[i]->CloseSocket();
             m_Socket[i].reset();
         }
     }
@@ -186,7 +192,13 @@ WorldSession::~WorldSession()
     while (_recvQueue.next(packet))
         delete packet;
 
-    LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
+    // Bot sessions share the owner GM's account id. The ctor never sets
+    // online=1 for them (the ctor's online=1 query is gated on a non-null
+    // socket), so the dtor must symmetrically skip clearing it — otherwise
+    // a bot logging out flips the GM's account.online to 0 while the GM is
+    // still in-world.
+    if (!IsBot())
+        LoginDatabase.PExecute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
 }
 
 bool WorldSession::PlayerDisconnected() const
@@ -356,7 +368,8 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     ///- Before we process anything:
     /// If necessary, kick the player because the client didn't send anything for too long
     /// (or they've been idling in character select)
-    if (IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
+    /// Note: Bots don't have sockets, so skip idle check for them
+    if (!IsBot() && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION) && m_Socket[CONNECTION_TYPE_REALM])
         m_Socket[CONNECTION_TYPE_REALM]->CloseSocket();
 
     // Classic 1.60: character list mail data, sent once the character list is shown (see HandleCharEnum)
@@ -370,6 +383,49 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
         }
         else
             _classicCharacterMailDataTimer -= diff;
+    }
+
+    // Classic 1.60: finish a character delete once the bot playing that character has left the world (HandleCharDeleteOpcode)
+    if (!_pendingCharDelete.IsEmpty() && updater.ProcessUnsafe())
+    {
+        if (!ObjectAccessor::FindConnectedPlayer(_pendingCharDelete))
+        {
+            ObjectGuid const guid = _pendingCharDelete;
+            _pendingCharDelete.Clear();
+            if (!_player && m_playerLoading.IsEmpty())
+                DeleteCharacter(guid);
+            else
+                SendCharDelete(CHAR_DELETE_FAILED);
+        }
+        else if (_pendingCharDeleteTimer <= diff)
+        {
+            sScriptMgr->OnPlayerFailedDelete(_pendingCharDelete, GetAccountId());
+            _pendingCharDelete.Clear();
+            SendCharDelete(CHAR_DELETE_FAILED);
+        }
+        else
+            _pendingCharDeleteTimer -= diff;
+    }
+
+    // Classic 1.60: go on with a login once the bot playing that character has left the world (HandlePlayerLoginOpcode)
+    if (_pendingLoginAfterBot && updater.ProcessUnsafe())
+    {
+        if (!PlayerLoading() || _player)
+            _pendingLoginAfterBot = false;
+        else if (!ObjectAccessor::FindConnectedPlayer(m_playerLoading))
+        {
+            _pendingLoginAfterBot = false;
+            SendConnectToInstance(WorldPackets::Auth::ConnectToSerial::WorldAttempt1);
+        }
+        else if (_pendingLoginAfterBotTimer <= diff)
+        {
+            TC_LOG_ERROR("network", "Account ({}) can't login with character ({}): its bot did not leave the world in time.",
+                GetAccountId(), m_playerLoading.ToString());
+            _pendingLoginAfterBot = false;
+            AbortLogin(WorldPackets::Character::LoginFailureReason::DuplicateCharacter);
+        }
+        else
+            _pendingLoginAfterBotTimer -= diff;
     }
 
     ///- Retrieve packets from the receive queue and call the appropriate handlers
@@ -580,6 +636,10 @@ void WorldSession::LogoutPlayer(bool save)
 
     if (_player)
     {
+        // Captured early because the bot-only per-character offline write
+        // below runs after _player is nulled out by SetPlayer(nullptr).
+        uint64 const playerGuidLow = _player->GetGUID().GetCounter();
+
         if (!_player->GetLootGUID().IsEmpty())
             DoLootReleaseAll();
 
@@ -706,10 +766,22 @@ void WorldSession::LogoutPlayer(bool save)
         SendPacket(WorldPackets::Character::LogoutComplete().Write());
         TC_LOG_DEBUG("network", "SESSION: Sent SMSG_LOGOUT_COMPLETE Message");
 
-        //! Since each account can only have one online character at any given time, ensure all characters for active account are marked as offline
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
-        stmt->setUInt32(0, GetAccountId());
-        CharacterDatabase.Execute(stmt);
+        // Bots violate the "one online char per account" assumption: a GM can
+        // be in-world alongside several bot chars on the same account. The
+        // bulk `WHERE account = ?` query below would mark the GM's own char
+        // (and other still-active bots) offline. For bot sessions, restrict
+        // the offline write to just this character.
+        if (IsBot())
+        {
+            CharacterDatabase.PExecute("UPDATE characters SET online = 0 WHERE guid = {}", playerGuidLow);
+        }
+        else
+        {
+            //! Since each account can only have one online character at any given time, ensure all characters for active account are marked as offline
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
+            stmt->setUInt32(0, GetAccountId());
+            CharacterDatabase.Execute(stmt);
+        }
     }
 
     if (m_Socket[CONNECTION_TYPE_INSTANCE])
@@ -728,6 +800,11 @@ void WorldSession::LogoutPlayer(bool save)
 void WorldSession::KickPlayer(std::string_view reason)
 {
     TC_LOG_INFO("network.kick", "{} kicked with reason: {}", GetPlayerInfo(), reason);
+
+    // A headless bot session has no socket to close; flag the exit directly so BotSession::Update
+    // logs the bot out and the session manager reaps it (failed logins, GM kick/ban).
+    if (IsBot())
+        forceExit = true;
 
     for (std::shared_ptr<WorldSocket> const& socket : m_Socket)
     {

@@ -73,9 +73,18 @@ void DB2StorageBase::WriteRecord(uint32 id, LocaleConstant locale, ByteBuffer& b
                     entry += 8;
                     break;
                 case FT_STRING:
-                    buffer << (*reinterpret_cast<LocalizedString const*>(entry))[locale];
+                {
+                    // a text with nothing in the client's language (a record the client files do not have, or a hotfix row
+                    // without a *_locale row) goes out in English rather than empty: a ruRU client listed auction items
+                    // without a name, only the random suffix
+                    LocalizedString const& str = *reinterpret_cast<LocalizedString const*>(entry);
+                    char const* text = str[locale];
+                    if ((!text || !*text) && locale != LOCALE_enUS && str[LOCALE_enUS])
+                        text = str[LOCALE_enUS];
+                    buffer << (text ? text : "");
                     entry += sizeof(LocalizedString);
                     break;
+                }
                 case FT_STRING_NOT_LOCALIZED:
                     buffer << *reinterpret_cast<char const* const*>(entry);
                     entry += sizeof(char const*);

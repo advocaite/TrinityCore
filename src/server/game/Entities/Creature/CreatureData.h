@@ -584,6 +584,7 @@ struct TC_GAME_API CreatureBaseStats
 struct ClassicCreatureClassLevelStats
 {
     uint32 Health = 0;
+    uint32 HealthForever = 0;   // curve fit to sniffed official Forever creatures (Classic.ForeverCreatureHealth), 0 = none
     uint32 Mana = 0;
     uint32 Armor = 0;
     float MeleeDamage = 0.0f;

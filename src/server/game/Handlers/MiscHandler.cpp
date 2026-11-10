@@ -414,11 +414,17 @@ void WorldSession::HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateCh
     }
 
     _player->SetStandState(packet.StandState);
+    UpdateCampfireRest(packet.StandState);
+}
 
-    // Classic 1.60 (WoW Forever): sitting near a campfire (spell focus 4) starts a 60 s rest (1289723) that gives Boosted Rest
-    // (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it)
+// Classic 1.60 (WoW Forever): sitting near a campfire (spell focus 4) starts a 60 s rest (1289723) that gives Boosted Rest
+// (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it).
+// Also called for the sit text emote: a typed /sit in another language (ruRU "/сесть", 2026-11-05 report) can reach the server
+// only as the emote, without a stand state change, and then the rest never started.
+void WorldSession::UpdateCampfireRest(uint8 standState)
+{
     static constexpr uint32 SPELL_CAMPFIRE_REST = 1289723;
-    if (packet.StandState == UNIT_STAND_STATE_SIT)
+    if (standState == UNIT_STAND_STATE_SIT)
     {
         if (!_player->HasAura(SPELL_CAMPFIRE_REST))
             if (GameObject* fire = _player->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, 15.0f))
@@ -736,9 +742,12 @@ void WorldSession::HandleUpdateAccountData(WorldPackets::ClientConfig::UserClien
         return;
     }
 
-    if (packet.Size > 0xFFFF)
+    // account_data / character_account_data store MEDIUMBLOB (16 MiB); the compressed upload itself is capped by the socket at 64 KiB
+    static constexpr uint32 AccountDataMaxSize = 0x100000;
+    if (packet.Size > AccountDataMaxSize)
     {
-        TC_LOG_ERROR("network", "UAD: Account data packet too big, size {}", packet.Size);
+        TC_LOG_WARN("network", "UAD: Account data dropped, too big: account {}, player {}, type {}, size {} (max {})",
+            GetAccountId(), packet.PlayerGuid.ToString(), packet.DataType, packet.Size, AccountDataMaxSize);
         return;
     }
 
@@ -748,9 +757,12 @@ void WorldSession::HandleUpdateAccountData(WorldPackets::ClientConfig::UserClien
     uLongf realSize = packet.Size;
     if (uncompress(reinterpret_cast<Bytef*>(dest.data()), &realSize, packet.CompressedData.data(), packet.CompressedData.size()) != Z_OK)
     {
-        TC_LOG_ERROR("network", "UAD: Failed to decompress account data");
+        TC_LOG_WARN("network", "UAD: Account data dropped, failed to decompress: account {}, player {}, type {}, size {}, compressed {}",
+            GetAccountId(), packet.PlayerGuid.ToString(), packet.DataType, packet.Size, packet.CompressedData.size());
         return;
     }
+
+    dest.resize(realSize);
 
     SetAccountData(AccountDataType(packet.DataType), packet.Time, dest);
 

@@ -1094,10 +1094,18 @@ dtStatus dtNavMeshQuery::findPath(dtPolyRef startRef, dtPolyRef endRef,
 			// The node is already in open list and the new result is worse, skip.
 			if ((neighbourNode->flags & DT_NODE_OPEN) && total >= neighbourNode->total)
 				continue;
-			// The node is already visited and process, and the new result is worse, skip.
-			if ((neighbourNode->flags & DT_NODE_CLOSED) && total >= neighbourNode->total)
+			// Never update a closed node's parent even if a cheaper route is found.
+			// TC's road-bonus area cost (areaCost < 1.0) makes the heuristic
+			// inadmissible: a cheaper path through a road polygon can arrive at a
+			// node that is already CLOSED, and the original code would update its
+			// pidx. If that node is an ancestor of bestNode, a parent-chain cycle
+			// forms (A.pidx=B while B.pidx=A). getPathToNode then loops forever,
+			// hanging the world thread until FreezeDetector aborts. Skipping the
+			// update means paths through roads may be slightly non-optimal, which
+			// is completely acceptable for bot navigation.
+			if (neighbourNode->flags & DT_NODE_CLOSED)
 				continue;
-			
+
 			// Add or update the node.
 			neighbourNode->pidx = m_nodePool->getNodeIdx(bestNode);
 			neighbourNode->id = neighbourRef;

@@ -107,6 +107,22 @@ Optional<std::size_t> SelectAddressForClient(boost::asio::ip::address const& cli
         }
     }
 
+    // A PC with more than one local network (the home network and a shared one such as Radmin VPN or ZeroTier): the client gets
+    // the address in the network it came from, so a friend in the same house and a friend in the shared network both get in.
+    if (clientAddress.is_v4())
+    {
+        boost::asio::ip::address_v4 clientV4 = clientAddress.to_v4();
+        for (boost::asio::ip::network_v4 const& network : LocalV4Networks)
+        {
+            if (!IsInNetwork(network, clientV4))
+                continue;
+
+            for (std::size_t i = 0; i < addresses.size(); ++i)
+                if (addresses[i].is_v4() && !addresses[i].is_loopback() && IsInNetwork(network, addresses[i].to_v4()))
+                    return i;
+        }
+    }
+
     if (IsInLocalNetwork(clientAddress) || clientAddress.is_loopback())
     {
         // client is in the same network as this process, prefer local addresses

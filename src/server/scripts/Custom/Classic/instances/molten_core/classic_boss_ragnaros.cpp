@@ -325,6 +325,7 @@ struct classic_boss_ragnaros : public ScriptedAI
                 {
                     // Become unbanished again
                     IsBanished = false;
+                    TC_LOG_INFO("scripts", "[MoltenCore.Ragnaros] emerged");
                     m_uiMagmaBlastTimer = 3000;
                     HasYelledMagmaBlast = false;
                     m_uiEmergeStateTimer = 2900;
@@ -406,6 +407,8 @@ struct classic_boss_ragnaros : public ScriptedAI
                     me->SetCanMelee(false);                         // VMaNGOS returns before melee while submerged
                     SummonSonsOfFlame();
 
+                    TC_LOG_INFO("scripts", "[MoltenCore.Ragnaros] submerged ({}), Sons of Flame summoned, emerges in 90 s",
+                        HasSubmergedOnce ? "second or later" : "first");
                     HasSubmergedOnce = true;
                     IsBanished = true;
                     m_uiSubmergeTimer = 3 * MINUTE * IN_MILLISECONDS;

@@ -22,6 +22,11 @@ namespace WorldPackets::Social
 {
 void SendContactList::Read()
 {
+    // Classic 1.60 puts one more byte (seen 0) before the flags: 00 15 00 00 00 / 00 11 00 00 00. Read as a uint32 the flags
+    // came out as 0x1500, no social flag matched and the friend list was sent empty every time it was opened
+    if (_worldPacket.size() > sizeof(uint32))
+        _worldPacket.read_skip<uint8>();
+
     _worldPacket >> Flags;
 }
 

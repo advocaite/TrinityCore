@@ -17,6 +17,7 @@
 
 #include "Session.h"
 #include "ByteConverter.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "Errors.h"
 #include "IpBanCheckConnectionInitializer.h"
@@ -70,12 +71,14 @@ void Battlenet::GameAccountInfo::LoadResult(Field const* fields)
 }
 
 constexpr std::size_t PacketHeaderLengthSize = sizeof(uint16);
+constexpr std::size_t MaxPacketDataSize = 0x100000; // client messages are small; only a broken or hostile client asks for more
 
 Battlenet::Session::Session(Trinity::Net::IoContextTcpSocket&& socket) : _socket(CreateSocket(std::move(socket))),
     _packetReadState(PacketReadState::HeaderLength), _packetBuffer(PacketHeaderLengthSize),
     _sessionId(++sSessionMgr.SessionIdGenerator), _creationTime(SystemTimePoint::clock::now()),
     _accountInfo(new AccountInfo()), _gameAccountInfo(nullptr), _locale(),
-    _os(), _build(0), _buildVariant(), _timezoneOffset(0min), _ipCountry(), _clientSecret(), _authed(false), _requestToken(0)
+    _os(), _build(0), _buildVariant(), _timezoneOffset(0min), _ipCountry(), _clientSecret(), _authed(false), _handshakeDone(false), _handshakeDeadline(TimePoint::max()),
+    _loginDeadline(TimePoint::max()), _requestToken(0)
 {
 }
 
@@ -86,15 +89,63 @@ std::shared_ptr<Battlenet::Session::Socket> Battlenet::Session::CreateSocket(Tri
     return std::make_shared<Socket>(std::move(socket), SslContext::instance());
 }
 
+namespace
+{
+Trinity::Net::IpConnectionLimit BattlenetConnectionLimit;
+
+// runs once the TLS handshake is done
+struct HandshakeDoneConnectionInitializer final : Trinity::Net::SocketConnectionInitializer
+{
+    explicit HandshakeDoneConnectionInitializer(std::weak_ptr<Battlenet::Session> session) : _session(std::move(session)) { }
+
+    void Start() override
+    {
+        if (std::shared_ptr<Battlenet::Session> session = _session.lock())
+            session->SetHandshakeDone();
+        InvokeNext();
+    }
+
+private:
+    std::weak_ptr<Battlenet::Session> _session;
+};
+
+int64 SteadyNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(TimePoint::clock::now().time_since_epoch()).count();
+}
+
+TimePoint DeadlineFromConfig(char const* name, int32 defaultSeconds)
+{
+    int32 const seconds = sConfigMgr->GetIntDefault(name, defaultSeconds);
+    return seconds > 0 ? TimePoint::clock::now() + Seconds(seconds) : TimePoint::max();
+}
+}
+
 void Battlenet::Session::Start()
 {
     TC_LOG_TRACE("session", "{} Accepted connection", GetClientInfo());
 
+    // connections per address; the server's own PC is never limited
+    boost::asio::ip::address const& address = _socket->GetRemoteIpAddress();
+    _ipConnectionSlot = BattlenetConnectionLimit.TryAcquire(address.to_string(), address.is_loopback(),
+        uint32(std::max(sConfigMgr->GetIntDefault("Network.ConnectionsPerIp", 16), 0)));
+    if (!_ipConnectionSlot)
+    {
+        TC_LOG_ERROR("session", "{} already has Network.ConnectionsPerIp open connections, refusing another", GetClientInfo());
+        _socket->CloseSocket();
+        return;
+    }
+
+    _handshakeDeadline = DeadlineFromConfig("Network.HandshakeTimeout", 30);
+    _loginDeadline = DeadlineFromConfig("Network.LoginTimeout", 600);
+    _requestRateLimit = Trinity::Net::RequestRateLimit(uint32(std::max(sConfigMgr->GetIntDefault("Network.RequestsPerSecond", 10), 0)), SteadyNowMs());
+
     // build initializer chain
-    std::array<std::shared_ptr<Trinity::Net::SocketConnectionInitializer>, 3> initializers =
+    std::array<std::shared_ptr<Trinity::Net::SocketConnectionInitializer>, 4> initializers =
     { {
         std::make_shared<Trinity::Net::IpBanCheckConnectionInitializer<Session>>(this),
         std::make_shared<Trinity::Net::SslHandshakeConnectionInitializer<Socket>>(_socket.get()),
+        std::make_shared<HandshakeDoneConnectionInitializer>(weak_from_this()),
         std::make_shared<Trinity::Net::ReadConnectionInitializer<Socket, Session>>(_socket.get(), this),
     } };
 
@@ -105,6 +156,14 @@ bool Battlenet::Session::Update()
 {
     if (!_socket->Update())
         return false;
+
+    TimePoint const now = TimePoint::clock::now();
+    if ((!_handshakeDone && now > _handshakeDeadline) || (!_authed && now > _loginDeadline))
+    {
+        TC_LOG_DEBUG("session", "{} did not finish the {} in time, closing", GetClientInfo(), _handshakeDone ? "login" : "TLS handshake");
+        _socket->CloseSocket();
+        return false;
+    }
 
     _queryProcessor.ProcessReadyCallbacks();
 
@@ -221,6 +280,15 @@ void Battlenet::Session::OnLogon(std::string_view platform, std::string_view loc
     _timezoneOffset = timezoneOffset;
 }
 
+bool Battlenet::Session::TryBeginLogin()
+{
+    if (_authed || _loginInFlight)
+        return false;
+
+    _loginInFlight = true;
+    return true;
+}
+
 void Battlenet::Session::OnLogonSuccess(std::shared_ptr<AccountInfo> accountInfo, std::string_view ipCountry)
 {
     _accountInfo = std::move(accountInfo);
@@ -315,6 +383,13 @@ bool Battlenet::Session::ReadHeaderHandler()
 
     _packetBuffer.ReadCompleted(_packetBuffer.GetActiveSize());
 
+    // the size is the client's own number: refuse anything a real message never needs instead of allocating it
+    if (header.size() > MaxPacketDataSize)
+    {
+        TC_LOG_ERROR("session", "{} sent a packet header with size {}, closing the connection", GetClientInfo(), header.size());
+        return false;
+    }
+
     _packetReadState = PacketReadState::Data;
     _packetBuffer.Resize(_packetBuffer.GetBufferSize() + header.size());
     return true;
@@ -324,7 +399,15 @@ bool Battlenet::Session::ReadDataHandler()
 {
     bgs::protocol::Header header;
     bool parseSuccess = header.ParseFromArray(_packetBuffer.GetBasePointer() + PacketHeaderLengthSize, _packetBuffer.GetReadPointer() - _packetBuffer.GetBasePointer() - PacketHeaderLengthSize);
-    ASSERT(parseSuccess);
+    if (!parseSuccess)  // malformed or empty request (seen at logout): close the connection instead of taking the server down
+        return false;
+
+    // a client sends a few dozen requests to log in and a trickle after; a flood (each logon request queues login database work) closes it
+    if (!_requestRateLimit.Allow(SteadyNowMs()))
+    {
+        TC_LOG_ERROR("session", "{} sent more than Network.RequestsPerSecond requests, closing the connection", GetClientInfo());
+        return false;
+    }
 
     if (header.service_id() != 0xFE)
     {

@@ -47,6 +47,26 @@ target_link_libraries(game
   PUBLIC
     game-interface)
 
+# Road corridor support: worldserver applies operator-curated road segments
+# (Road::ApplyCorridorsToNavmesh from src/tools/extractor_common/RoadCorridor.h)
+# to each map's navmesh on first tile load.  extractor_common already links
+# against Detour and has no game dependencies, so this is a clean addition.
+#
+# IMPORTANT: src/CMakeLists.txt processes `add_subdirectory(server)` BEFORE
+# `add_subdirectory(tools)`, which means `if(TARGET extractor_common)` is
+# ALWAYS false at this point — the tools subtree hasn't been visited yet.
+# Gate on the build option instead so the define is set and the apply path
+# actually compiles in.  The link itself is added in src/CMakeLists.txt once
+# both subtrees are configured.
+if(TOOLS)
+  target_include_directories(game
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/src/tools/extractor_common)
+  target_compile_definitions(game
+    PRIVATE
+      TRINITY_HANDCRAFTED_ROADS=1)
+endif()
+
 if(TARGET efsw)
   target_link_libraries(game
     PRIVATE

@@ -34,6 +34,27 @@
 
 namespace Battlenet
 {
+namespace
+{
+// the login screen sends what the player typed; accounts are stored as name@domain, so a plain name (no @) gets
+// "@" + LoginREST.DefaultAccountDomain added, which lets players type "name" instead of "name@local".
+// Names with an @ are left as they are, and an empty setting turns this off.
+void NormalizeLoginName(std::string& login)
+{
+    Utf8ToUpperOnlyLatin(login);
+    if (login.empty() || login.find('@') != std::string::npos)
+        return;
+
+    std::string domain = sConfigMgr->GetStringDefault("LoginREST.DefaultAccountDomain"sv, "local");
+    if (domain.empty())
+        return;
+
+    Utf8ToUpperOnlyLatin(domain);
+    login += '@';
+    login += domain;
+}
+}
+
 LoginRESTService& LoginRESTService::Instance()
 {
     static LoginRESTService instance;
@@ -290,7 +311,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLogin(std::sh
             return HandleAuthenticatorCode(std::move(session), context, loginForm->inputs(i).value());
 
     std::string login(getInputValue(loginForm.get(), "account_name"));
-    Utf8ToUpperOnlyLatin(login);
+    NormalizeLoginName(login);
 
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_AUTHENTICATION);
     stmt->setString(0, login);
@@ -309,34 +330,38 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLogin(std::sh
         }
 
         std::string login(getInputValue(loginForm.get(), "account_name"));
-        Utf8ToUpperOnlyLatin(login);
+        NormalizeLoginName(login);
         bool passwordCorrect = false;
         Optional<std::string> serverM2;
 
         Field* fields = result->Fetch();
         uint32 accountId = fields[0].GetUInt32();
-        if (!session->GetSessionState()->Srp)
+        // an SRP challenge answers one login only: take it out of the session so a repeated post can't verify it twice
+        // (assert in SRP6::VerifyClientEvidence), and only accept it for the account it was made for
+        std::unique_ptr<Trinity::Crypto::SRP::BnetSRP6Base> srp = std::move(session->GetSessionState()->Srp);
+        std::string srpLogin = std::move(session->GetSessionState()->SrpLogin);
+        if (!srp)
         {
             SrpVersion version = SrpVersion(fields[1].GetInt8());
             std::string srpUsername = ByteArrayToHexStr(Trinity::Crypto::SHA256::GetDigestOf(login));
             Trinity::Crypto::SRP::Salt s = fields[2].GetBinary<Trinity::Crypto::SRP::SALT_LENGTH>();
             Trinity::Crypto::SRP::Verifier v = fields[3].GetBinary();
-            session->GetSessionState()->Srp = CreateSrpImplementation(version, SrpHashFunction::Sha256, srpUsername, s, v);
+            srp = CreateSrpImplementation(version, SrpHashFunction::Sha256, srpUsername, s, v);
 
             std::string password(getInputValue(loginForm.get(), "password"));
             if (version == SrpVersion::v1)
                 Utf8ToUpperOnlyLatin(password);
 
-            passwordCorrect = session->GetSessionState()->Srp->CheckCredentials(srpUsername, password);
+            passwordCorrect = srp && srp->CheckCredentials(srpUsername, password);
         }
-        else
+        else if (srpLogin == login)
         {
             BigNumber A(getInputValue(loginForm.get(), "public_A"));
             BigNumber M1(getInputValue(loginForm.get(), "client_evidence_M1"));
-            if (Optional<BigNumber> sessionKey = session->GetSessionState()->Srp->VerifyClientEvidence(A, M1))
+            if (Optional<BigNumber> sessionKey = srp->VerifyClientEvidence(A, M1))
             {
                 passwordCorrect = true;
-                serverM2 = session->GetSessionState()->Srp->CalculateServerEvidence(A, M1, *sessionKey).AsHexStr();
+                serverM2 = srp->CalculateServerEvidence(A, M1, *sessionKey).AsHexStr();
             }
         }
 
@@ -684,7 +709,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLoginSrpChall
         if (loginForm.inputs(i).input_id() == "account_name")
             login = loginForm.inputs(i).value();
 
-    Utf8ToUpperOnlyLatin(login);
+    NormalizeLoginName(login);
 
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_CHECK_PASSWORD_BY_EMAIL);
     stmt->setString(0, login);
@@ -710,6 +735,7 @@ LoginRESTService::RequestHandlerResult LoginRESTService::HandlePostLoginSrpChall
         Trinity::Crypto::SRP::Verifier v = fields[2].GetBinary();
 
         session->GetSessionState()->Srp = CreateSrpImplementation(version, hashFunction, srpUsername, s, v);
+        session->GetSessionState()->SrpLogin = login;
         if (!session->GetSessionState()->Srp)
         {
             context.response.result(boost::beast::http::status::internal_server_error);

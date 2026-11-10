@@ -69,6 +69,34 @@ namespace Trainer
 
         void SendSpells(Creature const* npc, Player* player, LocaleConstant locale) const;
         void TeachSpell(Creature const* npc, Player* player, uint32 spellId) const;
+        // Read-only access to the underlying spell list. Lets callers
+        // enumerate trainer offerings without going through the full
+        // SendSpells packet build (used by Playerbot to drive bulk-train).
+        std::vector<Spell> const& GetSpells() const { return _spells; }
+        Type GetType() const { return _type; }
+        // Teaches, free of charge and without an NPC, every spell of this trainer the player may learn now (class, race,
+        // level and prerequisite checks as at the trainer). Profession and battle pet spells are skipped. For bots that are
+        // levelled by command and never walk to a trainer. Returns the number of spells learned.
+        // `tally`, when given, counts per trainer spell why it was not taught (diagnostics for a pass that learns nothing).
+        struct FreeTeachTally
+        {
+            uint32 spells = 0;        // trainer spells looked at
+            uint32 known = 0;         // the player already has the spell (or everything it teaches)
+            uint32 class_race = 0;    // IsSpellFitByClassAndRace
+            uint32 skill_line = 0;    // ReqSkillLine (professions): skipped
+            uint32 battle_pet = 0;
+            uint32 ability = 0;       // a ReqAbility the player lacks
+            uint32 level = 0;         // ReqLevel above the player's level
+            uint32 other = 0;
+            uint32 taught = 0;
+        };
+        uint32 TeachAvailableSpellsFree(Player* player, FreeTeachTally* tally = nullptr) const;
+        // Bit mask (1 << (class - 1)) of the classes this trainer teaches: the union over its spells of the classes their
+        // class skill lines name; all classes when the data does not say. Some Forever class spells (Paladin Judgement, Seal of Righteousness) carry no
+        // class restriction of their own, so IsSpellFitByClassAndRace lets them through for any class: the trainer decides.
+        uint32 GetClassMask() const;
+        // Why TeachAvailableSpellsFree would not teach `spellId` to this player, in the order it checks ("would be taught" when it would).
+        std::string DescribeFreeTeachRefusal(Player const* player, uint32 spellId) const;
 
     private:
         Spell const* GetSpell(uint32 spellId) const;
@@ -80,6 +108,7 @@ namespace Trainer
         friend ObjectMgr;
         void AddGreetingLocale(LocaleConstant locale, std::string_view greeting);
 
+        mutable uint32 _classMask = 0;   // 0 = not computed yet
         uint32 _id;
         Type _type;
         std::vector<Spell> _spells;

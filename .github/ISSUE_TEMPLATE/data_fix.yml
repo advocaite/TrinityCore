@@ -1,0 +1,38 @@
+name: Data fix (SQL)
+description: Suggest a database fix (quests, spawns, loot, vendors, trainers, texts) with its source.
+labels: [data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Every data fix needs a source: a packet capture, client data, Questie data, Wowhead, a video or screenshot.
+        Please follow the SQL rules in CONTRIBUTING.md (safe to run twice, backticks, column names, no database names).
+  - type: textarea
+    id: description
+    attributes:
+      label: What is wrong
+      description: What the fix changes, and how to see the problem in game.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Where the correct data comes from. Links, capture files, screenshots.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: SQL fix
+      description: Formatted as SQL automatically. For a large fix, link a gist instead.
+      render: sql
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Tested on commit
+      description: The output of `.server debug`, or the commit hash.
+    validations:
+      required: true

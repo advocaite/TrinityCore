@@ -18,6 +18,7 @@
 #include "Group.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "BotGroupRules.h"
 #include "CharacterCache.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
@@ -28,6 +29,7 @@
 #include "Item.h"
 #include "LFGMgr.h"
 #include "Log.h"
+#include <algorithm>
 #include "Loot.h"
 #include "MapManager.h"
 #include "MiscPackets.h"
@@ -962,7 +964,10 @@ void Group::BroadcastAddonMessagePacket(WorldPacket const* packet, const std::st
         if ((!ignore.IsEmpty() && player->GetGUID() == ignore) || (ignorePlayersInBGRaid && player->GetGroup() != this))
             continue;
 
-        if (player->GetSession()->IsAddonRegistered(prefix) && (group == -1 || itr.getSubGroup() == group))
+        // Null-session guard for mid-logout group members in addon-msg
+        // broadcast path. Skipping a logging-out target is the right
+        // outcome — they can't process the addon msg anyway.
+        if (player->GetSession() && player->GetSession()->IsAddonRegistered(prefix) && (group == -1 || itr.getSubGroup() == group))
             player->SendDirectMessage(packet);
     }
 }
@@ -1068,6 +1073,20 @@ void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
     sScriptMgr->OnGroupSubgroupChange(this, guid, group);
 }
 
+void Group::ReorderMembers(std::vector<ObjectGuid> const& order)
+{
+    MemberSlotList sorted;
+    for (ObjectGuid const& guid : order)
+    {
+        member_witerator it = _getMemberWSlot(guid);
+        if (it != m_memberSlots.end())
+            sorted.splice(sorted.end(), m_memberSlots, it);
+    }
+    sorted.splice(sorted.end(), m_memberSlots);
+    m_memberSlots.swap(sorted);
+    SendUpdate();
+}
+
 void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
 {
     if (!isRaidGroup())
@@ -1133,51 +1152,31 @@ void Group::UpdateLooterGuid(WorldObject* pLootedObject, bool ifneed)
     if (GetLootMethod() == FREE_FOR_ALL)
         return;
 
+    // bots take a turn only while no player of the group is near the corpse (BotGroupRules::NextRoundRobinLooter)
     ObjectGuid oldLooterGUID = GetLooterGuid();
-    member_citerator guid_itr = _getMemberCSlot(oldLooterGUID);
-    if (guid_itr != m_memberSlots.end())
+    std::vector<ObjectGuid> memberGuids;
+    std::vector<BotGroupRules::LooterCandidate> candidates;
+    std::size_t current = m_memberSlots.size();
+    for (MemberSlot const& slot : m_memberSlots)
     {
-        if (ifneed)
+        if (slot.guid == oldLooterGUID)
+            current = memberGuids.size();
+
+        BotGroupRules::LooterCandidate& candidate = candidates.emplace_back();
+        if (Player* player = ObjectAccessor::FindPlayer(slot.guid))
         {
-            // not update if only update if need and ok
-            Player* looter = ObjectAccessor::FindPlayer(guid_itr->guid);
-            if (looter && looter->IsAtGroupRewardDistance(pLootedObject))
-                return;
+            candidate.inRange = player->IsAtGroupRewardDistance(pLootedObject);
+            candidate.bot = player->GetSession()->IsBot();
         }
-        ++guid_itr;
+        memberGuids.push_back(slot.guid);
     }
 
-    // search next after current
-    Player* pNewLooter = nullptr;
-    for (member_citerator itr = guid_itr; itr != m_memberSlots.end(); ++itr)
+    std::size_t const next = BotGroupRules::NextRoundRobinLooter(candidates, current, ifneed);
+    if (next < memberGuids.size())
     {
-        if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-            if (player->IsAtGroupRewardDistance(pLootedObject))
-            {
-                pNewLooter = player;
-                break;
-            }
-    }
-
-    if (!pNewLooter)
-    {
-        // search from start
-        for (member_citerator itr = m_memberSlots.begin(); itr != guid_itr; ++itr)
+        if (oldLooterGUID != memberGuids[next])
         {
-            if (Player* player = ObjectAccessor::FindPlayer(itr->guid))
-                if (player->IsAtGroupRewardDistance(pLootedObject))
-                {
-                    pNewLooter = player;
-                    break;
-                }
-        }
-    }
-
-    if (pNewLooter)
-    {
-        if (oldLooterGUID != pNewLooter->GetGUID())
-        {
-            SetLooterGuid(pNewLooter->GetGUID());
+            SetLooterGuid(memberGuids[next]);
             SendUpdate();
         }
     }
@@ -1499,6 +1498,8 @@ void Group::EndReadyCheck(void)
     if (!m_readyCheckStarted)
         return;
 
+    TC_LOG_INFO("network", "[ready_check] ended ({} members, {} had not answered)", GetMembersCount(), uint32(std::count_if(m_memberSlots.begin(), m_memberSlots.end(), [](MemberSlot const& m) { return !m.readyChecked; })));
+
     m_readyCheckStarted = false;
     m_readyCheckTimer = Milliseconds::zero();
 
@@ -1617,6 +1618,23 @@ bool Group::isLFGGroup() const
 bool Group::isRaidGroup() const
 {
     return (m_groupFlags & GROUP_FLAG_RAID) != 0;
+}
+
+bool Group::HasBotMember() const
+{
+    for (GroupReference const& itr : GetMembers())
+        if (itr.GetSource()->GetSession()->IsBot())
+            return true;
+    return false;
+}
+
+bool Group::IsRaidForQuests() const
+{
+    std::size_t players = 0;
+    for (GroupReference const& itr : GetMembers())
+        if (!itr.GetSource()->GetSession()->IsBot())
+            ++players;
+    return BotGroupRules::QuestRaidRuleApplies(isRaidGroup(), players, MAX_GROUP_SIZE);
 }
 
 bool Group::isBGGroup() const
