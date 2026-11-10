@@ -78,6 +78,7 @@ void ConfigReader::apply_from_loaded_config()
 
     raid_enabled_      = c.GetBoolDefault("Playerbot.Raid.Enable", true, true);
     boss_warnings_enabled_ = c.GetBoolDefault("Playerbot.Raid.BossWarnings", true, true);
+    raid_callouts_enabled_ = c.GetBoolDefault("Playerbot.Raid.Callouts", true, true);
     raid_auto_accept_rez_ = c.GetBoolDefault("Playerbot.Raid.AutoAcceptOwnerRez", true, true);
 
     housing_enabled_   = c.GetBoolDefault("Playerbot.Housing.Enabled", false, true);

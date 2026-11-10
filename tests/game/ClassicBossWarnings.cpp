@@ -18,6 +18,7 @@
 #include "tc_catch2.h"
 
 #include "../../src/modules/PlayerbotV2/Bot/Raid/BossWarningData_MC.h"
+#include "../../src/modules/PlayerbotV2/Bot/Raid/RaidCallouts.h"
 
 using namespace Playerbot::Raid;
 
@@ -130,4 +131,85 @@ TEST_CASE("Molten Core table is sane", "[ClassicBossWarnings]")
     for (BossWarning const& r : rules)
         magmadarPanic = magmadarPanic || (r.boss == 11982 && r.spell == 19408);
     CHECK(magmadarPanic);
+}
+
+TEST_CASE("Raid callout: the line for each decision", "[ClassicBossWarnings]")
+{
+    CalloutFacts f;
+    f.move_reason = "carrier run";
+    f.carried = "Living Bomb";
+    Callout c = PickCallout(f);
+    CHECK(c.kind == CalloutKind::CarrierRun);
+    CHECK(c.text == "Living Bomb on me, running out");
+    CHECK_FALSE(c.group_wide);
+
+    f.carried.clear();
+    CHECK(PickCallout(f).text == "bomb on me, running out");
+
+    CalloutFacts spread;
+    spread.move_reason = "spread";
+    CHECK(PickCallout(spread).text == "spread out");
+    CHECK(PickCallout(spread).group_wide);
+
+    CalloutFacts wipe;
+    wipe.move_reason = "wipe retreat";
+    wipe.taunt = true;
+    wipe.target = "Ragnaros";
+    CHECK(PickCallout(wipe).kind == CalloutKind::WipeRetreat);   // the most urgent line wins
+
+    CalloutFacts taunt;
+    taunt.taunt = true;
+    taunt.target = "Flamegor";
+    CHECK(PickCallout(taunt).text == "taunting Flamegor");
+    taunt.target.clear();
+    CHECK(PickCallout(taunt).kind == CalloutKind::None);   // no name, nothing to say
+
+    CalloutFacts cc;
+    cc.spell = "Polymorph";
+    cc.target = "Flamewaker Healer";
+    CHECK(PickCallout(cc).kind == CalloutKind::None);      // a short stun is not called
+    cc.long_cc = true;
+    CHECK(PickCallout(cc).text == "Polymorph on Flamewaker Healer, don't break it");
+
+    CalloutFacts orb;
+    orb.move_reason = "orb: walk to the Orb of Domination";
+    CHECK(PickCallout(orb).text == "taking the orb");
+
+    CalloutFacts quiet;
+    quiet.move_reason = "leave hazard";                    // every few seconds in a fight: not worth a line
+    CHECK(PickCallout(quiet).kind == CalloutKind::None);
+    quiet.move_reason = "role position";
+    CHECK(PickCallout(quiet).kind == CalloutKind::None);
+}
+
+TEST_CASE("Raid callout: rate limits per bot and per raid", "[ClassicBossWarnings]")
+{
+    CalloutGate g;
+    uint32_t t = 100000;
+    CHECK(g.Allow(1, 10, CalloutKind::Taunt, false, t));
+    CHECK_FALSE(g.Allow(1, 10, CalloutKind::CarrierRun, false, t + 3000));                     // same bot, too soon
+    CHECK_FALSE(g.Allow(1, 11, CalloutKind::Taunt, false, t + 1000));                          // the raid just heard a line
+    CHECK(g.Allow(1, 11, CalloutKind::Taunt, false, t + CalloutGate::kGroupGapMs));            // another bot, after the gap
+    CHECK(g.Allow(1, 10, CalloutKind::CarrierRun, false, t + CalloutGate::kBotGapMs));         // same bot, another line, later
+    CHECK_FALSE(g.Allow(1, 10, CalloutKind::Taunt, false, t + CalloutGate::kBotGapMs * 2));    // same line again within kSameKindMs
+    CHECK(g.Allow(1, 10, CalloutKind::Taunt, false, t + CalloutGate::kSameKindMs));
+    CHECK(g.Allow(2, 10, CalloutKind::None, false, t) == false);
+
+    // A group-wide call is said once for the whole raid.
+    CalloutGate w;
+    CHECK(w.Allow(5, 1, CalloutKind::Spread, true, t));
+    CHECK_FALSE(w.Allow(5, 2, CalloutKind::Spread, true, t + 10000));
+    CHECK(w.Allow(6, 2, CalloutKind::Spread, true, t + 10000));                               // another raid
+    CHECK(w.Allow(5, 3, CalloutKind::Spread, true, t + CalloutGate::kGroupWideMs));
+
+    // At most kWindowMax lines in kWindowMs for one raid, however many bots.
+    CalloutGate cap;
+    uint32_t said = 0;
+    for (uint64_t bot = 1; bot <= 10; ++bot)
+        said += cap.Allow(9, bot, CalloutKind::Taunt, false, t + uint32_t(bot) * CalloutGate::kGroupGapMs);
+    CHECK(said == CalloutGate::kWindowMax);
+
+    // Prune forgets the old state.
+    cap.Prune(t + 200000);
+    CHECK(cap.Tracked() == 0);
 }

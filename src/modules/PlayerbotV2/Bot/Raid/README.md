@@ -24,6 +24,9 @@ Port of Karrz's raid10-revamp ike3 raid logic (Karrz1/wow-1.12, src/game/PlayerB
 - Hooks outside this folder: BotSnapshot.h (field + reset), BotSnapshotBuilder.cpp (copy), PlayerbotV2.cpp
   (Update call), State_InCombat.cpp (dispatch), 4 raid DungeonScripts (one call each), BotSnapshotView.cpp
   (no-AoE clamp), core PlayerbotAPI.cpp (pet_attack / pet_cast drive a possessed creature when the bot has no pet).
+- `RaidCallouts.h`: bots say their new decision in raid chat like players ("Living Bomb on me, running out", "taunting
+  Flamegor", "Polymorph on X, don't break it", "spread out"), from the change-only decision log at the end of `Brain::Update`.
+  No model; rate limited per bot and per raid; Russian readers get the catalog lines. `Playerbot.Raid.Callouts` (default 1).
 - Config: `Playerbot.Raid.Enable` (default 1). Log: `[raid] <bot>: ...` lines at WARN on channel
   playerbot.v2.raid (shows with Logger.playerbot.v2=3), one per changed decision.
 

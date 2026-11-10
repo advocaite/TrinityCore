@@ -118,6 +118,15 @@ TEST_CASE("BotLocale: the add-on's structured whispers are never translated", "[
     CHECK(Translate(Lang::Ru, "ASSIGN|END|3") == "ASSIGN|END|3");
 }
 
+TEST_CASE("BotLocale: raid callouts", "[BotLocale]")
+{
+    CHECK(Translate(Lang::Ru, "Living Bomb on me, running out") == "Living Bomb на мне, отбегаю");
+    CHECK(Translate(Lang::Ru, "taunting Flamegor") == "провоцирую Flamegor");
+    CHECK(Translate(Lang::Ru, "Polymorph on Flamewaker Healer, don't break it") == "Polymorph на Flamewaker Healer, не сбивайте");
+    CHECK(Translate(Lang::Ru, "spread out") == "расходимся");
+    CHECK(Translate(Lang::Ru, "wipe, run back to the entrance") == "вайп, бегите ко входу");
+}
+
 TEST_CASE("BotLocale: unknown lines come back in English", "[BotLocale]")
 {
     CHECK(Translate(Lang::Ru, "Perf: ticks=5 emit=3") == "Perf: ticks=5 emit=3");

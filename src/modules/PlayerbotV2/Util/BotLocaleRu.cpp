@@ -780,6 +780,16 @@ std::vector<Catalog::Entry> const& RussianEntries()
         { "sorry, the invite didn't go through", "извините, приглашение не прошло" },
         { "sure! invite to <{}> sent, welcome :)", "конечно! приглашение в <{}> отправлено, добро пожаловать :)" },
         { "i can't invite myself, so {} sent you the invite to <{}>", "у меня нет права приглашать, поэтому {} отправляет вам приглашение в <{}>" },
+        // ---- raid callouts (Bot/Raid/RaidCallouts.h): spell and creature names stay as the server has them -----------------------
+        { "wipe, run back to the entrance", "вайп, бегите ко входу" },
+        { "{} on me, running out", "{} на мне, отбегаю" },
+        { "hiding behind an ice block", "прячусь за ледяную глыбу" },
+        { "spread out", "расходимся" },
+        { "dance time, follow the safe side", "танцуем, держитесь безопасной стороны" },
+        { "taking the orb", "беру сферу" },
+        { "priest call, not healing", "зов жрецов, не лечу" },
+        { "taunting {}", "провоцирую {}" },
+        { "{} on {}, don't break it", "{} на {}, не сбивайте" },
         // ---- arena (.bot arena, the arena ready line) ------------------------------------------------------------------------
         { "Your arena is ready. Enter: click Enter at the minimap or type .bot arena enter. Leave: type .bot arena leave.", "Ваша арена готова. Войти: нажмите «Войти» у миникарты или введите .bot arena enter. Отказаться: введите .bot arena leave." },
         { "No arena is ready for you yet.", "Для вас пока нет готовой арены." },

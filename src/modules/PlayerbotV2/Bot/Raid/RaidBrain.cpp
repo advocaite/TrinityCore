@@ -10,6 +10,7 @@
 #include "Api/BotLanguage.h"
 #include "DispelWorth.h"
 #include "RaidBrainInternal.h"
+#include "RaidCallouts.h"
 #include "RaidEncounters.h"
 #include "RaidGeometry.h"
 #include "RaidReadiness.h"
@@ -4580,6 +4581,66 @@ void EndQuietPulls(uint32_t now_ms)
     }
 }
 
+// Raid callouts (RaidCallouts.h): the bot says its new decision in raid chat, the way a player types "bomb on me, running out".
+CalloutGate g_callouts;
+
+std::string SpellNameOf(uint32_t spellId)
+{
+    SpellInfo const* info = spellId ? sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE) : nullptr;
+    char const* name = info && info->SpellName ? info->SpellName->Str[LOCALE_enUS] : nullptr;
+    return name ? std::string(name) : std::string();
+}
+
+void SayCallout(Player* bot, RaidOrder const& o, uint32_t now_ms)
+{
+    Group* group = bot->GetGroup();
+    if (!group || !bot->IsAlive())
+        return;
+    // Only a group with a real player in it reads raid chat; a bot-only group stays quiet.
+    bool human = false;
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+        {
+            human = true;
+            break;
+        }
+    if (!human)
+        return;
+
+    CalloutFacts f;
+    f.move_reason = o.move && o.move_reason ? o.move_reason : "";
+    f.hold_rotation = o.hold_rotation;
+    f.use_object = !o.use_object.IsEmpty();
+    if (o.cast_kind == RaidOrder::CastKind::Taunt || o.cast_kind == RaidOrder::CastKind::CrowdControl)
+    {
+        Unit const* target = o.cast_target.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, o.cast_target);
+        if (target)
+            f.target = target->GetName();
+        f.spell = SpellNameOf(o.cast_spell);
+        f.taunt = o.cast_kind == RaidOrder::CastKind::Taunt;
+        if (o.cast_kind == RaidOrder::CastKind::CrowdControl)
+            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(o.cast_spell, DIFFICULTY_NONE))
+                f.long_cc = info->GetMaxDuration() >= 15000;
+    }
+    if (f.move_reason == "carrier run")
+        if (RaidRules const* rules = RulesForMap(bot->GetMapId()))
+            for (CarrierRun const& rule : rules->carrierRun)
+                if (bot->HasAura(rule.aura))
+                {
+                    f.carried = SpellNameOf(rule.aura);
+                    break;
+                }
+
+    Callout const c = PickCallout(f);
+    if (!g_callouts.Allow(group->GetGUID().GetCounter(), bot->GetGUID().GetCounter(), c.kind, c.group_wide, now_ms))
+        return;
+    ChatMsg type = group->isRaidGroup()
+        ? (group->IsLeader(bot->GetGUID()) ? CHAT_MSG_RAID_LEADER : CHAT_MSG_RAID)
+        : (group->IsLeader(bot->GetGUID()) ? CHAT_MSG_PARTY_LEADER : CHAT_MSG_PARTY);
+    BotLanguage::GroupChat(bot, group, type, c.text, group->isRaidGroup() ? -1 : group->GetMemberGroup(bot->GetGUID()));
+    TC_LOG_INFO("playerbot.v2.raid", "[raid_callout] {}: {}", bot->GetName(), c.text);
+}
+
 } // namespace
 
 // [release] (playtest, MC 2026-10-08: "A member of your group is in combat" blocks Release Spirit, which worked in the morning): while a human of
@@ -5128,11 +5189,17 @@ void Brain::Update(uint32_t now_ms)
         std::string& last = lastSignature[guidLow];
         if (s != last && !s.empty())
             if (Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guidLow)))
+            {
                 TC_LOG_WARN("playerbot.v2.raid", "[raid] {}: {}", p->GetName(), s);
+                if (Services::Config().raid_callouts_enabled())
+                    SayCallout(p, o, now_ms);
+            }
         last = s;
     }
     if (lastSignature.size() > 2 * next.size() + 64)
         lastSignature.clear();
+    if (g_callouts.Tracked() > 256)
+        g_callouts.Prune(now_ms);
 
     EndQuietPulls(now_ms);
     orders_.swap(next);

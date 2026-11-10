@@ -568,6 +568,11 @@ Playerbot.Raid.Enable = 1
 # "Shazzrah is casting Arcane Explosion"), sent as a boss emote. Molten Core bosses. 0 turns them off.
 Playerbot.Raid.BossWarnings = 1
 
+# Bots say what they do in raid chat, like players: "Living Bomb on me, running out", "taunting Flamegor",
+# "Polymorph on Flamewaker Healer, don't break it", "spread out", "wipe, run back to the entrance". No model is used, the
+# lines come from the raid rules, and they are rate limited (a few lines a minute). 0 turns them off.
+Playerbot.Raid.Callouts = 1
+
 # A resurrection a bot casts on you is accepted for you after 3 s without an answer (the 70205 client shows no accept popup).
 Playerbot.Raid.AutoAcceptOwnerRez = 1
 
