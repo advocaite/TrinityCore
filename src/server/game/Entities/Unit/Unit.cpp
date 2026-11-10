@@ -13197,7 +13197,10 @@ uint32 Unit::GetModelForForm(ShapeshiftForm form, uint32 spellId) const
     switch (spellId)
     {
         case 7090: // Bear Form
-            return 29414;
+            // Classic 1.60: the client has no display 29414, a creature shown with it is invisible. Use the form's own display (2281) then.
+            if (sCreatureDisplayInfoStore.HasRecord(29414))
+                return 29414;
+            break;
         case 35200: // Roc Form
             return 4877;
         case 24858: // Moonkin Form
