@@ -71,6 +71,7 @@ public:
             { "additem set",      HandleAddItemSetCommand,       rbac::RBAC_PERM_COMMAND_ADDITEMSET,       Console::No },
             { "appear",           HandleAppearCommand,           rbac::RBAC_PERM_COMMAND_APPEAR,           Console::No },
             { "aura",             HandleAuraCommand,             rbac::RBAC_PERM_COMMAND_AURA,             Console::No },
+            { "aura self",        HandleAuraSelfCommand,         rbac::RBAC_PERM_COMMAND_AURA,             Console::No },
             { "bank",             HandleBankCommand,             rbac::RBAC_PERM_COMMAND_BANK,             Console::No },
             { "bindsight",        HandleBindSightCommand,        rbac::RBAC_PERM_COMMAND_BINDSIGHT,        Console::No },
             { "combatstop",       HandleCombatStopCommand,       rbac::RBAC_PERM_COMMAND_COMBATSTOP,       Console::Yes },
@@ -111,6 +112,7 @@ public:
             { "showarea",         HandleShowAreaCommand,         rbac::RBAC_PERM_COMMAND_SHOWAREA,         Console::No },
             { "summon",           HandleSummonCommand,           rbac::RBAC_PERM_COMMAND_SUMMON,           Console::No },
             { "unaura",           HandleUnAuraCommand,           rbac::RBAC_PERM_COMMAND_UNAURA,           Console::No },
+            { "unaura self",      HandleUnAuraSelfCommand,       rbac::RBAC_PERM_COMMAND_UNAURA,           Console::No },
             { "unbindsight",      HandleUnbindSightCommand,      rbac::RBAC_PERM_COMMAND_UNBINDSIGHT,      Console::No },
             { "unfreeze",         HandleUnFreezeCommand,         rbac::RBAC_PERM_COMMAND_UNFREEZE,         Console::No },
             { "unmute",           HandleUnmuteCommand,           rbac::RBAC_PERM_COMMAND_UNMUTE,           Console::Yes },
@@ -308,6 +310,18 @@ public:
             return false;
         }
 
+        return ApplyAura(target, spell);
+    }
+
+    // ".aura self <spell>": always on the player who types it, whatever is targeted. In a macro the target no longer has to be
+    // cleared first, which stopped the auto attack swing (and an Heroic Strike waiting for it).
+    static bool HandleAuraSelfCommand(ChatHandler* handler, SpellInfo const* spell)
+    {
+        return ApplyAura(handler->GetSession()->GetPlayer(), spell);
+    }
+
+    static bool ApplyAura(Unit* target, SpellInfo const* spell)
+    {
         if (!spell)
             return false;
 
@@ -325,6 +339,17 @@ public:
             return false;
         }
 
+        return RemoveAura(target, spellArg);
+    }
+
+    // ".unaura self <spell|all>": the counterpart of ".aura self"
+    static bool HandleUnAuraSelfCommand(ChatHandler* handler, Variant<SpellInfo const*, EXACT_SEQUENCE("all")> spellArg)
+    {
+        return RemoveAura(handler->GetSession()->GetPlayer(), spellArg);
+    }
+
+    static bool RemoveAura(Unit* target, Variant<SpellInfo const*, EXACT_SEQUENCE("all")> const& spellArg)
+    {
         if (spellArg.holds_alternative<EXACT_SEQUENCE("all")>())
         {
             target->RemoveAllAuras();
