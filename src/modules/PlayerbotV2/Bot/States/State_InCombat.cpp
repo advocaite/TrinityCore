@@ -3173,7 +3173,9 @@ void DispatchInCombat(BotAI& ai,
     // hazard / avoid circle, never while casting or rooted.
     if (snapshot.is_in_raid() && !snapshot.in_battleground() && !snapshot.victim().IsEmpty() &&
         ai.effective_role(snapshot) == Role::Dps && !IsMeleeSpec(snapshot.cls(), snapshot.spec()) &&
-        !snapshot.is_casting() && !snapshot.is_rooted())
+        !snapshot.is_casting() && !snapshot.is_rooted() &&
+        // ... not off a raid camp post (Nefarian): the enemies come to the tanks' arc round it, a step in is walked back by the post.
+        !(snapshot.raw().raid_order.active && !snapshot.raw().raid_order.post_enemy.IsEmpty()))
     {
         NearbyUnit const* vu = snapshot.victim_info();
         if (vu && vu->hp > 0 && vu->in_los)

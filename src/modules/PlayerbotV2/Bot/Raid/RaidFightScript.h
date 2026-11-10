@@ -32,6 +32,8 @@ struct Fight
     uint32_t preferEntry = 0;      // inside a rank (after heldFirst), this entry comes before the others
     bool schoolAware = false;      // a DPS bot that cannot hurt an enemy (every school it deals resisted or immune) does not count it
     uint32_t freeAura = 0;         // a DPS bot carrying this aura is left to the generic rules (Delusions of Jin'do: only it sees the Shades)
+    float campX = 0.f, campY = 0.f; // campReach > 0: the raid fights from one camp (Nefarian); an enemy counts for a DPS bot only within campReach
+    float campReach = 0.f;         // of it and in the bot's line of sight, while any enemy of the fight is (else every enemy counts again)
 };
 
 // Lucifron (MC 409): the two Flamewaker Protectors first, then Lucifron. The start wait is the raid's one boss opening wait (Playerbot::kRaidBossOpenWaitMs, 8 s: the main tank takes a while to run in); there is no threat cap after
@@ -51,6 +53,10 @@ struct Fight
 // sweeps): each DPS bot picked its own drakonid and a fresh threat hold on each new one (raid:threat_hold / raid:switch_target every
 // second), 2,200-3,100 raid damage a second against the ~6,100 health a second the waves bring (15.3k a drakonid, 24.4k a Chromatic);
 // the tanks ended up holding 5-9 each and died at 100-120 s, before 30 of the 40 were dead.
+// The focus is one of the drakonids on the tanks' arc round the camp (campReach) that the bot can see. bwl_nefarian 1109w/1109z (six wipes):
+// the focus was often a drakonid still at its door, 35-46 y from the camp or behind the rise in the middle of the room, so the casters
+// stepped in or round for sight ("[raid_range] steps in", "[raid_los]"), their camp post walked them back ("move(role position)", 900-2,000
+// a pull) and they cast little: 450-1,170 casts a pull failed on line of sight, 100 damage a second a DPS bot (Hakkar's raid: 400-500).
 // Among the held ones a Black Drakonid (14265) goes first: Brood Power: Black 22560 is 1,250 fire to everyone within 15 yards of it every
 // 4-6 s (100%: VMaNGOS smart_scripts), the others 20 s at 70%. bwl_nefarian 1108e (with the focus): 11 of 15 deaths were Black Brood Power on
 // the melee and hunters in one pile, within 3 s, and the first tank died to Black melee. A DPS bot that cannot hurt the focus (every
@@ -80,7 +86,8 @@ inline constexpr Fight kFights[] = {
     { 409, 12098, { 11662, 12098, 0, 0 }, kRaidBossOpenWaitMs, "Sulfuron Harbinger" },
     { 409, 11988, { 11988, 0, 0, 0 }, kRaidBossOpenWaitMs, "Golemagg" },
     { 409, 12018, { 11663, 11664, 0, 0 }, kRaidBossOpenWaitMs, "Majordomo Executus", true },
-    { 469, 10162, { 14261, 14262, 14263, 14264, 14265, 14302, 11583, 0 }, kRaidBossOpenWaitMs, "Nefarian", false, 6, true, 14265, true },
+    { 469, 10162, { 14261, 14262, 14263, 14264, 14265, 14302, 11583, 0 }, kRaidBossOpenWaitMs, "Nefarian", false, 6, true, 14265, true, 0,
+      -7552.0f, -1236.0f, 28.0f },
     { 309, 14517, { 11368, 14965, 14517, 0 }, kRaidBossOpenWaitMs, "High Priestess Jeklik", false, 2 },
     { 309, 14507, { 14884, 11373, 14507, 0 }, kRaidBossOpenWaitMs, "High Priest Venoxis" },
     { 309, 14510, { 15041, 14510, 0, 0 }, kRaidBossOpenWaitMs, "High Priestess Mar'li" },

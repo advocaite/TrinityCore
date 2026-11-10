@@ -30,6 +30,7 @@ std::unordered_map<uint64_t, FightState> g_fights;   // (group, map)
 std::unordered_map<uint64_t, uint64_t> g_ownPick;     // bot -> its last pick when it could not take the raid's focus (Fight::schoolAware)
 
 constexpr uint32_t kFightGapMs = 8000;   // no engaged enemy for this long: the next pull starts a new fight
+constexpr float kCampSpellReach = 30.0f;  // Fight::campReach: an enemy farther than this is not one a bot at the camp casts at
 constexpr uint8_t kSkullIcon = 7, kCrossIcon = 6;
 
 } // namespace
@@ -173,6 +174,24 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
                 e.eligible = false;
             e.held = std::find(held.begin(), held.end(), enemy) != held.end();
             view.push_back(e);
+        }
+        // Fight::campReach: only the enemies at the camp this bot can see, while there is one (see RaidFightScript.h, Nefarian).
+        // Else the ones in its sight and spell reach (it is not sent walking: its post would walk it back), else every one.
+        if (fight->campReach > 0.f)
+        {
+            std::vector<bool> atCamp(view.size(), false), seen(view.size(), false);
+            bool anyAtCamp = false, anySeen = false;
+            for (size_t i = 0; i < mine.size(); ++i)
+            {
+                if (!view[i].eligible || !m.p->IsWithinDistInMap(mine[i], kCampSpellReach) || !m.p->IsWithinLOSInMap(mine[i]))
+                    continue;
+                seen[i] = anySeen = true;
+                if (Dist2D(mine[i]->GetPositionX(), mine[i]->GetPositionY(), fight->campX, fight->campY) <= fight->campReach)
+                    atCamp[i] = anyAtCamp = true;
+            }
+            if (anyAtCamp || anySeen)
+                for (size_t i = 0; i < view.size(); ++i)
+                    view[i].eligible = anyAtCamp ? atCamp[i] : seen[i];
         }
         // The raid's focus is this bot's previous pick while it can take it; a bot that cannot keeps its own pick until that one dies.
         uint64_t previous = st.focus.IsEmpty() ? 0 : st.focus.GetCounter();

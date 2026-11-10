@@ -4050,6 +4050,11 @@ bool RaidCastLosStep(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView cons
     Role const r = ai.effective_role(s);
     const bool healer = r == Role::Healer || IsHealerSpec(s.raw().identity.cls, uint16(s.spec()));
 
+    // A ranged DPS bot on a raid camp post (Nefarian) does not step out for sight: the fight script names it an enemy at the camp it can
+    // see, and the post walks it straight back from any step (bwl_nefarian 1109z: 940-1,330 "move(role position)" a pull, the casters walking
+    // instead of casting).
+    if (!healer && s.raw().raid_order.active && !s.raw().raid_order.post_enemy.IsEmpty())
+        return false;
     float tx = 0.f, ty = 0.f, tz = 0.f;
     char const* what = nullptr;
     if (healer)
