@@ -278,9 +278,10 @@ private:
     uint64 n_placed_ = 0;
     uint64 n_despawned_ = 0;
     uint64 n_abandoned_ = 0;
-    // Why PlaceNear's candidate spots were refused (index: 0 no ground, 1 water, 2 no navmesh point, 3 lava, 4 no complete path, 5 area full) and
+    // Why PlaceNear's candidate spots were refused (index: 0 no ground, 1 water, 2 no navmesh point, 3 lava, 4 no complete path, 5 area full, 6 a town of
+    // the other side) and
     // how many calls found none at all; reported in the [world] line so a placement that never succeeds names its cause.
-    uint64 n_place_reject_[6] = {};
+    uint64 n_place_reject_[7] = {};
     uint64 n_place_none_ = 0;
     uint64 n_place_calls_ = 0;
     uint32 last_have_ = 0, last_target_ = 0;   // the last anchor a spawn pass found at its bubble target: how many it has and what it may have ([world] line)

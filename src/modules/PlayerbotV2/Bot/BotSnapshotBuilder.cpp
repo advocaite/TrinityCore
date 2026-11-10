@@ -4663,7 +4663,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // dungeon, raid and battleground bosses can carry a gossip or quest flag.
             if (Creature const* c = t->ToCreature(); c && p->GetMap() && !p->GetMap()->Instanceable())
             {
-                if (c->IsCivilian() || c->GetNpcFlags() != UNIT_NPC_FLAG_NONE)
+                // A town guard of the other side is no mob either: an Alliance bot grinding by the Crossroads pulled its guards and
+                // died to them (Discord 2026-11-10).
+                if (c->IsCivilian() || c->IsGuard() || c->GetNpcFlags() != UNIT_NPC_FLAG_NONE)
                 {
                     Unit const* v = c->GetVictim();
                     Player const* vp = v ? v->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;

@@ -575,8 +575,9 @@ std::string WorldBotSpawner::Report() const
             pool += Trinity::StringFormat(" {}/{}", pool_counts_.alliance[b], pool_counts_.horde[b]);
         line += Trinity::StringFormat(" | pool A/H per bracket{} cap {}", pool, PoolBracketCap(cfg_.pool_max));
     }
-    line += Trinity::StringFormat(" | place calls={} none={} rejected no_ground={} water={} no_nav={} lava={} no_path={} area_full={}",
-        n_place_calls_, n_place_none_, n_place_reject_[0], n_place_reject_[1], n_place_reject_[2], n_place_reject_[3], n_place_reject_[4], n_place_reject_[5]);
+    line += Trinity::StringFormat(" | place calls={} none={} rejected no_ground={} water={} no_nav={} lava={} no_path={} area_full={} enemy_town={}",
+        n_place_calls_, n_place_none_, n_place_reject_[0], n_place_reject_[1], n_place_reject_[2], n_place_reject_[3], n_place_reject_[4], n_place_reject_[5],
+        n_place_reject_[6]);
     {
         uint32 riders = 0;
         for (auto const& [k, t] : motion_)
@@ -1149,6 +1150,9 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
         return along >= lead_lo * 0.5f && along <= lead_hi && side <= cfg_.moving.corridor_yards * 0.6f;
     };
     bool const arriving = CountAmbientNear(self) < 20;
+    // The bot's own side, not the player's: an enemy bot around a Horde player in the Crossroads used the Crossroads' inn and flight
+    // master as its meeting place and died to the guards there (Discord 2026-11-10).
+    bool const bot_alliance = bot->GetTeam() == ALLIANCE;
     std::vector<Spot> hubs, near_hubs;   // near_hubs: within ~150 y of the player (capitals favour them)
     {
         float const ax = anchor->GetPositionX(), ay = anchor->GetPositionY();
@@ -1160,7 +1164,7 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
         bool const grind_world = !Services::Config().world_questing();
         if (in_town || grind_world)
             for (::Playerbot::V2::Fleet::GatherSpot const& g : ::Playerbot::V2::Fleet::TownGatherSpots(
-                     anchor->GetMapId(), ax, ay, riding ? lead_hi : std::min(cfg_.activity_radius * 0.9f, 150.0f), anchor->GetTeam() == ALLIANCE))
+                     anchor->GetMapId(), ax, ay, riding ? lead_hi : std::min(cfg_.activity_radius * 0.9f, 150.0f), bot_alliance))
             {
                 float const d = Dist2D(g.x, g.y, ax, ay);
                 if (d < min_d * 0.5f) continue;
@@ -1326,6 +1330,13 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
             ++n_place_reject_[4];
             continue;
         }
+        // Never in a town of the other side: its guards attack the bot on sight (Alliance bots placed around a Horde player in the
+        // Crossroads died there one after another, Discord 2026-11-10).
+        if (::Playerbot::V2::Fleet::InHostileTown(anchor->GetMapId(), nav.GetPositionX(), nav.GetPositionY(), bot_alliance))
+        {
+            ++n_place_reject_[6];
+            continue;
+        }
         // The cap of the zone the spot is in, as the crowd pass (DriveCrowd) counts it: the Undercity's courtyard is partly Tirisfal
         // ground, where the outdoor cap holds. Placed under the town cap of the player's zone, the courtyard took more than the crowd pass
         // allowed there, which sent the extras back to the player, into the same courtyard (0.1.25: 102 crowd moves in an hour).
@@ -1378,6 +1389,7 @@ bool WorldBotSpawner::PlaceNear(Player* bot, Player* anchor)
                 & (LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER)) continue;
             if (anchor->IsWithinLOS(nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ() + 1.5f)) continue;
             if (in_town && !CompletePathTo(anchor, nav.GetPositionX(), nav.GetPositionY(), nav.GetPositionZ())) continue;
+            if (::Playerbot::V2::Fleet::InHostileTown(anchor->GetMapId(), nav.GetPositionX(), nav.GetPositionY(), bot_alliance)) continue;
             ex = nav.GetPositionX(); ey = nav.GetPositionY(); ez = nav.GetPositionZ();
             arrive_on_foot = true;
         }
