@@ -35,6 +35,11 @@ class Schemas:
         txt = open(base + 'DB2LoadInfo.h', encoding='utf8').read()
         for m in re.finditer(r'struct (\w+)LoadInfo\s*\{(.*?)\n\};', txt, re.S):
             self.names[m.group(1)] = re.findall(r'\.Name = "(\w+)"', m.group(2))
+        # a few LoadInfo structs spell the table differently from its Meta (GameobjectDisplayInfo vs GameObjectDisplayInfo)
+        by_lower = {k.lower(): v for k, v in self.names.items()}
+        for name in self.meta:
+            if name not in self.names and name.lower() in by_lower:
+                self.names[name] = by_lower[name.lower()]
 
 
 def _flat_names(sch, table):
