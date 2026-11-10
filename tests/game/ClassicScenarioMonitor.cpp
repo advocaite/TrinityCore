@@ -834,9 +834,16 @@ TEST_CASE("ScenarioDefs: the other raids are one boss each, 40 raiders (BWL, AQ4
     CHECK(FindScenario("zg_hakkar")->start_instance_data.back() == std::pair<std::uint32_t, std::uint32_t>{ 0u, 0u });
     CHECK(FindScenario("zg_jindo")->start_instance_data.empty());
     CHECK(FindScenario("naxx_horsemen")->keep_entry_c == 16065);
-    CHECK(found.size() == 5 + 9 + 5 + 8 + 14);
+    CHECK(found.size() == 5 + 13 + 5 + 8 + 14);
     // Arlokk has no creature row (the gong summons her): the runner summons her at the gong's spot.
     CHECK(FindScenario("zg_arlokk")->lair_z != 0.f);
+    // Nor do the four Edge of Madness bosses (the Brazier of Madness brings one a lockout): each is summoned in front of the brazier.
+    for (char const* eom : { "zg_grilek", "zg_hazzarah", "zg_renataki", "zg_wushoolay" })
+    {
+        INFO(eom);
+        REQUIRE(FindScenario(eom) != nullptr);
+        CHECK(FindScenario(eom)->lair_z > 60.f);
+    }
 }
 
 TEST_CASE("deadmines_full is a whole-dungeon clear that runall leaves out", "[ScenarioMonitor]")

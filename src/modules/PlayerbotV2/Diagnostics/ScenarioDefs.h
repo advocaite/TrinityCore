@@ -619,6 +619,18 @@ inline constexpr RaidBossRow kZgBosses[] = {
       14834, "Hakkar",                25, 11357 }, { { 1u, 3u }, { 2u, 3u }, { 3u, 3u }, { 4u, 3u }, { 6u, 3u }, { 0u, 0u } }),   // Son of Hakkar
     StartsOnEvent({ "zg_gahzranka", "Zul'Gurub: 20 level 60 raiders to Gahz'ranka (Frost Breath cone, Massive Geyser threat reset)",
       15114, "Gahz'ranka",            15 }, 9104),   // the Mudskunk Lure's event (classic_event_summon_gahzranka)
+    // The Edge of Madness: one of four bosses a lockout, the one the Brazier of Madness (180327, game events 29-32) brings out for the
+    // Gurubashi Mojo Madness. None has a creature row and the instance's own summon is switched off (classic_instance_zulgurub.cpp
+    // SpawnRandomBoss, as in VMaNGOS), so each run summons its boss at the spot that summon used, in front of the brazier, as for Arlokk.
+    // One row a boss: a lockout has one, a test can have any.
+    { "zg_grilek",    "Zul'Gurub: 20 level 60 raiders to Gri'lek of the Iron Blood (Avatar, the chase, roots)",
+      15082, "Gri'lek",               20, 0, 0, 0, -11901.45f, -1906.337f, 65.37f, 0.86f },
+    { "zg_hazzarah",  "Zul'Gurub: 20 level 60 raiders to Hazza'rah the Dreamweaver (Nightmare Illusions first, mana burn, sleep)",
+      15083, "Hazza'rah",             20, 0, 0, 0, -11901.45f, -1906.337f, 65.37f, 0.86f },
+    { "zg_renataki",  "Zul'Gurub: 20 level 60 raiders to Renataki of the Thousand Blades (vanish, Ambush, Thousand Blades, threat resets)",
+      15084, "Renataki",              20, 0, 0, 0, -11901.45f, -1906.337f, 65.37f, 0.86f },
+    { "zg_wushoolay", "Zul'Gurub: 20 level 60 raiders to Wushoolay the Storm Witch (Chain Lightning, Forked Lightning, spread)",
+      15085, "Wushoolay",             20, 0, 0, 0, -11901.45f, -1906.337f, 65.37f, 0.86f },
 };
 
 // Ruins of Ahn'Qiraj, 20 raiders. Buru's eggs stay (he must be led over them).
