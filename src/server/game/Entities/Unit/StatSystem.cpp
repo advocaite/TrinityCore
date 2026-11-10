@@ -146,6 +146,11 @@ bool Player::UpdateStats(Stats stat)
         UpdateAttackPowerAndDamage(false);
         UpdateAttackPowerAndDamage(true);
     }
+    else if (HasAuraType(SPELL_AURA_598))                   // Classic 1.60: attack power from a percent of a stat (Mental Dexterity, Careful Aim)
+    {
+        UpdateAttackPowerAndDamage(false);
+        UpdateAttackPowerAndDamage(true);
+    }
 
     UpdateArmor();
     UpdateSpellDamageAndHealingBonus();
@@ -489,6 +494,19 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             }
         }
         val2 = std::max(val2, 0.0f);
+
+        // Classic 1.60 aura 598: attack power equal to a percent of a stat, misc value = stat. Talents Mental Dexterity 415140
+        // (shaman) and Careful Aim 1223984 (hunter) give 50/100/150% of Intellect by rank. Cat Form (Passive) 3025 carries it
+        // too (100% of Agility), but the druid formula above already adds Agility in Cat Form, so it is skipped here.
+        for (AuraEffect const* aurEff : GetAuraEffectsByType(SPELL_AURA_598))
+        {
+            if (aurEff->GetId() == 3025)
+                continue;
+
+            int32 stat = aurEff->GetMiscValue();
+            if (stat >= STAT_STRENGTH && stat < MAX_STATS)
+                val2 += CalculatePct(GetStat(Stats(stat)), aurEff->GetAmount());
+        }
     }
     else
     {

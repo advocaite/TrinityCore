@@ -667,7 +667,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
     &AuraEffect::HandleNULL,                                      //595
     &AuraEffect::HandleNULL,                                      //596
     &AuraEffect::HandleNULL,                                      //597
-    &AuraEffect::HandleNULL,                                      //598
+    &AuraEffect::HandleModAttackPowerOfStatPercent,               //598 SPELL_AURA_598 (Classic: attack power from a percent of a stat)
     &AuraEffect::HandleNULL,                                      //599
     &AuraEffect::HandleNULL,                                      //600
     &AuraEffect::HandleNULL,                                      //601
@@ -4694,6 +4694,22 @@ void AuraEffect::HandleAuraModAttackPowerPercent(AuraApplication const* aurApp, 
     Unit* target = aurApp->GetTarget();
 
     target->HandleAttackPowerModifier(AttackPowerModIndex::Melee, AttackPowerModType::Pct, float(GetAmount()), apply);
+}
+
+// Classic 1.60 aura 598 (not named in this core): attack power equal to a percent of a stat, misc value = stat.
+// Mental Dexterity 415140 (shaman) and Careful Aim 1223984 (hunter): 50/100/150% of Intellect by rank through
+// TraitDefinitionEffectPoints. Player::UpdateAttackPowerAndDamage adds the value; this only makes it recalculate.
+void AuraEffect::HandleModAttackPowerOfStatPercent(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
+{
+    if (!(mode & (AURA_EFFECT_HANDLE_CHANGE_AMOUNT_MASK | AURA_EFFECT_HANDLE_STAT)))
+        return;
+
+    Unit* target = aurApp->GetTarget();
+    if (target->GetTypeId() != TYPEID_PLAYER)
+        return;
+
+    target->ToPlayer()->UpdateAttackPowerAndDamage(false);
+    target->ToPlayer()->UpdateAttackPowerAndDamage(true);
 }
 
 void AuraEffect::HandleAuraModRangedAttackPowerPercent(AuraApplication const* aurApp, uint8 mode, bool apply) const
