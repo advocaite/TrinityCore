@@ -1318,6 +1318,62 @@ bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
     return fromCentre <= rule.reach || (fromCentre <= rule.reach + kFixedSpotFetchReach && bot->IsWithinDistInMap(add, kFixedSpotFetchReach));
 }
 
+// A fixed arc's slot the healers' post cannot see is turned along the arc to the nearest point it can. bwl_nefarian 1111a/b: in the 15 s
+// before each tank death the healers' casts failed on line of sight more often than they were cast (r6d run 2: 202 failures to 143 heals;
+// run 3: 216 to 107; 1111a run 3: 217 to 76), and the healers' sight spots found no point on their post that saw the tank (no "sight
+// spot" walk in those windows). The clean pass (1111a run 1) had next to no failures. The line of sight steps the healers took pointed
+// at the slot north of the camp (-7547,-1214) and the ground just past it.
+constexpr float kArcEyeHeight = 2.0f;           // eye height above the post's floor for both ends of the sight line
+constexpr float kArcTurnStepDeg = 4.0f;         // tried in these steps either way
+constexpr float kArcTurnShareOfStep = 0.25f;    // at most this share of the angle between two slots, so neighbours stay apart
+constexpr uint32_t kArcSightMs = 5000;          // a slot's sight is probed again after this long
+struct ArcSight { uint32_t at = 0; float turn = 0.0f; bool seen = true; };
+std::unordered_map<uint64_t, ArcSight> g_arcSight;   // (group, anchor, slot, slot count) -> the turn in use
+
+float SeenArcTurn(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, uint32_t slot, uint32_t slots, float a, float step)
+{
+    Stand const* post = nullptr;
+    for (Stand const& s : plan.rules->stand)
+        if (s.who == Who::Healer && s.enemy == rule.anchor)
+        {
+            post = &s;
+            break;
+        }
+    if (!post)
+        return 0.0f;
+    uint64_t const key = (plan.groupLow << 32) ^ (uint64_t(rule.anchor) << 12) ^ (uint64_t(slots) << 6) ^ uint64_t(slot);
+    ArcSight& sight = g_arcSight[key];
+    if (sight.at && now - sight.at < kArcSightMs)
+        return sight.turn;
+    sight.at = now ? now : 1u;
+    float const eyeZ = post->z + kArcEyeHeight;
+    auto const seen = [&](float t)
+    {
+        float const sx = rule.x + rule.reach * std::cos(a + t), sy = rule.y + rule.reach * std::sin(a + t);
+        return bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eyeZ, sx, sy, eyeZ, LINEOFSIGHT_ALL_CHECKS,
+                                              VMAP::ModelIgnoreFlags::Nothing);
+    };
+    float const maxTurn = step * kArcTurnShareOfStep, stepRad = kArcTurnStepDeg * (float(M_PI) / 180.0f);
+    float turn = 0.0f;
+    bool found = seen(0.0f);
+    for (float d = stepRad; !found && d <= maxTurn + 0.001f; d += stepRad)
+        for (float sign : { -1.0f, 1.0f })
+            if (seen(sign * d))
+            {
+                turn = sign * d;
+                found = true;
+                break;
+            }
+    if (turn != sight.turn || found != sight.seen)
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] slot {} of {} for entry {}: the healers' post ({:.0f},{:.0f}) {} ({:.0f},{:.0f})",
+                    slot + 1, slots, rule.enemy, post->x, post->y,
+                    !found ? "sees no point within the turn of the slot, it stays at" : turn == 0.0f ? "sees the slot again at" : "cannot see the slot, turned it to",
+                    rule.x + rule.reach * std::cos(a + turn), rule.y + rule.reach * std::sin(a + turn));
+    sight.turn = turn;
+    sight.seen = found;
+    return turn;
+}
+
 // waitFor (fixed rows): set to the loose add this tank waits for at its slot instead of walking out to it.
 bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, float& outX, float& outY, Unit** waitFor = nullptr)
 {
@@ -1403,8 +1459,9 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
         // An arc round (x, y): every slot <reach> from the centre, neighbours <spacing> apart, the middle one on rowDeg.
         float const step = 2.0f * std::asin(std::min(1.0f, rule.spacing / (2.0f * rule.reach)));
         float const a = rule.rowDeg * (float(M_PI) / 180.0f) + offset * step;
-        outX = rule.x + rule.reach * std::cos(a);
-        outY = rule.y + rule.reach * std::sin(a);
+        float const turn = SeenArcTurn(plan, rule, bot, now, uint32_t(at - holders.begin()), uint32_t(holders.size()), a, step);
+        outX = rule.x + rule.reach * std::cos(a + turn);
+        outY = rule.y + rule.reach * std::sin(a + turn);
         return true;
     }
     float const lateral = offset * rule.spacing;
@@ -2056,6 +2113,17 @@ SightSpot HealerSightSpot(Plan const& plan, Stand const& rule, std::vector<Circl
                 float const a = float(i) * 2.0f * float(M_PI) / float(kSightBearings);
                 addPoint(rule.x + r * std::cos(a), rule.y + r * std::sin(a));
             }
+        // No point of the post sees a tank: the healers stand on the post and their casts fail on line of sight (bwl_nefarian 1111b: no
+        // sight spot walk in the 15 s before each tank death). Where the tanks stood names the place the post cannot see.
+        if (post.best == 0)
+        {
+            std::string where;
+            for (Player* tank : tanks)
+                where += fmt::format(" {} at {:.1f},{:.1f} {:.0f} y", tank->GetName(), tank->GetPositionX(), tank->GetPositionY(),
+                                     Dist2D(rule.x, rule.y, tank->GetPositionX(), tank->GetPositionY()));
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_sight_spot] no point of the post ({:.1f},{:.1f}) sees a tank in reach ({} points):{}", rule.x, rule.y,
+                        post.points.size(), where);
+        }
     }
     // Nothing on the post sees more than the post point itself, or no point sees a tank at all: the post as it is.
     if (post.best == 0 || post.best <= post.centre)
