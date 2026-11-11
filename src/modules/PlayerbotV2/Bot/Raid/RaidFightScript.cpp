@@ -138,6 +138,16 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
         // Fight::freeAura: this bot has its own enemy the others cannot see (a Shade of Jin'do); the generic rules keep it.
         if (fight->freeAura && m.p->HasAura(fight->freeAura))
             continue;
+        // An area job the encounter hands this bot (a Priority row for Who::AoeShare) while its enemy is up: the generic rules keep it, so the
+        // row's target and its area spells win over the script's single focus. bwl_nefarian 1111e: at 20% Nefarian raised 29-41 Bone
+        // Constructs, the script kept every caster on him (122 attack starts on Nefarian to 28 on the constructs after the rise), the
+        // constructs walked into the healers and casters and killed 20-25 raiders in 40-55 s, and both runs wiped with him at 3% and 9%.
+        if (plan.rules && std::any_of(plan.rules->priority.begin(), plan.rules->priority.end(), [&](Priority const& row)
+            {
+                return row.who == Who::AoeShare && row.value > 0 && Matches(row.who, m, plan.mainTank) &&
+                       std::any_of(plan.enemies.begin(), plan.enemies.end(), [&](Unit* e) { return e->GetEntry() == row.enemy && e->IsAlive(); });
+            }))
+            continue;
         if (forced)
         {
             o.script_owns = true;
