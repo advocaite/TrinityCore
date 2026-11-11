@@ -286,6 +286,18 @@ struct classic_boss_nefarian : public ScriptedAI
                         m_uiTransitionTimer = 1000;
                         break;
                     case 2:
+                    {
+                        // Landed: players can fight him now. The VMaNGOS template has none of these flags; a 12.x world DB row can carry
+                        // them (an event summon's), and nothing here took them off: every raider's attack on him was refused as an invalid
+                        // target and he killed the raid unopposed (bwl_nefarian 1111a: phase one won in all three runs, then 0 damage on him, the
+                        // bots' "start_attack" on 11583 refused, the raid wiped to Shadow Flame, Cleave and his swings).
+                        uint32 const flags = *me->m_unitData->Flags;
+                        if (flags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+                            TC_LOG_INFO("scripts.classic", "BWL Nefarian landed with unit flags 0x{:X}: clearing immune to players / not attackable / "
+                                        "not interactible", flags);
+                        me->SetImmuneToPC(false);
+                        me->SetUninteractible(false);
+                        me->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
                         me->SetWalk(true);
                         me->RemoveAurasDueToSpell(CLASSIC_BWL_SPELL_NEF_HOVER);
                         if (Unit* pTarget = me->GetVictim())
@@ -296,6 +308,7 @@ struct classic_boss_nefarian : public ScriptedAI
                         }
                         m_bTransitionDone = true;
                         break;
+                    }
                     default:
                         break;
                 }
@@ -623,6 +636,11 @@ class classic_spell_nefarian_class_call_warlock : public SpellScript
         Unit* target = GetHitUnit();
         if (!target)
             return;
+        // Only the warlock the call was cast on summons. Nefarian has every warlock cast this on itself, and the spell hits everyone
+        // around the caster: each raider beside a warlock summoned two more, 25-254 infernals per call instead of two per warlock
+        // (bwl_nefarian 1111d: 254 and 215 at the warlock call, 47 deaths to them, both runs wiped with Nefarian at 81% and 92%).
+        if (target != GetCaster() || target->GetClass() != CLASS_WARLOCK)
+            return;
 
         // Each Warlock summons 2 Corrupted Infernals
         target->CastSpell(target, SPELL_SUMMON_INFERNALS, true);
@@ -645,12 +663,20 @@ class classic_spell_nefarian_class_call_rogue : public SpellScript
         Player* player = GetHitPlayer();
         if (!caster || !player)
             return;
+        // Nefarian has every rogue cast this on itself, so the caster is the rogue, not him, and the spell hits everyone around it: each
+        // rogue was moved 5 yards from where it stood, and so was every raider beside it. Only the rogue goes, to Nefarian.
+        if (player != caster || player->GetClass() != CLASS_ROGUE)
+            return;
+        Creature* nefarian = player->FindNearestCreature(CLASSIC_BWL_NPC_NEFARIAN, 200.0f, true);
+        if (!nefarian)
+            return;
 
-        // Teleport player to a random position near caster (Nefarian)
+        // Teleport the rogue to a random position near Nefarian
         // Use GetFirstCollisionPosition to avoid teleporting into walls/obstacles
         float angle = frand(0.0f, float(M_PI) * 2);
-        Position pos = caster->GetFirstCollisionPosition(5.0f, angle);
-        player->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), angle - float(M_PI));
+        Position pos = nefarian->GetFirstCollisionPosition(5.0f, angle);
+        // Facing him: the angle above is relative to his facing, so it is no bearing.
+        player->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetAbsoluteAngle(nefarian));
     }
 
     void Register() override

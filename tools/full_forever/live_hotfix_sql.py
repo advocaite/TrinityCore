@@ -16,6 +16,7 @@ has to be from the build the server reads: rows decode with that build's layouts
 import argparse
 import glob
 import os
+import re
 import struct
 import sys
 
@@ -96,6 +97,14 @@ def decode(sch, table, data, rec):
     return row
 
 
+def server_hotfix_tables(repo):
+    """The hotfix table the server reads for each DB2, keyed by the name without underscores in lower case: camel_to_snake gets a
+    few wrong (GameObjectDisplayInfo is read from gameobject_display_info)."""
+    path = os.path.join(repo, 'src', 'server', 'database', 'Database', 'Implementation', 'HotfixDatabase.cpp')
+    txt = open(path, encoding='latin-1').read()
+    return {t.replace('_', ''): t for t in re.findall(r'"SELECT MAX\(ID\) \+ 1 FROM (\w+)"', txt)}
+
+
 def lit(v):
     if isinstance(v, str):
         return "'" + v.replace('\\', '\\\\').replace("'", "''").replace('\r', '\\r').replace('\n', '\\n') + "'"
@@ -137,6 +146,7 @@ def main():
     statuses = {int(x) for x in a.statuses.split(',') if x}
     skip = {(x.split(':')[0], int(x.split(':')[1])) for x in a.skip.split(',') if x}
     sch = wdc5.Schemas(a.repo)
+    hotfix_tables = server_hotfix_tables(a.repo)
     hashes = table_hashes(a.dbc, sch.meta.keys())
     by_hash = {v: k for k, v in hashes.items()}
     build, cache = read_cache(a.dbcache)
@@ -182,7 +192,7 @@ def main():
         sys.exit('%d hotfix_data rows do not fit in %d-%d' % (len(data_rows), a.first_id, a.last_id))
     out = []
     for t, rs in rows.items():
-        ht = client_diff.camel_to_snake(t)
+        ht = hotfix_tables.get(t.lower(), client_diff.camel_to_snake(t))
         cols = list(rs[0])
         out.append('DELETE FROM `%s` WHERE `ID` IN (%s);' % (ht, ','.join(str(r[cols[0]]) for r in rs)))
         out.append('INSERT INTO `%s` (%s) VALUES\n%s;' % (ht, ','.join('`%s`' % c for c in cols),

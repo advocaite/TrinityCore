@@ -5931,6 +5931,7 @@ enum SkillType
     SKILL_POLEARMS                                  = 229,
     SKILL_PET_SCORPID                               = 236,
     SKILL_PET_TURTLE                                = 251,
+    SKILL_BEAST_TRAINING                            = 261, // Classic 1.60: hunter Beast Training (pet ability ranks), gone from retail
     SKILL_PET_GENERIC_HUNTER                        = 270,
     SKILL_PLATE_MAIL                                = 293,
     SKILL_LANGUAGE_GNOMISH                          = 313,

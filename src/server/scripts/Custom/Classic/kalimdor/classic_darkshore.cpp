@@ -17,13 +17,15 @@
 
 // Classic 1.60 port of VMaNGOS src/scripts/kalimdor/darkshore/darkshore.cpp (ScriptDev2 lineage, GPL-2)
 // Ported: npc_kerlonian (5321), npc_prospector_remtravel (731), npc_threshwackonator (2078), npc_therylune (945),
-//         npc_volcor (994, 995), npc_rabid_thistle_bear, npc_terenthis, go_beached_quest
+//         npc_volcor (994, 995), npc_rabid_thistle_bear, npc_terenthis, go_beached_quest, npc_murkdeep + at_murloc_camp (4740)
 
 #include "ScriptMgr.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "Item.h"
 #include "MotionMaster.h"
+#include "SpellAuras.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "ScriptedCreature.h"
@@ -193,11 +195,16 @@ enum KerlonianData
 // TODO: make concept similar as "ringo" -escort. Find a way to run the scripted attacks, _if_ player are choosing road. (VMaNGOS comment)
 struct classic_npc_kerlonian : public FollowerAI
 {
-    classic_npc_kerlonian(Creature* creature) : FollowerAI(creature), _fallAsleepTimer(urand(10000, 45000)) { }
+    // Blizzard hotfix 6 November 2026: "Kerlonian Evershade falls asleep less often". No numbers were given; ours (VMaNGOS:
+    // first nap after 10-45 s, then every 25-90 s) are doubled.
+    static uint32 FirstNapTimer() { return urand(20000, 90000); }
+    static uint32 NextNapTimer() { return urand(50000, 180000); }
+
+    classic_npc_kerlonian(Creature* creature) : FollowerAI(creature), _fallAsleepTimer(FirstNapTimer()) { }
 
     void Reset() override
     {
-        _fallAsleepTimer = urand(10000, 45000);
+        _fallAsleepTimer = FirstNapTimer();
     }
 
     void JustAppeared() override
@@ -289,7 +296,7 @@ struct classic_npc_kerlonian : public FollowerAI
                 if (_fallAsleepTimer < diff)
                 {
                     SetSleeping();
-                    _fallAsleepTimer = urand(25000, 90000);
+                    _fallAsleepTimer = NextNapTimer();
                 }
                 else
                     _fallAsleepTimer -= diff;
@@ -1012,6 +1019,219 @@ struct classic_go_beached_quest : public GameObjectAI
     }
 };
 
+/*####
+# npc_murkdeep, at_murloc_camp (quest 4740 WANTED: Murkdeep!)
+####*/
+
+// VMaNGOS darkshore.cpp npc_murkdeep / at_murloc_camp: a player on the quest who walks into the murloc camp on the coast
+// (area trigger 1966) calls up Murkdeep, hidden at the water. Three waves come out of the sea, 30 seconds apart (three
+// Greymist Coastrunners, two Greymist Warriors, one Greymist Hunter), then Murkdeep shows himself and attacks. The event ends
+// when the player leaves the camp's bonfire (50 yards) or dies.
+enum MurkdeepData
+{
+    NPC_MURLOC_COASTRUNNER      = 2202,
+    NPC_MURLOC_WARRIOR          = 2205,
+    NPC_MURLOC_HUNTER           = 2206,
+    NPC_MURKDEEP                = 10323,
+
+    GO_MURLOC_CAMP_BONFIRE      = 61927,
+
+    QUEST_WANTED_MURKDEEP       = 4740,
+
+    SPELL_MURKDEEP_SUNDER_ARMOR = 11971,
+    SPELL_MURKDEEP_NET          = 6533
+};
+
+Position const MurkdeepSummonPoints[3] =
+{
+    { 4984.772f, 596.975f, -1.172f },
+    { 4989.618f, 599.530f, -1.291f },
+    { 4979.620f, 593.845f, -0.881f }
+};
+
+struct classic_npc_murkdeep : public ScriptedAI
+{
+    classic_npc_murkdeep(Creature* creature) : ScriptedAI(creature), _eventPhase(0), _eventTimer(0), _eventRunning(false),
+        _hasFled(false), _sunderTimer(0), _netTimer(0)
+    {
+        me->SetVisible(false);
+        me->SetImmuneToPC(true);
+        me->SetImmuneToNPC(true);
+    }
+
+    void Reset() override
+    {
+        _hasFled = false;
+        _sunderTimer = urand(0, 5000);
+        _netTimer = urand(0, 20000);
+    }
+
+    void BeginEvent(Player* player)
+    {
+        _playerGuid = player->GetGUID();
+        if (GameObject* bonfire = me->FindNearestGameObject(GO_MURLOC_CAMP_BONFIRE, 100.0f))
+            _bonfireGuid = bonfire->GetGUID();
+        _eventPhase = 1;
+        _eventTimer = 1000;
+        _eventRunning = true;
+    }
+
+    // the player who started the event, while alive and within 50 yards of the camp's bonfire
+    Player* GetEventPlayer() const
+    {
+        Player* player = ObjectAccessor::GetPlayer(*me, _playerGuid);
+        if (!player || !player->IsAlive())
+            return nullptr;
+
+        GameObject* bonfire = ObjectAccessor::GetGameObject(*me, _bonfireGuid);
+        if (!bonfire || !player->IsWithinDist(bonfire, 50.0f))
+            return nullptr;
+
+        return player;
+    }
+
+    void JustSummoned(Creature* summon) override
+    {
+        if (Player* player = GetEventPlayer())
+            summon->AI()->AttackStart(player);
+        else
+        {
+            summon->DespawnOrUnsummon();
+            _eventRunning = false;
+        }
+    }
+
+    void SummonWave() const
+    {
+        switch (_eventPhase)
+        {
+            case 1:
+                for (Position const& pos : MurkdeepSummonPoints)
+                    me->SummonCreature(NPC_MURLOC_COASTRUNNER, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), me->GetOrientation(),
+                        TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 10min);
+                break;
+            case 2:
+                for (uint8 i = 0; i < 2; ++i)
+                    me->SummonCreature(NPC_MURLOC_WARRIOR, MurkdeepSummonPoints[i].GetPositionX(), MurkdeepSummonPoints[i].GetPositionY(),
+                        MurkdeepSummonPoints[i].GetPositionZ(), me->GetOrientation(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 10min);
+                break;
+            case 3:
+                me->SummonCreature(NPC_MURLOC_HUNTER, MurkdeepSummonPoints[1].GetPositionX(), MurkdeepSummonPoints[1].GetPositionY(),
+                    MurkdeepSummonPoints[1].GetPositionZ(), me->GetOrientation(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 10min);
+                break;
+            default:
+                break;
+        }
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (!UpdateVictim())
+        {
+            if (!_eventPhase)
+            {
+                // the event ended without a fight (player left or died): go away again
+                if (_eventRunning && !me->IsVisible())
+                    me->DespawnOrUnsummon();
+                return;
+            }
+
+            if (!_eventRunning)
+            {
+                me->DespawnOrUnsummon();
+                return;
+            }
+
+            if (_eventTimer > diff)
+            {
+                _eventTimer -= diff;
+                return;
+            }
+
+            SummonWave();
+            if (_eventPhase < 3)
+            {
+                ++_eventPhase;
+                _eventTimer = 30000;
+                return;
+            }
+
+            _eventPhase = 0;
+            me->SetImmuneToPC(false);
+            me->SetImmuneToNPC(false);
+            me->SetVisible(true);
+            if (Player* player = GetEventPlayer())
+                AttackStart(player);
+            else
+                me->DespawnOrUnsummon();
+            return;
+        }
+
+        if (!_hasFled && me->GetHealthPct() < 15.0f)
+        {
+            _hasFled = true;
+            me->DoFleeToGetAssistance();
+            return;
+        }
+
+        if (_sunderTimer <= diff)
+        {
+            Aura* sunder = me->GetVictim()->GetAura(SPELL_MURKDEEP_SUNDER_ARMOR);
+            if (!sunder || sunder->GetStackAmount() < 5)
+            {
+                if (DoCastVictim(SPELL_MURKDEEP_SUNDER_ARMOR) == SPELL_CAST_OK)
+                    _sunderTimer = urand(5000, 9000);
+            }
+            else
+                _sunderTimer = 5000;
+        }
+        else
+            _sunderTimer -= diff;
+
+        if (_netTimer <= diff)
+        {
+            if (DoCastVictim(SPELL_MURKDEEP_NET) == SPELL_CAST_OK)
+                _netTimer = urand(9000, 15000);
+        }
+        else
+            _netTimer -= diff;
+        // melee is automatic in TC
+    }
+
+private:
+    ObjectGuid _playerGuid;
+    ObjectGuid _bonfireGuid;
+    uint8 _eventPhase;
+    uint32 _eventTimer;
+    bool _eventRunning;
+    bool _hasFled;
+    uint32 _sunderTimer;
+    uint32 _netTimer;
+};
+
+class classic_at_murloc_camp : public AreaTriggerScript
+{
+public:
+    classic_at_murloc_camp() : AreaTriggerScript("classic_at_murloc_camp") { }
+
+    bool OnTrigger(Player* player, AreaTriggerEntry const* /*trigger*/) override
+    {
+        if (player->IsGameMaster() || !player->IsAlive() || player->GetQuestStatus(QUEST_WANTED_MURKDEEP) != QUEST_STATUS_INCOMPLETE)
+            return false;
+
+        if (player->FindNearestCreature(NPC_MURKDEEP, 100.0f))
+            return false;
+
+        Position const& pos = MurkdeepSummonPoints[0];
+        if (TempSummon* murkdeep = player->SummonCreature(NPC_MURKDEEP, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(),
+            player->GetAbsoluteAngle(pos.GetPositionX(), pos.GetPositionY()), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 30min))
+            if (classic_npc_murkdeep* ai = CAST_AI(classic_npc_murkdeep, murkdeep->AI()))
+                ai->BeginEvent(player);
+
+        return false;
+    }
+};
+
 void AddSC_classic_darkshore()
 {
     RegisterCreatureAI(classic_npc_kerlonian);
@@ -1022,4 +1242,6 @@ void AddSC_classic_darkshore()
     RegisterCreatureAI(classic_npc_rabid_thistle_bear);
     RegisterCreatureAI(classic_npc_terenthis);
     RegisterGameObjectAI(classic_go_beached_quest);
+    RegisterCreatureAI(classic_npc_murkdeep);
+    new classic_at_murloc_camp();
 }

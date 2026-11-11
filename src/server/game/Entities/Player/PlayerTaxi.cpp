@@ -32,73 +32,20 @@ PlayerTaxi::~PlayerTaxi() = default;
 
 void PlayerTaxi::InitTaxiNodesForLevel(uint32 race, uint32 chrClass, uint8 level)
 {
-    // Classic 1.60 (WoW Forever): every character knows all flight points of its faction on Kalimdor and the Eastern Kingdoms
-    // (official beta sniff, build 70170: a level 15 Skyborne opening the Thunder Bluff flight master already knew Orgrimmar,
-    // Crossroads, Gadgetzan, Everlook, ... and in the Eastern Kingdoms Undercity, Tarren Mill, Booty Bay, Stonard, ...).
-    // Retail gives this only to death knights.
-    (void)chrClass;
-    TaxiMask const& factionMask = Player::TeamForRace(race) == HORDE ? sHordeTaxiNodesMask : sAllianceTaxiNodesMask;
-    for (std::size_t i = 0; i < m_taximask.size(); ++i)
-        m_taximask[i] |= sOldContinentsNodesMask[i] & factionMask[i];
-
-    // race specific initial known nodes: capital and taxi hub masks
-    switch (race)
+    // Retail: death knights start with every flight point of their faction on Kalimdor and the Eastern Kingdoms.
+    if (chrClass == CLASS_DEATH_KNIGHT)
     {
-        case RACE_HUMAN:
-        case RACE_DWARF:
-        case RACE_NIGHTELF:
-        case RACE_GNOME:
-        case RACE_DRAENEI:
-        case RACE_WORGEN:
-        case RACE_PANDAREN_ALLIANCE:
-            SetTaximaskNode(2);     // Stormwind, Elwynn
-            SetTaximaskNode(6);     // Ironforge, Dun Morogh
-            SetTaximaskNode(26);    // Lor'danel, Darkshore
-            SetTaximaskNode(27);    // Rut'theran Village, Teldrassil
-            SetTaximaskNode(49);    // Moonglade (Alliance)
-            SetTaximaskNode(94);    // The Exodar
-            SetTaximaskNode(456);   // Dolanaar, Teldrassil
-            SetTaximaskNode(457);   // Darnassus, Teldrassil
-            SetTaximaskNode(582);   // Goldshire, Elwynn
-            SetTaximaskNode(589);   // Eastvale Logging Camp, Elwynn
-            SetTaximaskNode(619);   // Kharanos, Dun Morogh
-            SetTaximaskNode(620);   // Gol'Bolar Quarry, Dun Morogh
-            SetTaximaskNode(624);   // Azure Watch, Azuremyst Isle
-            break;
-        case RACE_ORC:
-        case RACE_UNDEAD_PLAYER:
-        case RACE_TAUREN:
-        case RACE_TROLL:
-        case RACE_BLOODELF:
-        case RACE_GOBLIN:
-        case RACE_PANDAREN_HORDE:
-            SetTaximaskNode(11);    // Undercity, Tirisfal
-            SetTaximaskNode(22);    // Thunder Bluff, Mulgore
-            SetTaximaskNode(23);    // Orgrimmar, Durotar
-            SetTaximaskNode(69);    // Moonglade (Horde)
-            SetTaximaskNode(82);    // Silvermoon City
-            SetTaximaskNode(384);   // The Bulwark, Tirisfal
-            SetTaximaskNode(402);   // Bloodhoof Village, Mulgore
-            SetTaximaskNode(460);   // Brill, Tirisfal Glades
-            SetTaximaskNode(536);   // Sen'jin Village, Durotar
-            SetTaximaskNode(537);   // Razor Hill, Durotar
-            SetTaximaskNode(625);   // Fairbreeze Village, Eversong Woods
-            SetTaximaskNode(631);   // Falconwing Square, Eversong Woods
-            break;
+        TaxiMask const& factionMask = Player::TeamForRace(race) == HORDE ? sHordeTaxiNodesMask : sAllianceTaxiNodesMask;
+        for (std::size_t i = 0; i < m_taximask.size(); ++i)
+            m_taximask[i] |= sOldContinentsNodesMask[i] & factionMask[i];
     }
 
-    // new continent starting masks (It will be accessible only at new map)
-    switch (Player::TeamForRace(race))
-    {
-        case ALLIANCE: SetTaximaskNode(100); break;
-        case HORDE:    SetTaximaskNode(99);  break;
-        default:
-            break;
-    }
-
-    // level dependent taxi hubs
-    if (level >= 68)
-        SetTaximaskNode(213);                               //Shattered Sun Staging Area
+    // Classic 1.60 (WoW Forever): flight points are found by visiting their flight masters, none are known from the start.
+    // Live realm packet log (build 70862, 2026-11-07, EU): a level 16 Horde character at the Crossroads flight master knew only
+    // Orgrimmar, the Crossroads and Ratchet, not Thunder Bluff, Undercity or Moonglade that retail's start list per race hands out.
+    // (An earlier beta sniff, build 70170, had a level 15 Skyborne who knew them all; live does not do that.)
+    // Realms that want every flight point known keep using AllFlightPaths = 1 in worldserver.conf.
+    (void)level;
 }
 
 bool PlayerTaxi::LoadTaxiMask(std::string const& data)

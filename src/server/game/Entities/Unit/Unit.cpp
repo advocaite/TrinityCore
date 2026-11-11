@@ -4491,6 +4491,16 @@ void Unit::RemoveAurasWithInterruptFlags(InterruptFlags flag, SpellInfo const* s
             && (!source || aura->GetId() != source->Id)
             && !IsInterruptFlagIgnoredForSpell(flag, this, aura->GetSpellInfo(), false, source))
         {
+            // An aura that ends on touching the ground and was put on a moment ago belongs to a spell that lifts its target first
+            // (Skyborne Walk on Air 1259416: the aura, then a knockback up). The player is still standing when the next position
+            // comes in, before the client has started the jump, and the aura was gone at once: only the sound played (Discord
+            // 2026-11-09). It ends on the ground from the second second on.
+            if constexpr (std::is_same_v<InterruptFlags, SpellAuraInterruptFlags2>)
+                if (flag == SpellAuraInterruptFlags2::Ground
+                    && (aura->GetMaxDuration() > 0 ? aura->GetMaxDuration() - aura->GetDuration() < 1000
+                                                   : GameTime::GetGameTime() - aura->GetApplyTime() < 1))
+                    continue;
+
             uint32 removedAuras = m_removedAurasCount;
             RemoveAura(aura, AURA_REMOVE_BY_INTERRUPT);
             if (m_removedAurasCount > removedAuras + 1)
@@ -11673,6 +11683,8 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     pet->GetCharmInfo()->SetPetNumber(sObjectMgr->GeneratePetNumber(), true);
     // this enables pet details window (Shift+P)
     pet->InitPetCreateSpells();
+    // Classic 1.60 (vanilla): the beast keeps the abilities it had in the wild
+    pet->LearnTameSpells();
 
     // Classic 1.60: a freshly tamed beast is unhappy until it is fed
     if (pet->HasHappiness())
@@ -13185,7 +13197,10 @@ uint32 Unit::GetModelForForm(ShapeshiftForm form, uint32 spellId) const
     switch (spellId)
     {
         case 7090: // Bear Form
-            return 29414;
+            // Classic 1.60: the client has no display 29414, a creature shown with it is invisible. Use the form's own display (2281) then.
+            if (sCreatureDisplayInfoStore.HasRecord(29414))
+                return 29414;
+            break;
         case 35200: // Roc Form
             return 4877;
         case 24858: // Moonkin Form

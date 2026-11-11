@@ -709,6 +709,26 @@ class spell_warr_devastator : public AuraScript
     }
 };
 
+// 403196 - Devastate (the damage part of the Rune of Devastate)
+// Classic 1.60: only Sunder Armor casts this, through the rune aura 403195. The spell has no cost, no cooldown and a 50000 yard
+// range because it is meant to be triggered, so a player who gets it on the action bar could hit anything in sight as fast as
+// they press. Refuse it unless it is triggered.
+class spell_warr_devastate_rune_damage : public SpellScript
+{
+    SpellCastResult CheckTriggered() const
+    {
+        if (!GetSpell()->IsTriggered())
+            return SPELL_FAILED_SPELL_UNAVAILABLE;
+
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_warr_devastate_rune_damage::CheckTriggered);
+    }
+};
+
 // 184361 - Enrage
 class spell_warr_enrage_proc : public AuraScript
 {
@@ -2365,6 +2385,7 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_colossus_smash);
     RegisterSpellScript(spell_warr_critical_thinking);
     RegisterSpellScript(spell_warr_deft_experience);
+    RegisterSpellScript(spell_warr_devastate_rune_damage);
     RegisterSpellScript(spell_warr_devastator);
     RegisterSpellScript(spell_warr_enrage_proc);
     RegisterSpellScript(spell_warr_execute);

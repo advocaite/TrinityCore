@@ -202,9 +202,11 @@ namespace Trinity
                             xpMod *= 2.0f;
                     }
 
-                    // Classic 1.60 (Forever beta notes, October 8 2026): experience from killing creatures in dungeons +20%
+                    // Classic 1.60: extra kill experience in 5 player dungeons (Rate.XP.DungeonKill). Forever beta notes of
+                    // October 8 2026 gave +20% (1.2); Blizzard's hotfix of November 8 2026 raised dungeon kill experience by
+                    // another 50% (1.2 * 1.5 = 1.8, the default)
                     if (u->GetMap()->IsNonRaidDungeon())
-                        xpMod *= 1.2f;
+                        xpMod *= sWorld->getRate(RATE_XP_DUNGEON_KILL);
 
                     xpMod *= creature->GetCreatureTemplate()->ModExperience;
                 }

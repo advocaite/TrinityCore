@@ -42,6 +42,7 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <sstream>
 #include <unordered_set>
 
@@ -418,6 +419,9 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS), holder.GetPreparedResult(PetLoadQueryHolder::CHARGES));
             LearnPetPassives();
             InitLevelupSpellsForLevel();
+            // Classic 1.60: a beast tamed before it kept its wild abilities has none (auto attack only); give them now
+            if (getPetType() == HUNTER_PET && !KnowsActiveSpell())
+                LearnTameSpells();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -637,6 +641,14 @@ void Pet::setDeathState(DeathState s)                       // overwrite virtual
 
             //SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED);
         }
+
+        // Classic 1.60: a pet that dies outside PvP loses one whole happiness level
+        // (VMaNGOS Pet::SetDeathState). Battlegrounds and arenas are exempt, and because loyalty only
+        // reacts to the happiness *level* on its 12 s tick, an exempt death costs no loyalty either.
+        // `IsInWorld()` keeps the penalty off the load path: LoadFromDB revives a pet that was saved
+        // dead by going through JUST_DIED -> CORPSE, which is not a death that just happened.
+        if (HasHappiness() && IsInWorld() && !GetMap()->IsBattlegroundOrArena())
+            ModifyPower(POWER_HAPPINESS, -HAPPINESS_MAX / 3);
     }
     else if (getDeathState() == ALIVE)
     {
@@ -1178,6 +1190,108 @@ uint32 Pet::UntrainTrainerSpells()
     if (Player* owner = GetOwner())
         owner->PetSpellInitialize();
     return uint32(spells.size());
+}
+
+std::vector<uint32> const* Pet::GetTameSpells(uint32 creatureEntry)
+{
+    static std::unordered_map<uint32, std::vector<uint32>> const spells = []
+    {
+        std::unordered_map<uint32, std::vector<uint32>> result;
+        if (QueryResult query = WorldDatabase.Query("SELECT CreatureEntry, SpellId FROM classic_pet_tame_spell ORDER BY CreatureEntry, SpellId"))
+        {
+            do
+            {
+                Field* fields = query->Fetch();
+                uint32 spellId = fields[1].GetUInt32();
+                if (!sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+                {
+                    TC_LOG_ERROR("sql.sql", "Table `classic_pet_tame_spell` has unknown spell {} for creature {}, skipped.", spellId, fields[0].GetUInt32());
+                    continue;
+                }
+                result[fields[0].GetUInt32()].push_back(spellId);
+            } while (query->NextRow());
+        }
+        TC_LOG_INFO("server.loading", ">> Loaded the abilities of {} Classic tameable beasts", result.size());
+        return result;
+    }();
+
+    auto itr = spells.find(creatureEntry);
+    return itr != spells.end() ? &itr->second : nullptr;
+}
+
+uint32 Pet::GetBeastTrainingTeachSpell(uint32 petSpellId)
+{
+    // the hunter's Beast Training ranks (skill line 261, e.g. 17254 Bite Rank 1) each have a Learn Spell effect on the pet
+    static constexpr uint32 SKILL_LINE_BEAST_TRAINING = 261;
+    static std::unordered_map<uint32, uint32> const teachSpells = []
+    {
+        std::unordered_map<uint32, uint32> result;
+        sSpellMgr->ForEachSpellInfo([&](SpellInfo const* spellInfo)
+        {
+            if (spellInfo->Difficulty != DIFFICULTY_NONE)
+                return;
+            if (uint32 petSpell = GetTrainerTaughtPetSpell(spellInfo->Id))
+                if (IsPartOfSkillLine(SKILL_LINE_BEAST_TRAINING, spellInfo->Id))
+                    result.emplace(petSpell, spellInfo->Id);
+        });
+        return result;
+    }();
+
+    auto itr = teachSpells.find(petSpellId);
+    return itr != teachSpells.end() ? itr->second : 0;
+}
+
+void Pet::LearnTameSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    std::vector<uint32> const* spells = GetTameSpells(GetEntry());
+    if (!spells)
+        return;
+
+    for (uint32 spellId : *spells)
+        if (!KnowsSpellOrHigherRank(spellId))
+            learnSpell(spellId);                            // replaces a lower rank of it
+}
+
+bool Pet::KnowsActiveSpell() const
+{
+    for (auto const& [spellId, petSpell] : m_spells)
+    {
+        if (petSpell.state == PETSPELL_REMOVED)
+            continue;
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+            if (!spellInfo->IsPassive())
+                return true;
+    }
+    return false;
+}
+
+void Pet::CheckLearning(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner)
+        return;
+
+    // only what the beast knew in the wild teaches its hunter; ranks the hunter taught it are known already
+    std::vector<uint32> const* tameSpells = GetTameSpells(GetEntry());
+    if (!tameSpells || std::find(tameSpells->begin(), tameSpells->end(), spellId) == tameSpells->end())
+        return;
+
+    uint32 teachSpell = GetBeastTrainingTeachSpell(spellId);
+    if (!teachSpell || owner->HasSpell(teachSpell))
+        return;
+
+    if (!roll_chance(10))
+        return;
+
+    owner->LearnSpell(teachSpell, false);
+    TC_LOG_DEBUG("entities.pet", "Pet::CheckLearning: {} learned Beast Training spell {} from its pet {} (entry {}) using spell {}",
+        owner->GetName(), teachSpell, GetGUID().ToString(), GetEntry(), spellId);
 }
 
 bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)

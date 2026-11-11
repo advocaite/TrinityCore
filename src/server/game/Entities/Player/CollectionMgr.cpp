@@ -610,7 +610,9 @@ void CollectionMgr::SaveAccountItemAppearances(LoginDatabaseTransaction trans)
 
 void CollectionMgr::AddItemAppearance(Item* item)
 {
-    if (!item->IsSoulBound())
+    // An item that never binds (most vendor and white gear in Classic) can not wait for a bind like a bind on equip item does:
+    // it would never be collected. It counts as soon as the player has it (looted, bought, equipped or in the bags at login).
+    if (!item->IsSoulBound() && item->GetBonding() != BIND_NONE)
         return;
 
     ItemModifiedAppearanceEntry const* itemModifiedAppearance = item->GetItemModifiedAppearance();

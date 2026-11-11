@@ -2239,7 +2239,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SendRaidGroupOnlyMessage(RaidGroupReason reason, int32 delay) const;
 
         bool UpdateSkillPro(uint16 skillId, int32 chance, uint32 step);
-        bool UpdateCraftSkill(SpellInfo const* spellInfo);
+        // skillLineIsSkillup: a spell row without a SkillupSkillLineID levels its own SkillLine (Classic 1.60 Comprehension 3012)
+        bool UpdateCraftSkill(SpellInfo const* spellInfo, bool skillLineIsSkillup = false);
         bool UpdateGatherSkill(uint32 skillId, uint32 skillValue, uint32 redLevel, uint32 multiplicator = 1, WorldObject const* object = nullptr);
         bool UpdateFishingSkill(int32 expansion);
         // Classic 1.60: weapon and defense skills grow in melee / ranged combat (vanilla rules)

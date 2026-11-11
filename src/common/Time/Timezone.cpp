@@ -22,34 +22,89 @@
 #include <array>
 #include <unordered_map>
 
+#include "Util.h"
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
 #include "StringConvert.h"
+#include <exception>
 #else
 #include "Locales.h"
-#include "Util.h"
 #include <boost/locale/date_time_facet.hpp>
 #include <memory>
 #endif
 
 namespace
 {
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
+// The MSVC time zone database is read from the OS (icu.dll). When the OS cannot provide it,
+// or reports a current zone the database does not know, std::chrono throws std::runtime_error.
+// UpdateGameTimers runs during static initialization, so an uncaught throw there kills the
+// process before main (seen on a Windows 11 Insider build 26300, Discord 2026-11-09).
+// Look the zone up once and report its absence instead of throwing; callers fall back to the C runtime.
+std::chrono::tzdb const* GetTzdb()
+{
+    static std::chrono::tzdb const* const db = []() -> std::chrono::tzdb const*
+    {
+        try
+        {
+            return &std::chrono::get_tzdb();
+        }
+        catch (std::exception const&)
+        {
+            return nullptr;
+        }
+    }();
+    return db;
+}
+
+std::chrono::time_zone const* GetCurrentZone()
+{
+    static std::chrono::time_zone const* const zone = []() -> std::chrono::time_zone const*
+    {
+        if (!GetTzdb())
+            return nullptr;
+
+        try
+        {
+            return std::chrono::current_zone();
+        }
+        catch (std::exception const&)
+        {
+            return nullptr;
+        }
+    }();
+    return zone;
+}
+#endif
+
+// Local time offset from the C runtime, used where the time zone database is not available
+Seconds GetCrtZoneOffsetAt(SystemTimePoint date)
+{
+    time_t utc = std::chrono::system_clock::to_time_t(date);
+    tm local = TimeBreakdown(utc);
+    return Seconds(timegm(&local) - utc);
+}
+
 std::unordered_map<uint32, Minutes, std::identity> InitTimezoneHashDb()
 {
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
-
-    // Generate our hash db to match values sent in client authentication packets
-    std::unordered_map<uint32, Minutes, std::identity> hashToOffset;
-    std::chrono::system_clock::time_point dummmy;
-    for (std::chrono::time_zone const& zone : std::chrono::get_tzdb().zones)
+    if (std::chrono::tzdb const* tzdb = GetTzdb())
     {
-        std::chrono::sys_info sysInfo = zone.get_info(dummmy);
-        Minutes offsetMinutes = std::chrono::duration_cast<Minutes>(sysInfo.offset);
-        std::string offsetStr = Trinity::ToString(offsetMinutes.count());
-        hashToOffset.emplace(Trinity::HashFnv1a<uint32>::GetHash(offsetStr), offsetMinutes);
+        // Generate our hash db to match values sent in client authentication packets
+        std::unordered_map<uint32, Minutes, std::identity> hashToOffset;
+        std::chrono::system_clock::time_point dummmy;
+        for (std::chrono::time_zone const& zone : tzdb->zones)
+        {
+            std::chrono::sys_info sysInfo = zone.get_info(dummmy);
+            Minutes offsetMinutes = std::chrono::duration_cast<Minutes>(sysInfo.offset);
+            std::string offsetStr = Trinity::ToString(offsetMinutes.count());
+            hashToOffset.emplace(Trinity::HashFnv1a<uint32>::GetHash(offsetStr), offsetMinutes);
+        }
+        return hashToOffset;
     }
+#endif
 
-#else
-    // Pre-generated list of timezone offsets and their hashes for compilers (and their stl implementations) that dont support timezone api yet
+    // Pre-generated list of timezone offsets and their hashes for compilers (and their stl implementations) that dont support timezone api yet,
+    // and for systems whose time zone database cannot be read
     std::unordered_map<uint32, Minutes, std::identity> hashToOffset =
     {
         { 0xAADC2D37u, -720min },
@@ -97,7 +152,6 @@ std::unordered_map<uint32, Minutes, std::identity> InitTimezoneHashDb()
         { 0x98DBA70Eu, 780min },
         { 0xC59585BBu, 840min }
     };
-#endif
 
     return hashToOffset;
 }
@@ -139,7 +193,10 @@ Minutes GetSystemZoneOffsetAt(SystemTimePoint date)
 {
     Seconds offset;
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
-    offset = std::chrono::current_zone()->get_info(date).offset;
+    if (std::chrono::time_zone const* zone = GetCurrentZone())
+        offset = zone->get_info(date).offset;
+    else
+        offset = GetCrtZoneOffsetAt(date);
 #else
     tm buf = TimeBreakdown(std::chrono::system_clock::to_time_t(date));
     offset = Seconds(buf.tm_gmtoff);
@@ -159,7 +216,10 @@ Minutes GetSystemZoneOffset(bool applyDst /*= true*/)
 std::string GetSystemZoneName()
 {
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
-    return std::string(std::chrono::current_zone()->name());
+    // Without a zone name FindClosestClientSupportedTimezone matches by offset
+    if (std::chrono::time_zone const* zone = GetCurrentZone())
+        return std::string(zone->name());
+    return {};
 #else
     std::unique_ptr<boost::locale::abstract_calendar> p(std::use_facet<class boost::locale::calendar_facet>(Locale::GetCalendarLocale()).create_calendar());
     return p->get_timezone();

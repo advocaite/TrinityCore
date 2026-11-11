@@ -667,7 +667,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
     &AuraEffect::HandleNULL,                                      //595
     &AuraEffect::HandleNULL,                                      //596
     &AuraEffect::HandleNULL,                                      //597
-    &AuraEffect::HandleNULL,                                      //598
+    &AuraEffect::HandleModAttackPowerOfStatPercent,               //598 SPELL_AURA_598 (Classic: attack power from a percent of a stat)
     &AuraEffect::HandleNULL,                                      //599
     &AuraEffect::HandleNULL,                                      //600
     &AuraEffect::HandleNULL,                                      //601
@@ -739,7 +739,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
 AuraEffect::AuraEffect(Aura* base, SpellEffectInfo const& spellEfffectInfo, SpellEffectValue const* baseAmount, Unit* caster) :
 m_base(base), m_spellInfo(base->GetSpellInfo()), m_effectInfo(spellEfffectInfo), m_spellmod(nullptr),
 m_baseAmount(baseAmount ? *baseAmount : spellEfffectInfo.CalcBaseValue(caster, base->GetType() == UNIT_AURA_TYPE ? base->GetOwner()->ToUnit() : nullptr, base->GetCastItemId(), base->GetCastItemLevel())),
-_amount(), _periodicTimer(0), _period(0), _ticksDone(0),
+_amount(), _periodicTimer(0), _period(0), _ticksDone(0), _tickAdjust(0),
 m_canBeRecalculated(true), m_isPeriodic(false)
 {
     CalculatePeriodic(caster, true, false);
@@ -944,9 +944,30 @@ uint32 AuraEffect::GetTotalTicks() const
         totalTicks = static_cast<uint32>(GetBase()->GetMaxDuration() / _period);
         if (m_spellInfo->HasAttribute(SPELL_ATTR5_EXTRA_INITIAL_PERIOD))
             ++totalTicks;
+
+        totalTicks = uint32(std::max<int64>(int64(totalTicks) + _tickAdjust, 0));
     }
 
     return totalTicks;
+}
+
+void AuraEffect::ChangePeriodKeepingExpiry(int32 period)
+{
+    if (!m_isPeriodic || period <= 0 || _period <= 0 || period == _period)
+        return;
+
+    _periodicTimer = int32(int64(_periodicTimer) * period / _period);
+    _period = period;
+    _tickAdjust = 0;
+
+    if (GetBase()->IsPermanent())
+        return;
+
+    // the ticks still to come: the whole new periods that fit before the aura expires, the first one after the time already run
+    int32 const remaining = GetBase()->GetDuration();
+    int32 const untilNext = _period - _periodicTimer;
+    int64 const left = remaining >= untilNext ? 1 + (remaining - untilNext) / _period : 0;
+    _tickAdjust = int32(int64(_ticksDone) + left - int64(GetTotalTicks()));
 }
 
 void AuraEffect::ResetPeriodic(bool resetPeriodicTimer /*= false*/)
@@ -964,6 +985,7 @@ void AuraEffect::ResetPeriodic(bool resetPeriodicTimer /*= false*/)
 void AuraEffect::CalculatePeriodic(Unit* caster, bool resetPeriodicTimer /*= true*/, bool load /*= false*/)
 {
     _period = GetSpellEffectInfo().ApplyAuraPeriod;
+    _tickAdjust = 0;
 
     // prepare periodics
     switch (GetAuraType())
@@ -4672,6 +4694,22 @@ void AuraEffect::HandleAuraModAttackPowerPercent(AuraApplication const* aurApp, 
     Unit* target = aurApp->GetTarget();
 
     target->HandleAttackPowerModifier(AttackPowerModIndex::Melee, AttackPowerModType::Pct, float(GetAmount()), apply);
+}
+
+// Classic 1.60 aura 598 (not named in this core): attack power equal to a percent of a stat, misc value = stat.
+// Mental Dexterity 415140 (shaman) and Careful Aim 1223984 (hunter): 50/100/150% of Intellect by rank through
+// TraitDefinitionEffectPoints. Player::UpdateAttackPowerAndDamage adds the value; this only makes it recalculate.
+void AuraEffect::HandleModAttackPowerOfStatPercent(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
+{
+    if (!(mode & (AURA_EFFECT_HANDLE_CHANGE_AMOUNT_MASK | AURA_EFFECT_HANDLE_STAT)))
+        return;
+
+    Unit* target = aurApp->GetTarget();
+    if (target->GetTypeId() != TYPEID_PLAYER)
+        return;
+
+    target->ToPlayer()->UpdateAttackPowerAndDamage(false);
+    target->ToPlayer()->UpdateAttackPowerAndDamage(true);
 }
 
 void AuraEffect::HandleAuraModRangedAttackPowerPercent(AuraApplication const* aurApp, uint8 mode, bool apply) const

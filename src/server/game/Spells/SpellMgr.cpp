@@ -3790,6 +3790,24 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
     });
 
+    // Forever quest Testing the Wells: the Well Testing Kit's dummy (1258773) aims at a "nearby entry" that no data names; it hits the
+    // caster, and classic_spell_quest_testing_the_wells gives the sample next to a well
+    ApplySpellFix({ 1258773 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->TargetA = SpellImplicitTargetInfo(TARGET_UNIT_CASTER);
+            spellEffectInfo->TargetB = SpellImplicitTargetInfo();
+        });
+    });
+
+    // Forever Skyborne racial Skysight: its buff (Elemental Blessing 1259688) also raises mounted speed, so it can be cast while
+    // mounted (client row through hotfixes 2026_11_09_40)
+    ApplySpellFix({ 1259686 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_ALLOW_WHILE_MOUNTED;
+    });
+
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {
@@ -3914,6 +3932,13 @@ void SpellMgr::LoadSpellInfoCorrections()
     }, [](SpellInfo* spellInfo)
     {
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(6); // 100 yards
+    });
+
+    // Devastate, the damage part of the Rune of Devastate (Sunder Armor triggers it through 403195)
+    // Classic 1.60: the client gives it 50000 yards, melee like Sunder Armor
+    ApplySpellFix({ 403196 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(2); // combat range
     });
 
     // They Must Burn Bomb Aura (self)

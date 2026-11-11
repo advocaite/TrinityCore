@@ -70,6 +70,16 @@
 RealmID = 1
 
 #
+#    Realm.AlsoAcceptBuilds
+#        Description: Comma-separated client builds that every realm also lists for and lets in, besides its own
+#                     realmlist.gamebuild. The in-game realm list and realm switch read it here, the login in
+#                     bnetserver.conf: keep the two lists the same. Each build also needs a row in auth.build_info.
+#        Example:     "70862,70888" (a realm on 70707 that 70862 and 70888 clients may also join)
+#        Default:     "" - (only the realm's own build)
+
+Realm.AlsoAcceptBuilds = ""
+
+#
 #    DataDir
 #        Description: Data directory setting.
 #        Important:   DataDir needs to be quoted, as the string might contain space characters.
@@ -1330,6 +1340,14 @@ Quests.LowLevelHideDiff = 5
 #                     -1 - (Disabled, Show all available quest marks)
 
 Quests.HighLevelHideDiff = 2
+
+#
+#    Quests.LogSize
+#        Description: How many quests a character can have in the quest log at once.
+#        Default:     35 - (The quest log of the Classic client)
+#                     40 - (The most the server can hold)
+
+Quests.LogSize = 35
 
 #
 #    Quests.IgnoreRaid
@@ -2685,6 +2703,16 @@ Rate.XP.Explore = 1
 Rate.Talent = 1
 
 #
+#    Rate.XP.DungeonKill
+#        Description: Extra experience for killing creatures in 5 player dungeons (raids not included), on top of
+#                     Rate.XP.Kill and the vanilla elite bonus.
+#        Default:     1.8 - (WoW Forever live: +20% from October 8 2026, then +50% from the November 8 2026 hotfix)
+#                     1.2 - (WoW Forever before the November 8 2026 hotfix)
+#                     1   - (Vanilla, no extra dungeon experience)
+
+Rate.XP.DungeonKill = 1.8
+
+#
 #    Rate.XP.BattlegroundKill
 #        Description: Experience rate for honorable kills in battlegrounds,
 #                     it works when Battleground.GiveXPForKills = 1
@@ -3494,6 +3522,44 @@ SOAP.IP = "127.0.0.1"
 #        Default:     7878
 
 SOAP.Port = 7878
+
+#
+#    StatusServer.Token
+#        Description: Secret for the read-only status endpoint (GET http://<BindIP>:<Port>/status).
+#                     It answers JSON with up/stalled state, uptime, online counts and world lag,
+#                     for a launcher's realm status or "server is down" alerts. It cannot run
+#                     commands or change anything.
+#                     Empty turns the endpoint off. Use at least 16 random characters.
+#                     Send it as "Authorization: Bearer <token>", "X-Status-Token: <token>"
+#                     or "?token=<token>" (the header is better: query strings can end up in logs).
+#                     HTTP 200 while players can play, 503 while starting, stalled or stopping,
+#                     401 without the right token.
+#        Default:     "" - (Disabled)
+
+StatusServer.Token = ""
+
+#
+#    StatusServer.BindIP
+#        Description: Bind the status endpoint to IP/hostname. Plain HTTP: keep it on 127.0.0.1
+#                     unless a firewall or HTTPS proxy sits in front of it.
+#        Default:     "127.0.0.1" - (Bind to localhost)
+
+StatusServer.BindIP = "127.0.0.1"
+
+#
+#    StatusServer.Port
+#        Description: TCP port of the status endpoint. Give every realm on one PC its own port.
+#        Default:     8087
+
+StatusServer.Port = 8087
+
+#
+#    StatusServer.StallSeconds
+#        Description: Report "stalled" (HTTP 503) when the world loop has not finished an update
+#                     for this many seconds, even though the process still answers.
+#        Default:     10
+
+StatusServer.StallSeconds = 10
 
 #
 ###################################################################################################

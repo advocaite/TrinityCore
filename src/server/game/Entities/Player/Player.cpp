@@ -2547,8 +2547,13 @@ void Player::InitTalentForLevel()
 {
     uint8 level = GetLevel();
     // talents base at level diff (talents = level - 9 but some can be used already)
+    // Only when the character is not on its class's default specialization already: the reset takes the specialization spells
+    // away and teaches them again, and doing that on every level gain from 2 to 9 dismissed a warlock's or hunter's pet each time
+    // (Discord 2026-11-09, with the Legacy perk Talented, whose points come at 5 to 9).
     if (level < MIN_SPECIALIZATION_LEVEL)
-        ResetTalentSpecialization();
+        if (ChrSpecializationEntry const* defaultSpec = sDB2Manager.GetDefaultChrSpecializationForClass(GetClass());
+            !defaultSpec || uint32(GetPrimarySpecialization()) != defaultSpec->ID)
+            ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
     // Classic 1.60: the first talent point comes at level 10, not at 15 as on retail; resetting below 15 wiped the
@@ -2985,6 +2990,11 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
         return false;
     }
 
+    // Classic 1.60: Devastate 403196 is only the damage that Sunder Armor triggers with the Rune of Devastate (the client marks it
+    // never learned). Keep it out of the spellbook, also for characters that already have it saved, so it never sits on a bar.
+    if (spellId == 403196)
+        return false;
+
     if (!SpellMgr::IsSpellValid(spellInfo, this, false))
     {
         // do character spell book cleanup (all characters)
@@ -3380,7 +3390,11 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             // Pick Lock 1804 is the same for Lockpicking 633: no skill effect, and its SkillRaceClassInfo 601 has Availability 0, so
             // rogues had Pick Lock but no Lockpicking ("insufficient skill" on every lock). This runs at login too, so existing
             // rogues get the skill on their next login.
-            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+            // Beast Training 5149 is the same for its skill line 261 (SkillRaceClassInfo 32, hunters, Availability 0): hunters had
+            // the spell but not the skill, so the client refused to open the Beast Training window ("You can't do that right now",
+            // player report 10 Nov) and Growl's Beast Training ranks (1853, 14922, learned with the skill) never came.
+            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING
+                    || _spell_idx->second->SkillLine == SKILL_BEAST_TRAINING)
                 && !HasSkill(_spell_idx->second->SkillLine))
             {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
@@ -5894,7 +5908,7 @@ inline int SkillGainChance(uint32 SkillValue, uint32 GrayLevel, uint32 GreenLeve
     return sWorld->getIntConfig(CONFIG_SKILL_CHANCE_ORANGE)*10;
 }
 
-bool Player::UpdateCraftSkill(SpellInfo const* spellInfo)
+bool Player::UpdateCraftSkill(SpellInfo const* spellInfo, bool skillLineIsSkillup /*= false*/)
 {
     if (spellInfo->HasAttribute(SPELL_ATTR1_NO_SKILL_INCREASE))
         return false;
@@ -5906,10 +5920,16 @@ bool Player::UpdateCraftSkill(SpellInfo const* spellInfo)
 
     for (SkillLineAbilityMap::const_iterator _spell_idx = bounds.first; _spell_idx != bounds.second; ++_spell_idx)
     {
-        if (_spell_idx->second->SkillupSkillLineID)
+        uint32 skillupLine = _spell_idx->second->SkillupSkillLineID;
+        // Classic 1.60: the mage's Decipher spells (SkillLine 3012 Comprehension) have skill-ups and trivial ranks but no
+        // SkillupSkillLineID; the caller says the row's own skill line is the one that goes up
+        if (!skillupLine && skillLineIsSkillup && _spell_idx->second->NumSkillUps > 0)
+            skillupLine = _spell_idx->second->SkillLine;
+
+        if (skillupLine)
         {
             // Classic 1.60: skill-ups go to the profession itself (the recipe data points at the expansion child line)
-            uint32 skillupSkill = GetClassicProfessionSkill(_spell_idx->second->SkillupSkillLineID);
+            uint32 skillupSkill = GetClassicProfessionSkill(skillupLine);
             uint32 SkillValue = GetPureSkillValue(skillupSkill);
 
             // Alchemy Discoveries here
@@ -12861,6 +12881,8 @@ void Player::VisualizeItem(uint8 slot, Item* pItem)
         if (IsInWorld())
             GetSession()->GetCollectionMgr()->AddItemAppearance(pItem);
     }
+    else if (pItem->GetBonding() == BIND_NONE && IsInWorld())
+        GetSession()->GetCollectionMgr()->AddItemAppearance(pItem);
 
     TC_LOG_DEBUG("entities.player.items", "Player::SetVisibleItemSlot: Player '{}' ({}), Slot: {}, Item: {}",
         GetName(), GetGUID().ToString(), slot, pItem->GetEntry());
@@ -14987,8 +15009,16 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                             canTalk = false;
                     break;
                 }
-                case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
+                {
+                    // "I want to browse your goods" with nothing to sell opened no window at all (the shared fishing trainer menu 5665:
+                    // Lee Brown in Elwynn and the other fishing trainers, Discord 2026-11-09). Shown only by an NPC that sells something.
+                    VendorItemData const* items = sObjectMgr->GetNpcVendorItemList(creature->GetEntry());
+                    if (!items || items->Empty())
+                        canTalk = false;
+                    break;
+                }
+                case GossipOptionNpc::None:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
@@ -15959,11 +15989,13 @@ bool Player::CanRewardQuest(Quest const* quest, LootItemType rewardType, uint32 
 
 void Player::AddQuest(Quest const* quest, Object* questGiver)
 {
+    // Quests.LogSize: how many quests a player may hold (the server keeps up to MAX_QUEST_LOG_SIZE)
+    uint16 const logSize = uint16(std::min<uint32>(sWorld->getIntConfig(CONFIG_QUEST_LOG_SIZE), MAX_QUEST_LOG_SIZE));
     uint16 log_slot = 0;
-    while (GetQuestSlotQuestId(log_slot) && log_slot < MAX_QUEST_LOG_SIZE)
+    while (log_slot < logSize && GetQuestSlotQuestId(log_slot))
         ++log_slot;
 
-    if (log_slot >= MAX_QUEST_LOG_SIZE) // Player does not have any free slot in the quest log
+    if (log_slot >= logSize) // Player does not have any free slot in the quest log
         return;
 
     uint32 quest_id = quest->GetQuestId();
@@ -16640,8 +16672,9 @@ bool Player::SatisfyQuestMaxLevel(Quest const* qInfo, bool msg) const
 
 bool Player::SatisfyQuestLog(bool msg) const
 {
-    // exist free slot
-    for (uint32 log_slot = 0; log_slot < MAX_QUEST_LOG_SIZE; ++log_slot)
+    // exist free slot (Quests.LogSize of them can be used)
+    uint32 const logSize = std::min<uint32>(sWorld->getIntConfig(CONFIG_QUEST_LOG_SIZE), MAX_QUEST_LOG_SIZE);
+    for (uint32 log_slot = 0; log_slot < logSize; ++log_slot)
         if (!GetQuestSlotQuestId(log_slot))
             return true;
 
@@ -17035,9 +17068,12 @@ bool Player::GiveQuestSourceItem(Quest const* quest)
     uint32 srcitem = quest->GetSrcItemId();
     if (srcitem > 0)
     {
-        // Don't give source item if it is the same item used to start the quest
+        // Don't give source item if it is the same item used to start the quest.
+        // Only when the player really holds it: some quests (The Treaty of Understanding 98423) are started from
+        // a gameobject, and their source item also names the quest as its start quest. Without the item check the
+        // player never got the item and could not finish the quest.
         ItemTemplate const* itemTemplate = ASSERT_NOTNULL(sObjectMgr->GetItemTemplate(srcitem));
-        if (quest->GetQuestId() == itemTemplate->GetStartQuest())
+        if (quest->GetQuestId() == itemTemplate->GetStartQuest() && HasItemCount(srcitem, 1, true))
             return true;
 
         uint32 count = quest->GetSrcItemCount();
@@ -32917,6 +32953,11 @@ void Player::EquipTransmogOutfit(uint32 id, TransmogSituationTrigger trigger, Op
                     SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::IllusionDisplayType), AsUnderlyingType(TransmogOutfitDisplayType::Disabled));
                     break;
                 case TransmogOutfitSlotOption::None:
+                case TransmogOutfitSlotOption::ArmorCloth:
+                case TransmogOutfitSlotOption::ArmorLeather:
+                case TransmogOutfitSlotOption::ArmorMail:
+                case TransmogOutfitSlotOption::ArmorPlate:
+                    // no illusions on armor
                     break;
                 default:
                     SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::IllusionDisplayType), AsUnderlyingType(TransmogOutfitDisplayType::Equipped));
@@ -32976,6 +33017,9 @@ void Player::_SaveCharacterSelectOutfit(CharacterDatabaseTransaction trans) cons
                 transmogSlotOption = static_cast<TransmogOutfitSlotOption>(m_activePlayerData->TransmogMetadata->StampedOptionOffHand);
                 break;
             default:
+                // Classic 1.60: armor slots have one outfit slot per armor type, picked by the armor worn there
+                if (Item const* equipped = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+                    transmogSlotOption = equipped->GetTemplate()->GetWeaponTransmogOutfitSlotOption();
                 break;
         }
 

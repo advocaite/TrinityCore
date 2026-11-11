@@ -146,6 +146,28 @@ class classic_spell_ground_area_damage : public AuraScript
     }
 };
 
+// 6785, 6787, 9866, 9867 - Ravage; 9005, 9823, 9827 - Pounce
+// Blizzard hotfix 6 November 2026: "Night Elf: Shadowmelded Druids no longer have access to Ravage and Pounce." Shadowmeld (20580)
+// is a stealth aura, so a druid in Cat Form could open with them from it instead of from Prowl. Live now lists Shadowmeld as an
+// aura the caster must not have (SpellAuraRestrictions.ExcludeCasterAuraSpell 20580, seen in the live spell data of wowsims/forever,
+// MIT); our client data does not have that yet, so the server checks it.
+class classic_spell_dru_not_from_shadowmeld : public SpellScript
+{
+    static constexpr uint32 SPELL_SHADOWMELD = 20580;
+
+    SpellCastResult CheckCast()
+    {
+        if (GetCaster()->HasAura(SPELL_SHADOWMELD))
+            return SPELL_FAILED_CASTER_AURASTATE;
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_dru_not_from_shadowmeld::CheckCast);
+    }
+};
+
 // Classic 1.60 (WoW Forever), Shen'dar Highlands cave, quest 94489 (official beta sniff 70205): clicking an injured druid makes the
 // player cast 1276047 (dummy) on it. Credit "Injured Druids healed" (257964) and the druid's own hidden objective (its entry).
 enum ClassicHealInjuredDruid
@@ -2141,9 +2163,58 @@ class classic_spell_shadow_storm_min_range : public SpellScript
     }
 };
 
+// 1258773 - Testing the Wells (Forever quest 92742, Westfall): the Well Testing Kit 254545 casts a dummy on a "nearby entry" target that
+// nothing in the data names, so every use failed with an invalid target and the two water samples could never be had (Discord
+// 2026-11-09). The target is the caster now (SpellMgr::LoadSpellInfoCorrections); next to a well the kit gives that well's sample.
+// Wells: the players' map spots 56.5,18.8 (Furlbrow's Pumpkin Farm) and 46.0,38.3 (the Molsen Farm), turned into world spots with
+// Gryan Stoutmantle and Salma Saldean as fit points; the 25 yd radius covers the guess.
+class classic_spell_quest_testing_the_wells : public SpellScript
+{
+    struct Well { float x, y; uint32 sample; };
+    static constexpr Well WELLS[] =
+    {
+        { -9839.2f, 1038.2f, 254546 },
+        { -10294.1f, 1405.4f, 254547 },
+    };
+    static constexpr float WELL_RADIUS = 25.0f;
+
+    Well const* NearestWell() const
+    {
+        Unit* caster = GetCaster();
+        if (caster->GetMapId() != 0)
+            return nullptr;
+        for (Well const& well : WELLS)
+            if (caster->GetExactDist2d(well.x, well.y) <= WELL_RADIUS)
+                return &well;
+        return nullptr;
+    }
+
+    SpellCastResult CheckWell()
+    {
+        return NearestWell() ? SPELL_CAST_OK : SPELL_FAILED_NOT_HERE;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Well const* well = NearestWell();
+        if (!player || !well)
+            return;
+        if (player->GetItemCount(well->sample) == 0)
+            player->AddItem(well->sample, 1);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_quest_testing_the_wells::CheckWell);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_quest_testing_the_wells::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
+    RegisterSpellScript(classic_spell_dru_not_from_shadowmeld);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
     RegisterSpellScript(classic_spell_undead_touch_of_the_grave);
     RegisterSpellScript(classic_spell_tauren_cultivation);
@@ -2194,4 +2265,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_mage_decipher);
     new classic_player_scroll_deciphering();
     RegisterSpellScript(classic_spell_shadow_storm_min_range);
+    RegisterSpellScript(classic_spell_quest_testing_the_wells);
 }
