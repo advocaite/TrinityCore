@@ -2689,14 +2689,24 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         if (now - at < 3000)
             continue;
         at = now;
+        // A tank that does not walk back says why. bwl_nefarian 1111g run 2: Mctankwc stood 15 s at (-7540,-1202), 25 y from its place
+        // (-7565,-1217) with a drakonid on it, and logged no walk; the four tanks walked to their places 37-87 times a run, while they
+        // stood 29-37 y (median) from the camp centre on a 23 y arc in every sweep from 1111e on.
+        float const off = Dist2D(bot->GetPositionX(), bot->GetPositionY(), tx, ty);
         if (!circles.empty() && InsideAny(circles, tx, ty, 0.5f))
+        {
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} stays {:.0f} y from its place for entry {} ({:.0f},{:.0f}): the place is in a hazard",
+                        bot->GetName(), off, rule.enemy, tx, ty);
             continue;
+        }
         if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true))
         {
             TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f})", bot->GetName(), rule.enemy, tx, ty);
             SetMove(out, tx, ty, tz, "tank spot");
             return;
         }
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} stays {:.0f} y from its place for entry {} ({:.0f},{:.0f}) at ({:.0f},{:.0f}): {}",
+                    bot->GetName(), off, rule.enemy, tx, ty, bot->GetPositionX(), bot->GetPositionY(), kUsableWhyName[g_usableWhy]);
     }
 
     // 3c. Stand behind (Magmadar): matching bots stand in the sector behind the enemy, wherever the tank has turned it.
