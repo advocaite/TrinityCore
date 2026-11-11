@@ -286,6 +286,18 @@ struct classic_boss_nefarian : public ScriptedAI
                         m_uiTransitionTimer = 1000;
                         break;
                     case 2:
+                    {
+                        // Landed: players can fight him now. The VMaNGOS template has none of these flags; a 12.x world DB row can carry
+                        // them (an event summon's), and nothing here took them off: every raider's attack on him was refused as an invalid
+                        // target and he killed the raid unopposed (bwl_nefarian 1111a: phase one won in all three runs, then 0 damage on him, the
+                        // bots' "start_attack" on 11583 refused, the raid wiped to Shadow Flame, Cleave and his swings).
+                        uint32 const flags = *me->m_unitData->Flags;
+                        if (flags & (UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE))
+                            TC_LOG_INFO("scripts.classic", "BWL Nefarian landed with unit flags 0x{:X}: clearing immune to players / not attackable / "
+                                        "not interactible", flags);
+                        me->SetImmuneToPC(false);
+                        me->SetUninteractible(false);
+                        me->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
                         me->SetWalk(true);
                         me->RemoveAurasDueToSpell(CLASSIC_BWL_SPELL_NEF_HOVER);
                         if (Unit* pTarget = me->GetVictim())
@@ -296,6 +308,7 @@ struct classic_boss_nefarian : public ScriptedAI
                         }
                         m_bTransitionDone = true;
                         break;
+                    }
                     default:
                         break;
                 }
