@@ -641,6 +641,8 @@ public:
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "talentwalk",    HandleTalentWalk,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5150,6 +5152,167 @@ public:
             p->GetName().c_str(), uint32(p->GetLevel()), formSpell, learned ? " (learned now)" : "", uint32(result), inForm ? "yes" : "no",
             uint32(info->GetEffect(EFFECT_0).MiscValue), armorBefore, armorInForm, armorAfter, passiveSpell.value_or(0),
             !passiveSpell ? "not checked" : hasPassive ? "present" : "MISSING", passiveGone ? "gone" : "STILL THERE");
+        return true;
+    }
+
+    // .playerbot campprobe <player> go <map> <x> <y> <z>
+    // .playerbot campprobe <player> sit [<quest id>]
+    // Camping without a client. "go" moves the player (a bot over SOAP) to a camp. "sit" then, in one go: gives the quest if one is named (a
+    // The Great Outdoors quest, taken off again at the end), sits the player down the way the sit key does (WorldSession::UpdateCampfireRest),
+    // reports the campfire found, the nearest spell focus of any kind, whether the rest started and whether the quest's sit objective counted;
+    // then ends the rest as if its minute ran out and reports the camp buffs it gave, and stands the player up again.
+    static bool HandleCampProbe(ChatHandler* handler, std::string name, std::string mode, Optional<float> a1, Optional<float> a2,
+        Optional<float> a3, Optional<float> a4)
+    {
+        static constexpr uint32 SPELL_CAMPFIRE_REST = 1289723;
+        static constexpr uint32 SPELL_CAMP_BENEFITS = 1229741;
+        static constexpr uint32 BoostedBuffs[] = { 1229451, 1229519, 1230164, 1230587, 1230172, 1229513, 1229718, 1230124, 1230098, 1230653 };
+
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !p->IsAlive())
+        {
+            handler->SendSysMessage("campprobe: no such living player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (mode == "go")
+        {
+            if (!a1 || !a2 || !a3 || !a4)
+            {
+                handler->SendSysMessage("campprobe: go <map> <x> <y> <z>");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            bool const ok = p->TeleportTo(uint32(*a1), *a2, *a3, *a4, p->GetOrientation());
+            handler->PSendSysMessage("campprobe: %s teleport to map %u (%.2f, %.2f, %.2f) %s", p->GetName().c_str(), uint32(*a1), *a2, *a3, *a4,
+                ok ? "started, run sit in a few seconds" : "REFUSED");
+            return true;
+        }
+        if (mode != "sit")
+        {
+            handler->SendSysMessage("campprobe: mode is go or sit");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // the quest, from no status, so earlier runs or the bot's own questing do not get in the way
+        uint32 const questId = a1 ? uint32(*a1) : 0;
+        Quest const* quest = questId ? sObjectMgr->GetQuestTemplate(questId) : nullptr;
+        if (questId && !quest)
+        {
+            handler->SendSysMessage("campprobe: no such quest");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        auto const forget = [p, questId]()
+        {
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+                p->RemoveActiveQuest(questId, false);
+            p->RemoveRewardedQuest(questId);
+        };
+        if (quest)
+        {
+            forget();
+            p->AddQuest(quest, nullptr);
+        }
+
+        // what is near: the campfire as the rest looks for it, and the nearest spell focus of any kind (what the rest used to look at)
+        GameObject* fire = nullptr;
+        Trinity::GameObjectFocusCheck focusCheck(p, 4);
+        Trinity::GameObjectSearcher<Trinity::GameObjectFocusCheck> fireSearcher(p, fire, focusCheck);
+        Cell::VisitGridObjects(p, fireSearcher, 15.0f);
+        GameObject* anyFocus = p->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, 15.0f);
+        handler->PSendSysMessage("campprobe: %s map %u (%.2f, %.2f, %.2f); campfire %s; nearest spell focus %s",
+            p->GetName().c_str(), p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
+            fire ? Trinity::StringFormat("{} '{}' spawn {} at {:.1f} yd", fire->GetEntry(), fire->GetGOInfo()->name, fire->GetSpawnId(),
+                p->GetDistance(fire)).c_str() : "NONE within 15 yd",
+            anyFocus ? Trinity::StringFormat("{} '{}' focus type {} at {:.1f} yd", anyFocus->GetEntry(), anyFocus->GetGOInfo()->name,
+                anyFocus->GetGOInfo()->spellFocus.spellFocusType, p->GetDistance(anyFocus)).c_str() : "none within 15 yd");
+
+        // sit as the sit key does
+        p->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST);
+        p->SetStandState(UNIT_STAND_STATE_SIT);
+        p->GetSession()->UpdateCampfireRest(UNIT_STAND_STATE_SIT);
+        bool const resting = p->HasAura(SPELL_CAMPFIRE_REST);
+
+        std::string objectives;
+        if (quest)
+            for (QuestObjective const& objective : quest->GetObjectives())
+                objectives += Trinity::StringFormat(" [{} type {}: {}]", objective.StorageIndex, uint32(objective.Type),
+                    p->IsQuestObjectiveComplete(objective.QuestID, objective.ID) ? "done" : "not done");
+        handler->PSendSysMessage("campprobe: sat down, rest %u %s%s%s", SPELL_CAMPFIRE_REST, resting ? "STARTED" : "did not start",
+            quest ? "; quest objectives:" : "", objectives.c_str());
+
+        // the minute runs out: the rest's own script gives the camp buffs
+        if (resting)
+        {
+            p->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST, ObjectGuid::Empty, 0, AURA_REMOVE_BY_EXPIRE);
+            std::string buffs;
+            for (uint32 buff : BoostedBuffs)
+                if (p->HasAura(buff))
+                    buffs += Trinity::StringFormat(" {}", buff);
+            handler->PSendSysMessage("campprobe: rest ran out; camp buffs:%s; Camp Benefits %u %s; next rest %s", buffs.empty() ? " NONE" : buffs.c_str(),
+                SPELL_CAMP_BENEFITS, p->HasAura(SPELL_CAMP_BENEFITS) ? "on" : "NOT on", p->HasAura(SPELL_CAMPFIRE_REST) ? "started" : "did not start");
+        }
+
+        p->SetStandState(UNIT_STAND_STATE_STAND);
+        p->GetSession()->UpdateCampfireRest(UNIT_STAND_STATE_STAND);
+        if (quest)
+            forget();
+        return true;
+    }
+
+    // .playerbot spotprobe <player> <x> <y> <z> [<from x> <from y> <from z>]
+    // Checks a spawn or landing spot on the player's own map (any player on that map, a bot over SOAP): the floor the server sees under the
+    // spot (terrain and buildings, as Map::GetHeight finds it searching down from 2 yards above, and from 30 yards above), a 5 x 5 grid of
+    // floors a yard apart around it, whether the spot is in water, and, with a start point, whether a walker finds a path from there.
+    static bool HandleSpotProbe(ChatHandler* handler, std::string name, float x, float y, float z, Optional<float> fromX, Optional<float> fromY,
+        Optional<float> fromZ)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("spotprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Map* map = p->GetMap();
+        PhaseShift const& phaseShift = p->GetPhaseShift();
+        // the spot may be far from the player: load its grid (terrain, buildings, navmesh tile) first
+        map->LoadGrid(x, y);
+        if (fromX && fromY)
+            map->LoadGrid(*fromX, *fromY);
+        auto const floorText = [](float h) { return h <= INVALID_HEIGHT ? std::string("NONE") : Trinity::StringFormat("{:.2f}", h); };
+
+        float const floorNear = map->GetHeight(phaseShift, x, y, z + 2.0f, true, 50.0f);
+        float const floorHigh = map->GetHeight(phaseShift, x, y, z + 30.0f, true, 80.0f);
+        handler->PSendSysMessage("spotprobe: map %u spot (%.2f, %.2f, %.2f): floor below spot %s, highest floor (from 30 yd up) %s, %s",
+            map->GetId(), x, y, z, floorText(floorNear).c_str(), floorText(floorHigh).c_str(),
+            map->IsInWater(phaseShift, x, y, z) ? "IN WATER" : "not in water");
+
+        for (int dy = 2; dy >= -2; --dy)
+        {
+            std::string row;
+            for (int dx = -2; dx <= 2; ++dx)
+            {
+                float const h = map->GetHeight(phaseShift, x + float(dx), y + float(dy), z + 2.0f, true, 50.0f);
+                row += Trinity::StringFormat(" {:>7}", floorText(h));
+            }
+            handler->PSendSysMessage("spotprobe: y%+d:%s", dy, row.c_str());
+        }
+
+        if (fromX && fromY && fromZ)
+        {
+            PathGenerator path(p);
+            bool const found = path.CalculatePath(*fromX, *fromY, *fromZ, x, y, z, false);
+            Movement::PointsArray const& points = path.GetPath();
+            G3D::Vector3 const end = points.empty() ? G3D::Vector3(*fromX, *fromY, *fromZ) : points.back();
+            float const endDist = std::sqrt((end.x - x) * (end.x - x) + (end.y - y) * (end.y - y) + (end.z - z) * (end.z - z));
+            handler->PSendSysMessage("spotprobe: path from (%.2f, %.2f, %.2f): %s, type 0x%X, %u points, length %.1f yd, ends %.1f yd from the spot (%.2f, %.2f, %.2f)",
+                *fromX, *fromY, *fromZ, found ? "found" : "NOT found", uint32(path.GetPathType()), uint32(points.size()), path.GetPathLength(), endDist,
+                end.x, end.y, end.z);
+        }
         return true;
     }
 
