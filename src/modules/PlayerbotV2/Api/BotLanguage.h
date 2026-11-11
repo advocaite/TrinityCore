@@ -9,7 +9,8 @@
 //   * else English. Bots and the console always read English (their text feeds the bot logic and the logs).
 //
 // Send points (the only places a bot's text leaves the server for a player): a whisper, party / raid chat (each member gets
-// the line in their own language), say / yell (each listener in range), and the `.bot` command replies (LocalizedHandler).
+// the line in their own language), say / yell (each listener in range), a chat channel and guild chat (each member), and the `.bot` command
+// replies (LocalizedHandler).
 // Nothing is translated for a reader of English, so an English realm costs one lookup per line.
 //
 //   Playerbot.Language.Enable  1   0 = every bot reply in English (as before), whatever the client
@@ -26,7 +27,9 @@
 #include <string>
 #include <string_view>
 
+class Channel;
 class Group;
+class Guild;
 class Player;
 class WorldSession;
 
@@ -67,6 +70,12 @@ void GroupChat(Player* from, Group* group, ChatMsg type, std::string const& engl
 // `from` says / yells: everyone within `range` (and `from`) reads the line in their language. Calls the chat script hook with
 // the English line first, as Player::Say does, so the listening bots see what they always saw.
 void SayInRange(Player* from, ChatMsg type, Language language, std::string const& english, float range);
+
+// `from` speaks on a chat channel it is on (General, Trade, LookingForGroup): every member reads the line in their language.
+void ChannelSay(Player* from, Channel* channel, std::string const& english);
+
+// `from` speaks in guild chat (officer chat when `officer`): every member who may listen reads the line in their language.
+void GuildSay(Player* from, Guild* guild, bool officer, std::string const& english);
 
 // A ChatHandler that translates every system line it sends for its player. A player command takes one at its top:
 //

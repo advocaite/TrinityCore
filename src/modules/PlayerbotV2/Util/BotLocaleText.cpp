@@ -1,6 +1,7 @@
 #include "BotLocaleText.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Playerbot::Locale {
 
@@ -44,6 +45,8 @@ void SplitTemplate(std::string_view en, std::vector<std::string>& lits, std::vec
         else if (en.substr(i, 3) == "{?}") { kind = '?'; len = 3; }
         else if (en.substr(i, 3) == "{#}") { kind = '#'; len = 3; }
         else if (en.substr(i, 3) == "{$}") { kind = '$'; len = 3; }
+        else if (en.substr(i, 3) == "{@}") { kind = '@'; len = 3; }
+        else if (en.substr(i, 3) == "{!}") { kind = '!'; len = 3; }
         if (!kind) { ++i; continue; }
         lits.emplace_back(en.substr(start, i - start));
         kinds.push_back(kind);
@@ -82,6 +85,10 @@ bool CaptureFits(std::string_view cap, char kind)
         return std::all_of(cap.begin(), cap.end(), IsNumberChar);
     if (kind == '$')
         return IsMoney(cap);
+    if (kind == '@')
+        return cap.find("|H") != std::string_view::npos;   // a chat link: |Hitem:...|h[Name]|h, |Hquest:...
+    if (kind == '!')
+        return cap.find(' ') == std::string_view::npos;    // a character's name: one word
     return true;
 }
 
@@ -107,10 +114,98 @@ bool Catalog::Add(std::string_view en, std::string_view tr)
     if (fixed == 0) return reject();
     for (Pattern const& p : patterns_)
         if (p.lits == lits && p.kinds == kinds) return reject();
-    // Kept most specific first (and in table order among equals), so a lookup never sorts and readers on several threads share it.
-    auto const at = std::upper_bound(patterns_.begin(), patterns_.end(), fixed,
-        [](size_t f, Pattern const& p) { return f > p.fixed; });
-    patterns_.insert(at, Pattern{ std::move(lits), std::move(kinds), std::string(tr), fixed });
+    // Kept most specific first: most fixed letters, then most captures of a narrow kind (so "needs {} for {$}?" is tried before
+    // "needs {} for {}?"), then table order. A lookup never sorts, and readers on several threads share it.
+    size_t const typed = size_t(std::count_if(kinds.begin(), kinds.end(), [](char k) { return k != 'a' && k != '?'; }));
+    auto const at = std::upper_bound(patterns_.begin(), patterns_.end(), std::make_pair(fixed, typed),
+        [](std::pair<size_t, size_t> const& f, Pattern const& p) { return f.first != p.fixed ? f.first > p.fixed : f.second > p.typed; });
+    patterns_.insert(at, Pattern{ std::move(lits), std::move(kinds), std::string(tr), fixed, typed });
+    return true;
+}
+
+namespace {
+
+bool IsPlaceholderLetter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+
+// The length of the placeholder starting at text[i] ("%item_link", "<target>"), or 0 when there is none.
+size_t PlaceholderAt(std::string_view text, size_t i)
+{
+    if (text[i] == '%')
+    {
+        size_t j = i + 1;
+        while (j < text.size() && IsPlaceholderLetter(text[j])) ++j;
+        return j > i + 1 ? j - i : 0;
+    }
+    if (text[i] == '<')
+    {
+        size_t j = i + 1;
+        while (j < text.size() && text[j] >= 'a' && text[j] <= 'z') ++j;
+        return (j > i + 1 && j < text.size() && text[j] == '>') ? j + 1 - i : 0;
+    }
+    return 0;
+}
+
+// The capture a chatter placeholder becomes: the ones BotTextMgr fills with a number, an amount of money, a chat link or a name
+// match only that, so two lines that differ only there ("Anyone needs %my_role for %instance_name?", "Anyone needs
+// %item_formatted_link for %cost_gold?") stay two templates, and a line that merely starts like a short chatter line ("hey ...",
+// "got ...") is not taken for it.
+std::string_view CaptureFor(std::string_view name)
+{
+    if (name == "%cost_gold") return "{$}";
+    if (name == "%item_link" || name == "%item_formatted_link" || name == "%item_formatted_links" || name == "%formatted_item_links" ||
+        name == "%quest_link" || name == "%quest_links" || name == "%category")
+        return "{@}";   // filled with chat links: "got {}" must not take every line that starts with "got "
+    if (name == "%s")
+        return "{!}";   // the name of the player the bot answers ("hi %s"): "hey {}" must not take every line that starts "hey "
+    if (name == "%my_level" || name == "%quest_obj_available" || name == "%quest_obj_required" || name == "%quest_obj_missing" ||
+        name == "%amount")
+        return "{#}";
+    return "{}";
+}
+
+} // namespace
+
+bool Catalog::AddChatter(std::string_view en, std::string_view tr)
+{
+    auto reject = [&]() { rejected_.emplace_back(en); return false; };
+    if (en.find_first_of("{}") != std::string_view::npos || tr.find_first_of("{}") != std::string_view::npos) return reject();
+
+    std::vector<std::string_view> names;   // the placeholders of `en`, in order: capture i + 1 is names[i]
+    std::string en_tpl;
+    for (size_t i = 0; i < en.size();)
+    {
+        if (size_t const len = PlaceholderAt(en, i))
+        {
+            std::string_view const name = en.substr(i, len);
+            names.push_back(name);
+            en_tpl += CaptureFor(name);
+            i += len;
+            continue;
+        }
+        en_tpl += en[i++];
+    }
+    if (names.size() > 9) return reject();
+
+    std::string tr_tpl;
+    for (size_t i = 0; i < tr.size();)
+    {
+        if (size_t const len = PlaceholderAt(tr, i))
+        {
+            auto const at = std::find(names.begin(), names.end(), tr.substr(i, len));
+            if (at == names.end()) return reject();
+            tr_tpl += '{';
+            tr_tpl += char('1' + (at - names.begin()));
+            tr_tpl += '}';
+            i += len;
+            continue;
+        }
+        tr_tpl += tr[i++];
+    }
+    if (!Add(en_tpl, tr_tpl))
+    {
+        rejected_.back() = std::string(en);   // name the database line, not its template
+        return false;
+    }
     return true;
 }
 
@@ -306,6 +401,8 @@ Catalog const& Russian()
     static Catalog const catalog = []
     {
         Catalog c(RussianEntries());
+        for (Catalog::Entry const& e : RussianChatterEntries())
+            c.AddChatter(e.en, e.tr);
         c.SetMoneyUnits("з", "с", "м");   // золото, серебро, медь: the Russian client's own money letters
         return c;
     }();

@@ -2,6 +2,7 @@
 
 #include "AsyncCallbackProcessor.h"
 #include "CellImpl.h"
+#include "Channel.h"
 #include "ChatPackets.h"
 #include "ChatTextBuilder.h"
 #include "Config.h"
@@ -9,6 +10,7 @@
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
+#include "Guild.h"
 #include "Log.h"
 #include "Player.h"
 #include "QueryCallback.h"
@@ -19,6 +21,7 @@
 #include "WorldSession.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
@@ -208,6 +211,48 @@ void SayInRange(Player* from, ChatMsg type, Language language, std::string const
     send(from);   // the speaker sees its own line, as Player::SendChatMessageToSetInRange does
     Trinity::MessageDistDeliverer<ChatByLang> notifier(from, send, range, false, nullptr, true);
     Cell::VisitWorldObjects(from, notifier, range);
+}
+
+namespace {
+
+// The line in one reader's language, translated once per language when the first reader of it is met (the channel and guild
+// broadcasts send one packet per distinct text).
+class TextByLang
+{
+public:
+    explicit TextByLang(std::string const& english) : english_(english) { }
+
+    std::string const& operator()(Player const* reader)
+    {
+        size_t const i = size_t(LangOf(reader));
+        if (!made_[i])
+        {
+            texts_[i] = Locale::Translate(Locale::Lang(i), english_);
+            made_[i] = true;
+        }
+        return texts_[i];
+    }
+
+private:
+    std::string const& english_;
+    std::string texts_[2];
+    bool made_[2] = { false, false };
+};
+
+} // namespace
+
+void ChannelSay(Player* from, Channel* channel, std::string const& english)
+{
+    if (!from || !channel) return;
+    TextByLang text(english);
+    channel->Say(from->GetGUID(), LANG_UNIVERSAL, std::ref(text));
+}
+
+void GuildSay(Player* from, Guild* guild, bool officer, std::string const& english)
+{
+    if (!from || !guild) return;
+    TextByLang text(english);
+    guild->BroadcastToGuild(from->GetSession(), officer, std::ref(text), LANG_UNIVERSAL);
 }
 
 LocalizedHandler::LocalizedHandler(ChatHandler* original)

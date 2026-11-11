@@ -21,6 +21,7 @@
 
 #include "../../src/modules/PlayerbotV2/Util/BotLocaleText.h"
 #include "../../src/modules/PlayerbotV2/Bot/Raid/RaidBanter.h"
+#include <cctype>
 #include <set>
 #include <string>
 
@@ -53,7 +54,7 @@ TEST_CASE("BotLocale: every Russian entry is well formed and used once", "[BotLo
     for (std::string const& bad : ru.Rejected())
         FAIL_CHECK("refused: " << bad);
     CHECK(ru.Rejected().empty());
-    CHECK(ru.Size() == RussianEntries().size());
+    CHECK(ru.Size() == RussianEntries().size() + RussianChatterEntries().size());
 
     // A translation that drops a capture loses a name or a number the player needs.
     for (Catalog::Entry const& e : RussianEntries())
@@ -61,6 +62,67 @@ TEST_CASE("BotLocale: every Russian entry is well formed and used once", "[BotLo
         INFO(e.en);
         CHECK(Placeholders(e.tr) == Captures(e.en));
     }
+}
+
+TEST_CASE("BotLocale: the stock chatter keeps every placeholder", "[BotLocale]")
+{
+    // A placeholder the translation drops loses the item, the zone or the name; one it invents is never filled.
+    auto placeholders = [](std::string const& s)
+    {
+        std::multiset<std::string> out;
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            size_t j = i + 1;
+            if (s[i] == '%')
+                while (j < s.size() && (std::isalnum(static_cast<unsigned char>(s[j])) || s[j] == '_')) ++j;
+            else if (s[i] == '<')
+            {
+                while (j < s.size() && s[j] >= 'a' && s[j] <= 'z') ++j;
+                if (j >= s.size() || s[j] != '>') continue;
+                ++j;
+            }
+            else
+                continue;
+            if (j > i + 1)
+                out.insert(s.substr(i, j - i));
+        }
+        return out;
+    };
+    for (Catalog::Entry const& e : RussianChatterEntries())
+    {
+        INFO(e.en);
+        CHECK(placeholders(e.en) == placeholders(e.tr));
+    }
+}
+
+TEST_CASE("BotLocale: the stock chatter in Russian", "[BotLocale]")
+{
+    std::string const linen = "|cnIQ1:|Hitem:2589::::::::12::::::::::|h[Linen Cloth]|h|r";
+    CHECK(Translate(Lang::Ru, "WTS " + linen + "x20 for 1g 20s.") == "Продаю " + linen + "x20 за 1з 20с.");
+    CHECK(Translate(Lang::Ru, "Argent Dawn: need 3K for exalted.") == "«Серебряный Рассвет»: нужно ещё 3K до уровня «Превознесение».");
+    CHECK(Translate(Lang::Ru, "Bite me, Hogger!") == "Выкуси, Hogger!");
+    CHECK(Translate(Lang::Ru, "Elwynn Forest: where is everyone?") == "Elwynn Forest: где все?");
+    CHECK(Translate(Lang::Ru, "hi Karrz") == "привет, Karrz");
+    CHECK(Translate(Lang::Ru, "tank LFG Deadmines") == "танк ищет группу: Deadmines");
+    CHECK(Translate(Lang::Ru, "Ding 23!") == "Дзынь, 23!");
+    // Two lines that differ only in what fills them stay apart: a sale is no dungeon call.
+    CHECK(Translate(Lang::Ru, "Anyone needs " + linen + " for 2g?") == "Кому нужно " + linen + " за 2з?");
+    CHECK(Translate(Lang::Ru, "Anyone needs Protection Warrior for Deadmines?") == "Кому нужен Protection Warrior в Deadmines?");
+    // A short chatter line does not take every line that starts the same way.
+    CHECK(Translate(Lang::Ru, "got it, Hogger") == "got it, Hogger");
+    CHECK(Translate(Lang::Ru, "hey there, i can tank") == "hey there, i can tank");
+    CHECK(Translate(Lang::Ru, "WTS [Linen Cloth] x20 for 1g 20s.") == "WTS [Linen Cloth] x20 for 1g 20s.");
+}
+
+TEST_CASE("BotLocale: chatter placeholders", "[BotLocale]")
+{
+    Catalog c;
+    CHECK(c.AddChatter("%a sells %item_link to %b for %cost_gold", "%b buys %item_link from %a, %cost_gold"));
+    CHECK_FALSE(c.AddChatter("hi %s", "hello %other"));   // a placeholder the English line has not got
+    CHECK_FALSE(c.AddChatter("hi {}", "x"));              // a brace of its own
+    CHECK(c.Rejected().size() == 2);
+    CHECK(c.Translate("Ann sells |Hitem:1|h[Axe]|h to Bob for 3g") == "Bob buys |Hitem:1|h[Axe]|h from Ann, 3g");
+    CHECK(c.Translate("Ann sells an axe to Bob for 3g") == "Ann sells an axe to Bob for 3g");   // no link, no match
 }
 
 TEST_CASE("BotLocale: English readers get the line unchanged", "[BotLocale]")

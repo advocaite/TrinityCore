@@ -643,6 +643,7 @@ public:
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "langprobe",     HandleLangProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "talentwalk",    HandleTalentWalk,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5152,6 +5153,20 @@ public:
             p->GetName().c_str(), uint32(p->GetLevel()), formSpell, learned ? " (learned now)" : "", uint32(result), inForm ? "yes" : "no",
             uint32(info->GetEffect(EFFECT_0).MiscValue), armorBefore, armorInForm, armorAfter, passiveSpell.value_or(0),
             !passiveSpell ? "not checked" : hasPassive ? "present" : "MISSING", passiveGone ? "gone" : "STILL THERE");
+        return true;
+    }
+
+    // .playerbot langprobe <english line>
+    // The line as a Russian reader gets it from a bot (Util/BotLocaleText), or "unchanged" when no catalog entry matches: checks the
+    // catalog of the running build without a Russian client.
+    static bool HandleLangProbe(ChatHandler* handler, Tail text)
+    {
+        std::string const english(text);
+        std::string const russian = Playerbot::Locale::Translate(Playerbot::Locale::Lang::Ru, english);
+        if (russian == english)
+            handler->PSendSysMessage("langprobe: unchanged (%u Russian entries): %s", uint32(Playerbot::Locale::Russian().Size()), english.c_str());
+        else
+            handler->PSendSysMessage("langprobe: ru: %s", russian.c_str());
         return true;
     }
 

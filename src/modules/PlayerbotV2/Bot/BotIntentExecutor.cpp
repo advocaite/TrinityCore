@@ -22,6 +22,7 @@
 #include "../Combat/Apl/HealClaimStore.h"
 #include "CombatManager.h"
 #include "TemporarySummon.h"
+#include "Api/BotLanguage.h"
 #include "PlayerbotAPI.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
@@ -92,7 +93,8 @@ Result SayInZoneChannel(Player* bot, uint8 channel_id, std::string const& text)
         ch = find(1);
     if (!ch)
         return Result::Other;
-    ch->Say(bot->GetGUID(), text, LANG_UNIVERSAL);
+    // Each member reads the line in their own language (a Russian client reads the bots' chatter in Russian).
+    BotLanguage::ChannelSay(bot, ch, text);
     return Result::Ok;
 }
 

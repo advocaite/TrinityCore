@@ -4504,7 +4504,7 @@ Result API::guild_chat(std::string const& text)
     if (!p_ || text.empty()) return Result::Other;
     Guild* guild = p_->GetGuild();
     if (!guild) return Result::Locked;
-    guild->BroadcastToGuild(p_->GetSession(), /*officerOnly*/ false, text, LANG_UNIVERSAL);
+    BotLanguage::GuildSay(p_, guild, /*officer*/ false, text);   // each member reads it in their language
     return Result::Ok;
 }
 
@@ -4513,7 +4513,7 @@ Result API::officer_chat(std::string const& text)
     if (!p_ || text.empty()) return Result::Other;
     Guild* guild = p_->GetGuild();
     if (!guild) return Result::Locked;
-    guild->BroadcastToGuild(p_->GetSession(), /*officerOnly*/ true, text, LANG_UNIVERSAL);
+    BotLanguage::GuildSay(p_, guild, /*officer*/ true, text);   // each member reads it in their language
     return Result::Ok;
 }
 
