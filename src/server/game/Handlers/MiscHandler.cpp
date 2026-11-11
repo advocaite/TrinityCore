@@ -21,6 +21,7 @@
 #include "AchievementPackets.h"
 #include "AreaTriggerPackets.h"
 #include "Battleground.h"
+#include "CellImpl.h"
 #include "CharacterPackets.h"
 #include "Chat.h"
 #include "CinematicMgr.h"
@@ -34,6 +35,7 @@
 #include "GameObject.h"
 #include "GameTime.h"
 #include "GossipDef.h"
+#include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "Guild.h"
 #include "GuildMgr.h"
@@ -421,18 +423,50 @@ void WorldSession::HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateCh
 // (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it).
 // Also called for the sit text emote: a typed /sit in another language (ruRU "/сесть", 2026-11-05 report) can reach the server
 // only as the emote, without a stand state change, and then the rest never started.
+// Also called when the player sits down on a chair or bench (GameObject::Use), which sits them without a stand state packet.
+//
+// The fire is any spawned spell focus 4 (Campfire) within its focus radius and 15 yards, found the way a spell's focus requirement
+// finds it. Taking the nearest spell focus of any kind and then checking that one was a campfire missed the fire whenever another
+// focus (a forge, an anvil) stood closer (Discord, ikero3078 2026-11-11: no camp buffs in Kharanos).
+//
+// The Great Outdoors (95998, 96101, 96604-96608) asks to sit at the campfire: client criteria trees 225069/225212/227678/... are
+// ANY of { complete quest 98289, emote 86 (sit) }, each only while the rest aura 1289723 is on. Only a typed /sit sends emote 86;
+// sitting with the sit key or on a chair sends a stand state change, so that objective never counted (Discord, Kozhan 2026-11-11).
+// 98289 is hidden ("Camp Tutorial Area Trigger", in no client or server quest table); the server completes it on live.
+// INFERRED: it is completed when the rest starts, the one moment the tree's aura condition is met.
 void WorldSession::UpdateCampfireRest(uint8 standState)
 {
     static constexpr uint32 SPELL_CAMPFIRE_REST = 1289723;
-    if (standState == UNIT_STAND_STATE_SIT)
+    static constexpr uint32 QUEST_CAMP_TUTORIAL_AREA_TRIGGER = 98289;
+    static constexpr uint32 SPELL_FOCUS_CAMPFIRE = 4;
+    static constexpr float CAMPFIRE_RANGE = 15.0f;
+
+    switch (standState)
     {
-        if (!_player->HasAura(SPELL_CAMPFIRE_REST))
-            if (GameObject* fire = _player->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, 15.0f))
-                if (fire->GetGOInfo()->spellFocus.spellFocusType == 4)
-                    _player->CastSpell(_player, SPELL_CAMPFIRE_REST, true);
+        case UNIT_STAND_STATE_SIT:
+        case UNIT_STAND_STATE_SIT_CHAIR:
+        case UNIT_STAND_STATE_SIT_LOW_CHAIR:
+        case UNIT_STAND_STATE_SIT_MEDIUM_CHAIR:
+        case UNIT_STAND_STATE_SIT_HIGH_CHAIR:
+            break;
+        default:
+            _player->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST);
+            return;
     }
-    else
-        _player->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST);
+
+    if (_player->HasAura(SPELL_CAMPFIRE_REST))
+        return;
+
+    GameObject* fire = nullptr;
+    Trinity::GameObjectFocusCheck check(_player, SPELL_FOCUS_CAMPFIRE);
+    Trinity::GameObjectSearcher<Trinity::GameObjectFocusCheck> searcher(_player, fire, check);
+    Cell::VisitGridObjects(_player, searcher, CAMPFIRE_RANGE);
+    if (!fire)
+        return;
+
+    _player->CastSpell(_player, SPELL_CAMPFIRE_REST, true);
+    if (_player->HasAura(SPELL_CAMPFIRE_REST))
+        _player->UpdateCriteria(CriteriaType::CompleteQuest, QUEST_CAMP_TUTORIAL_AREA_TRIGGER);
 }
 
 void WorldSession::HandleReclaimCorpse(WorldPackets::Misc::ReclaimCorpse& /*packet*/)
