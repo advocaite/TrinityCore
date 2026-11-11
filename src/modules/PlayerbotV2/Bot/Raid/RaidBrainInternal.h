@@ -55,7 +55,9 @@ bool Controlled(Unit* u);
 // Path queries are capped per plan pass (all bots together, see ResetPathProbes): urgent probes (leaving a hazard,
 // a carrier run, scripted mechanics, a breath / cone) may use the whole cap, the rest (spread, role spots, stay near)
 // stop early so an escape never finds the pass's budget spent.
-bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false, bool hazard = false);
+// `fixedPlace`: a place the encounter fixes (a fixed tank row's slot). The ground, path and detour checks stay; the bot need not see it
+// from where it stands (the path walks round what is between) and it need not be in the fight area round the main tank (the row is wider).
+bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false, bool hazard = false, bool fixedPlace = false);
 void ResetPathProbes();
 bool SetMove(RaidOrder& out, float x, float y, float z, char const* reason);
 // Best nearby point that increases the distance to every raid member in `others`.

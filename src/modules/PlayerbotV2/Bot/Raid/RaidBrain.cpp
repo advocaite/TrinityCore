@@ -419,7 +419,7 @@ bool MagmaAt(Map* map, PhaseShift const& phase, float x, float y, float z, float
 // as far as the ground allows: a point in lava, with no ground, with no sight of the bot or no path is refused, and the fight-area and
 // engaged-reach limits are not applied (MC Geddon 2026-10-13 650994ea: seven raiders inside Inferno's circle "found no way out" with the
 // fight area and the engaged reach refusing 7-14 of their probes, and then stood in it).
-bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent, bool hazard)
+bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent, bool hazard, bool fixedPlace)
 {
     g_usableWhy = 0;
     if (!hazard && InsideAny(g_keepOut, x, y, 0.0f))   // a way out of a hazard may use the cave rim: a whelp pack can be survived, a breath cannot
@@ -448,9 +448,9 @@ bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent
         if (MagmaAt(map, bot->GetPhaseShift(), x, y, height + 0.05f, surface))
             return g_usableWhy = 4, false;
     }
-    if (!bot->IsWithinLOS(x, y, height + bot->GetCollisionHeight()))
+    if (!fixedPlace && !bot->IsWithinLOS(x, y, height + bot->GetCollisionHeight()))
         return g_usableWhy = 5, false;
-    if (!hazard && !InFightArea(bot, x, y, height, urgent))
+    if (!hazard && !fixedPlace && !InFightArea(bot, x, y, height, urgent))
         return g_usableWhy = 6, false;
     ++(urgent ? g_urgentProbes : g_pathProbes);
     PathGenerator path(bot);
@@ -2692,6 +2692,10 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         // A tank that does not walk back says why. bwl_nefarian 1111g run 2: Mctankwc stood 15 s at (-7540,-1202), 25 y from its place
         // (-7565,-1217) with a drakonid on it, and logged no walk; the four tanks walked to their places 37-87 times a run, while they
         // stood 29-37 y (median) from the camp centre on a 23 y arc in every sweep from 1111e on.
+        // A fixed row's place is the encounter's: the walk there needs ground and a path without a detour, not sight of it from where the
+        // tank stands, nor the fight area round the main tank. 1111h: of 297 refusals 212 were "no LoS" (the tanks on the west half of the
+        // arc could not see the slots on the east half across the north side, the ground the healers' post cannot see either) and 86 "fight
+        // area" (the arc is 46 y across, wider than the 35 y fight radius round the main tank).
         float const off = Dist2D(bot->GetPositionX(), bot->GetPositionY(), tx, ty);
         if (!circles.empty() && InsideAny(circles, tx, ty, 0.5f))
         {
@@ -2699,7 +2703,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                         bot->GetName(), off, rule.enemy, tx, ty);
             continue;
         }
-        if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true))
+        if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true, /*hazard*/ false, /*fixedPlace*/ rule.fixed))
         {
             TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f})", bot->GetName(), rule.enemy, tx, ty);
             SetMove(out, tx, ty, tz, "tank spot");
