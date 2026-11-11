@@ -220,3 +220,7 @@ UPDATE `creature_template_difficulty` SET `TypeFlags` = `TypeFlags` & ~1 WHERE `
 
 -- 5. The Razza (Dire Maul): live sends no pet family (ours 38). Follow live.
 UPDATE `creature_template` SET `family` = 0 WHERE `entry` = 11497; -- The Razza, ours 38 (sniff)
+
+-- 6. Vulgara the Insatiable (11-11 live capture, sniff-live-1111b/compare-live-vs-ours-1111b.json): live family 319,
+--    ours 1. Only the family; the capture says nothing about the tameable flag, so it stays as it is.
+UPDATE `creature_template` SET `family` = 319 WHERE `entry` = 254589; -- Vulgara the Insatiable (sniff)
