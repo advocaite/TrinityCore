@@ -1310,6 +1310,15 @@ bool ReachedRaid(Plan const& plan, Unit* add)
 // healers' post, from 20 s into the pull until it died; Mctankda died 45 y north of the camp).
 bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
 {
+    // One another tank of the row already holds is that tank's, at its place: going after it is a taunt from melee range (Taunt reaches
+    // 4 y here) across the arc, and the two tanks taunt it back and forth. bwl_nefarian 1111i run 1: the tank planner handed adds on a tank
+    // to another tank (10 of 22 assignments in run 1, 18 of 72 and 17 of 68 in runs 2 and 3; "Mctankwa takes Red Drakonid (474) 100% on
+    // Mctankwb dist=10y why=nearest", "Mctankwa takes Chromatic Drakonid (472) on Mctankwb dist=35y"), two tanks stood on one drakonid
+    // from 24 s to 57 s at (-7555,-1199), north of every place, and all four tanks died there at 188-208 s.
+    if (Unit* const v = add->GetVictim(); v && v != bot && v->IsAlive())
+        if (Player* const vp = v->ToPlayer())
+            if (std::any_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p == vp && m.tank; }))
+                return false;
     if (ReachedRaid(plan, add))
         return true;
     if (rule.reach <= 0.0f)
