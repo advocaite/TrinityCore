@@ -1329,6 +1329,8 @@ constexpr float kArcTurnShareOfStep = 0.25f;    // at most this share of the ang
 constexpr uint32_t kArcSightMs = 5000;          // a slot's sight is probed again after this long
 struct ArcSight { uint32_t at = 0; float turn = 0.0f; bool seen = true; };
 std::unordered_map<uint64_t, ArcSight> g_arcSight;   // (group, anchor, slot, slot count) -> the turn in use
+constexpr uint32_t kArcProfileMs = 60000;            // the whole arc's sight profile is logged this often
+std::unordered_map<uint64_t, uint32_t> g_arcProfile; // (group, anchor) -> when it was last logged
 
 float SeenArcTurn(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, uint32_t slot, uint32_t slots, float a, float step)
 {
@@ -1341,6 +1343,24 @@ float SeenArcTurn(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t 
         }
     if (!post)
         return 0.0f;
+    // Once a minute per arc: which points of the whole arc the post sees, every 5 degrees across the half circle round rowDeg ('#' seen,
+    // '.' not), and from where to where. bwl_nefarian 1111e: the post saw none of the north slots, even turned (the four slots probed
+    // there all "stay at"), while the tanks fought 37-62 y from it; the profile is what a re-laid arc can be built on.
+    if (uint32_t& profiled = g_arcProfile[(plan.groupLow << 32) ^ rule.anchor]; !profiled || now - profiled >= kArcProfileMs)
+    {
+        profiled = now ? now : 1u;
+        std::string seenAt;
+        float const eye = post->z + kArcEyeHeight;
+        for (int deg = -90; deg <= 90; deg += 5)
+        {
+            float const t = (rule.rowDeg + float(deg)) * (float(M_PI) / 180.0f);
+            seenAt += bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eye, rule.x + rule.reach * std::cos(t),
+                                                     rule.y + rule.reach * std::sin(t), eye, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing)
+                ? '#' : '.';
+        }
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] arc for entry {} round ({:.0f},{:.0f}) r {:.0f}, seen from the healers' post ({:.0f},{:.0f}) at "
+                    "{:.0f}..{:.0f} degrees: {}", rule.enemy, rule.x, rule.y, rule.reach, post->x, post->y, rule.rowDeg - 90.0f, rule.rowDeg + 90.0f, seenAt);
+    }
     uint64_t const key = (plan.groupLow << 32) ^ (uint64_t(rule.anchor) << 12) ^ (uint64_t(slots) << 6) ^ uint64_t(slot);
     ArcSight& sight = g_arcSight[key];
     if (sight.at && now - sight.at < kArcSightMs)
