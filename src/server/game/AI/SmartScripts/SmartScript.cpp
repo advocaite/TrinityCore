@@ -3028,7 +3028,12 @@ void SmartScript::GetTargets(ObjectVector& targets, SmartScriptHolder const& e, 
 
             std::vector<Player*> players;
             baseObject->GetPlayerListInGrid(players, static_cast<float>(e.target.playerRange.maxDist));
-            std::ranges::copy_if(players, std::back_inserter(targets), [&](Player const* target) { return !baseObject->IsWithinDist(target, static_cast<float>(e.target.playerRange.minDist)); });
+            // minDist 0 means no minimum. IsWithinDist adds both combat reaches, so "not within 0" would leave out every player
+            // standing within about 3 yards, such as the player who walked an escort to its end right next to it.
+            std::ranges::copy_if(players, std::back_inserter(targets), [&](Player const* target)
+            {
+                return !e.target.playerRange.minDist || !baseObject->IsWithinDist(target, static_cast<float>(e.target.playerRange.minDist));
+            });
             break;
         }
         case SMART_TARGET_PLAYER_DISTANCE:
