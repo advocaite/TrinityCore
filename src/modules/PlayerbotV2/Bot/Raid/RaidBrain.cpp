@@ -2491,7 +2491,12 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                     adds.push_back(c);
             for (Unit* enemy : adds)
             {
-                if (!enemy->IsAlive() || !InTankSpot(rule, enemy->GetEntry()) || enemy->GetVictim() == bot)
+                // An add already on this tank but still far out is waited for too: it walks to the tank at its slot. The rotation's chase
+                // walked the tank out to meet it, and the next one, and the one after (bwl_nefarian 1110b: "takes Bronze Drakonid on Mctankwa
+                // dist=39y why=already_on_it", then its melee spot at -7544,-1185; from 25 s on every tank fought 40-67 y from the camp
+                // centre, outside its 23 y arc, 45-60 y from the healers' post, and all four were dead by 70-90 s). Once it is in melee
+                // with the tank (ReachedRaid) or close by near the arc, it is fought as before.
+                if (!enemy->IsAlive() || !InTankSpot(rule, enemy->GetEntry()))
                     continue;
                 // The ones it goes after (FetchesAdd). One already in melee with a raider is among them: a tank with a free hand takes it,
                 // so the adds spread over the tanks instead of piling on the ones that met them first.
