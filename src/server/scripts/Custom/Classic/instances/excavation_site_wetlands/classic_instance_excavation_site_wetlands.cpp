@@ -23,8 +23,11 @@
 // anyone can use). Its two official yells are "Archival process suspended. Initializing stabilization protocol." and "Stabilization
 // resolved. Defensive measures reactivated." (BroadcastText 310733 / 310735). INFERRED, no sniff of the fight: using the panel
 // suspends the archiving, the first yell plays, and after the stabilization the second yell plays and the Guardian fights the
-// player who used the panel. Its abilities are unknown, so it fights in melee only. After a wipe it goes back to sleep and the
+// player who used the panel. After a wipe it goes back to sleep and the
 // panel wakes it again. Its death drops the Titan Relic that starts Elder Knowledge (Horde) or Lost Relic Carry (Alliance).
+// Its abilities are real live data: Thunderclap, Arcing Smash and Knock Away. Data from Efficient Games
+// (https://efficient.games), licensed under CC BY 4.0 (EG Link output for 70862, spell casts seen on live kills). Changed: only
+// the spell ids are taken; the timers are INFERRED from the cast counts (6, 15 and 6 casts over 3 kills).
 
 #include "ScriptMgr.h"
 #include "Creature.h"
@@ -75,7 +78,17 @@ enum ClassicRelicGuardianTexts : uint8
 enum ClassicRelicGuardianMisc : int32
 {
     DATA_RELIC_GUARDIAN_AWAKEN = 1,
-    EVENT_RELIC_GUARDIAN_DEFEND = 1
+    EVENT_RELIC_GUARDIAN_DEFEND = 1,
+    EVENT_RELIC_GUARDIAN_THUNDERCLAP,
+    EVENT_RELIC_GUARDIAN_ARCING_SMASH,
+    EVENT_RELIC_GUARDIAN_KNOCK_AWAY
+};
+
+enum ClassicRelicGuardianSpells : uint32
+{
+    SPELL_RELIC_GUARDIAN_THUNDERCLAP = 8078,
+    SPELL_RELIC_GUARDIAN_ARCING_SMASH = 8374,
+    SPELL_RELIC_GUARDIAN_KNOCK_AWAY = 10101
 };
 
 constexpr Milliseconds RelicGuardianStabilizationTime = 5s;     // INFERRED: the time between the two yells is not known
@@ -159,9 +172,34 @@ struct classic_boss_relic_guardian : public ScriptedAI
         _events.ScheduleEvent(EVENT_RELIC_GUARDIAN_DEFEND, RelicGuardianStabilizationTime);
     }
 
+    void JustEngagedWith(Unit* /*who*/) override
+    {
+        _events.ScheduleEvent(EVENT_RELIC_GUARDIAN_ARCING_SMASH, 4s);       // INFERRED timers
+        _events.ScheduleEvent(EVENT_RELIC_GUARDIAN_THUNDERCLAP, 8s);
+        _events.ScheduleEvent(EVENT_RELIC_GUARDIAN_KNOCK_AWAY, 12s);
+    }
+
     void UpdateAI(uint32 diff) override
     {
         _events.Update(diff);
+
+        if (me->IsEngaged())
+        {
+            if (me->HasUnitState(UNIT_STATE_CASTING))
+                return;
+            while (uint32 ev = _events.ExecuteEvent())
+            {
+                switch (ev)
+                {
+                    case EVENT_RELIC_GUARDIAN_ARCING_SMASH: DoCastVictim(SPELL_RELIC_GUARDIAN_ARCING_SMASH); _events.Repeat(6s, 9s); break;
+                    case EVENT_RELIC_GUARDIAN_THUNDERCLAP: DoCastSelf(SPELL_RELIC_GUARDIAN_THUNDERCLAP); _events.Repeat(14s, 18s); break;
+                    case EVENT_RELIC_GUARDIAN_KNOCK_AWAY: DoCastVictim(SPELL_RELIC_GUARDIAN_KNOCK_AWAY); _events.Repeat(15s, 20s); break;
+                    default: break;
+                }
+            }
+            UpdateVictim();
+            return;
+        }
 
         if (_events.ExecuteEvent() == EVENT_RELIC_GUARDIAN_DEFEND)
         {

@@ -20,11 +20,13 @@
 // 3311 Atrexis the Grave Knight, 3310 Lyn the Ignored, 3298 Arcane Anomaly, 3301 Arcanic Enigma (the client calls the
 // encounter "Mana Elemental"), 3302 Unstable Sentinel, 3300 Mana Devourer, 3299 Fel Ancient, 3303 Shade of the Archmage.
 //
-// No sniff of any fight exists. The abilities come from the public dungeon guides (Forever 1.60.1). Live uses spells the client
-// does not ship (Silence 1224125, Arcane Bolt 15230, Arcane Explosion 28450, Evocation 1303599) or spells whose effect is
-// server-side (Focal Blast area trigger 38353, Bounding Mana and Fel Timbers are dummies, Malfunction pulses). Those are
-// rebuilt here from spells the 70862 client has, with damage values picked for a level 28-33 group. Every timer and
-// every number marked INFERRED below is a guess, not live data.
+// No sniff of any fight exists. The abilities come from the public dungeon guides (Forever 1.60.1). Where a live kill showed
+// which spell id a boss casts, that id is used (Strike 12057, Disarm 6713, Unholy Frenzy 1303264, Curse of Thorns 1304473,
+// Arcing Smash 16169, Arcane Bolt 1240682 and 1241506, Evocation 1303599; all in the 70862 client):
+// Data from Efficient Games (https://efficient.games), licensed under CC BY 4.0 (EG Link output for 1.60.1.70338, creature
+// spell casts of one full run). Changed: only the spell ids are taken. Some live effects are server-side (Focal Blast area
+// trigger, Bounding Mana and Fel Timbers are dummies, Malfunction pulses), so those are rebuilt here, with damage values
+// picked for a level 28-33 group. Every timer and every number marked INFERRED below is a guess, not live data.
 //
 // The way in: the Sewer Grate (656283) outside the city, map 0 (388.8, 537.4, 45.8). It needs the Dalaran Sewer Key
 // (277507); one key opens it for the whole group (guides), so a group member near the grate with the key is enough. Ghosts can
@@ -105,18 +107,19 @@ enum ClassicCityOfDalaranItems : uint32
 enum ClassicCityOfDalaranSpells : uint32
 {
     // all present in the 70862 client
-    SPELL_COD_DISARM = 676,
-    SPELL_COD_STRIKE = 11976,
+    SPELL_COD_DISARM = 6713,
+    SPELL_COD_STRIKE = 12057,
     SPELL_COD_THRASH = 3391,
-    SPELL_COD_UNHOLY_FRENZY = 8699,
+    SPELL_COD_UNHOLY_FRENZY = 1303264,
     SPELL_COD_SHADOW_BOLT_VOLLEY = 9081,
-    SPELL_COD_CURSE_OF_THORNS = 6909,
-    SPELL_COD_ARCANE_BOLT = 13748,
+    SPELL_COD_CURSE_OF_THORNS = 1304473,
+    SPELL_COD_ARCANE_BOLT = 1240682,        // Arcane Anomaly's live bolt
+    SPELL_COD_SHADE_ARCANE_BOLT = 1241506,  // the Shade's live bolt
     SPELL_COD_FOCAL_BLAST = 1241501,        // live spell; its area trigger is server-side, so it is cast for the look only
     SPELL_COD_MANAMORPH = 1240869,
     SPELL_COD_SILENCE = 6726,
     SPELL_COD_SUMMON_MANALING = 1304455,    // cast for the look; its creature 269467 has no template
-    SPELL_COD_ARCING_SMASH = 8374,
+    SPELL_COD_ARCING_SMASH = 16169,
     SPELL_COD_MALFUNCTION = 13319,
     SPELL_COD_ENTANGLE = 720,
     SPELL_COD_FEL_TIMBERS = 1240692,        // live dummy, cast for the look
@@ -125,7 +128,7 @@ enum ClassicCityOfDalaranSpells : uint32
     SPELL_COD_ARCANE_CASCADE = 1241359,     // 40 arcane damage and 200 mana burned in a cone: the guides' "Debilitate"
     SPELL_COD_BOUNDING_MANA = 1241515,      // live dummy, cast for the look
     SPELL_COD_MASS_POLYMORPH = 1303598,
-    SPELL_COD_EVOCATION = 12051
+    SPELL_COD_EVOCATION = 1303599
 };
 
 // INFERRED landing spots (no sniff): on the navmesh, each one checked with dungeon_reach_check
@@ -819,7 +822,7 @@ struct classic_boss_cod_shade_of_the_archmage : public ScriptedAI
                 case EV_BOLT:
                     if (!_polymorphing)
                         if (Unit* victim = me->GetVictim())
-                            CodHit(me, victim, SPELL_COD_ARCANE_BOLT, BoltDamage);
+                            CodHit(me, victim, SPELL_COD_SHADE_ARCANE_BOLT, BoltDamage);
                     _events.Repeat(4s, 6s);
                     break;
                 case EV_BOUNDING_MANA:
@@ -834,7 +837,7 @@ struct classic_boss_cod_shade_of_the_archmage : public ScriptedAI
                     break;
                 case EV_EXPLOSION:
                     for (Player* player : CodPlayersNear(me, _explosionAt, ExplosionRange))
-                        CodHit(me, player, SPELL_COD_ARCANE_BOLT, ExplosionDamage);
+                        CodHit(me, player, SPELL_COD_SHADE_ARCANE_BOLT, ExplosionDamage);
                     break;
                 case EV_OUT_OF_MANA:
                     _polymorphing = true;
