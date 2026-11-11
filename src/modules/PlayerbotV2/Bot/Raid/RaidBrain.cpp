@@ -3384,6 +3384,32 @@ void ElectControlledMembers(Election& e)
             if (!e.Assign(p, { &kPolymorph }, true, RaidOrder::CastKind::CrowdControl, "polymorph controlled", true))
                 e.Assign(p, { &kHammerOfJustice, &kGouge, &kBash }, true, RaidOrder::CastKind::CrowdControl, "stun controlled", true);
         }
+    // The control ends long before the raid's own polymorph does: Hakkar's Cause Insanity charms for 10 s and Polymorph holds a player
+    // 50 s. zg_hakkar 1110b: both tanks were sheeped under the charm and stood as sheep 40 s after it, one died among the Sons of Hakkar
+    // where the charm had walked him, and with the other one sheeped Hakkar went from 5% to the raiders, followed one off his platform at
+    // 1% and reset. A member no longer under a control aura is cleared of a polymorph a raid member put on it, at once (healers too).
+    for (Member const& victim : plan.members)
+    {
+        Player* p = victim.p;
+        if (!p->IsAlive() || !p->IsPolymorphed())
+            continue;
+        if (std::any_of(plan.rules->controlledMember.begin(), plan.rules->controlledMember.end(),
+                        [p](ControlledMember const& rule) { return p->HasAura(rule.aura); }))
+            continue;
+        bool ours = false;
+        for (auto const& [spellId, app] : p->GetAppliedAuras())
+        {
+            Aura const* aura = app->GetBase();
+            if (!(aura->GetSpellInfo()->GetAllEffectsMechanicMask() & (UI64LIT(1) << MECHANIC_POLYMORPH)))
+                continue;
+            ObjectGuid const caster = aura->GetCasterGUID();
+            ours = std::any_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p->GetGUID() == caster; });
+            if (ours)
+                break;
+        }
+        if (ours)
+            e.Assign(p, DispelSpellsFor(DispelKind::Magic), false, RaidOrder::CastKind::Dispel, "unsheep after control", false);
+    }
 }
 
 // A school whose resistance costs a caster of the raid at least this share of every hit on average is avoided. The Classic formula
