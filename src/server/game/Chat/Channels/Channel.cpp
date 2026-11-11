@@ -33,6 +33,8 @@
 #include "StringConvert.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
+#include <memory>
 #include <sstream>
 
 Channel::Channel(ObjectGuid const& guid, uint32 channelId, uint32 team /*= 0*/, AreaTableEntry const* zoneEntry /*= nullptr*/) :
@@ -749,6 +751,75 @@ void Channel::Say(ObjectGuid const& guid, std::string const& what, uint32 lang) 
 
     SendToAll(builder, !playerInfo.IsModerator() ? guid : ObjectGuid::Empty,
         !playerInfo.IsModerator() && player ? player->GetSession()->GetAccountGUID() : ObjectGuid::Empty);
+}
+
+void Channel::Say(ObjectGuid const& guid, uint32 lang, std::function<std::string const&(Player const* listener)> const& textFor) const
+{
+    // The same checks and the same packet as Say(guid, what, lang); only the text is chosen per member.
+    if (sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_CHANNEL))
+        lang = LANG_UNIVERSAL;
+
+    if (!IsOn(guid))
+    {
+        NotMemberAppend appender;
+        ChannelNameBuilder<NotMemberAppend> builder(this, appender);
+        SendToOne(builder, guid);
+        return;
+    }
+
+    PlayerInfo const& playerInfo = _playersStore.at(guid);
+    if (playerInfo.IsMuted())
+    {
+        MutedAppend appender;
+        ChannelNameBuilder<MutedAppend> builder(this, appender);
+        SendToOne(builder, guid);
+        return;
+    }
+
+    Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+    ObjectGuid const ignoreGuid = !playerInfo.IsModerator() ? guid : ObjectGuid::Empty;
+    ObjectGuid const accountGuid = !playerInfo.IsModerator() && player ? player->GetSession()->GetAccountGUID() : ObjectGuid::Empty;
+
+    struct Built
+    {
+        std::string const* Text;
+        LocaleConstant Locale;
+        std::unique_ptr<WorldPackets::Chat::Chat> Packet;
+    };
+    std::vector<Built> built;
+
+    for (PlayerContainer::value_type const& i : _playersStore)
+    {
+        Player* listener = ObjectAccessor::FindConnectedPlayer(i.first);
+        if (!listener || !listener->GetSession())
+            continue;
+        if (!ignoreGuid.IsEmpty() && listener->GetSocial() && listener->GetSocial()->HasIgnore(ignoreGuid, accountGuid))
+            continue;
+
+        std::string const& what = textFor(listener);
+        if (what.empty())
+            continue;
+
+        LocaleConstant const localeIdx = sWorld->GetAvailableDbcLocale(listener->GetSession()->GetSessionDbLocaleIndex());
+        auto itr = std::find_if(built.begin(), built.end(), [&](Built const& b) { return b.Text == &what && b.Locale == localeIdx; });
+        if (itr == built.end())
+        {
+            std::unique_ptr<WorldPackets::Chat::Chat> packet = std::make_unique<WorldPackets::Chat::Chat>();
+            packet->ChannelGUID = _channelGuid;
+            if (player)
+                packet->Initialize(CHAT_MSG_CHANNEL, Language(lang), player, player, what, 0, GetName(localeIdx));
+            else
+            {
+                packet->Initialize(CHAT_MSG_CHANNEL, Language(lang), nullptr, nullptr, what, 0, GetName(localeIdx));
+                packet->SenderGUID = guid;
+                packet->TargetGUID = guid;
+            }
+            packet->Write();
+            built.push_back({ &what, localeIdx, std::move(packet) });
+            itr = std::prev(built.end());
+        }
+        listener->SendDirectMessage(itr->Packet->GetRawPacket());
+    }
 }
 
 void Channel::SayAs(std::string const& senderName, std::string const& what) const
