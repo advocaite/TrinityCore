@@ -930,10 +930,20 @@ struct classic_npc_rabid_thistle_bear : public FollowerAI
     // VMaNGOS EffectDummyCreature_npc_rabid_thistle_bear (SPELL_TRAPPED_BEAR, effect 0)
     void SpellHit(WorldObject* caster, SpellInfo const* spellInfo) override
     {
-        if (spellInfo->Id != SPELL_TRAPPED_BEAR)
+        if (spellInfo->Id != SPELL_TRAPPED_BEAR || me->GetEntry() == NPC_CAPTURED_RABID_THISTLE_BEAR)
             return;
 
-        Player* player = caster ? caster->ToPlayer() : nullptr;
+        // The trap the player placed (Night Elven Bear Trap 109515) casts the spell, not the player: credit the trap's owner,
+        // as VMaNGOS does (it takes the owner of a GameObject caster)
+        Player* player = nullptr;
+        if (GameObject* trap = caster ? caster->ToGameObject() : nullptr)
+        {
+            if (Unit* owner = trap->GetOwner())
+                player = owner->ToPlayer();
+        }
+        else if (caster)
+            player = caster->ToPlayer();
+
         if (!player)
             return;
 
