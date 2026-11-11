@@ -35,3 +35,8 @@ redistributing. Source files of the module do not carry per-file headers; this n
 - Libraries under `dep/` keep their own licenses (see each folder).
 - mod-playerbots (AzerothCore) is AGPL-3.0: used only as a reference for ideas, no code copied. SimulationCraft is GPL-3.0: data used as reference.
 - World of Warcraft data, names and client files belong to Blizzard Entertainment and are not included.
+- Some live WoW Forever world data (quest texts and objective counts, object templates, vendor items, trainer levels and prices) in
+  `sql/custom/world/2026_11_11_10_world_forever_eg_link_live_data.sql` and `2026_11_11_11_world_forever_eg_link_trainer_prices.sql`:
+  Data from [Efficient Games](https://efficient.games) (https://github.com/JIVESCORP/eg-link-output-wowf), licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changed: only the records we lacked or had different were picked and
+  converted to our database tables.
