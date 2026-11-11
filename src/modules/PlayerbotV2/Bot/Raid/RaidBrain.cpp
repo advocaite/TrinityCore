@@ -3813,8 +3813,14 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
             int const priority = priorityFor(m, enemy);
             if (priority < 0)
                 continue;
-            bool const hurts = (schools & ~candidateAvoid[i]) != 0;
             bool const held = focusHeldLowest && heldByTank(enemy);
+            // In a wave fight the held enemy is the DPS's pick, never a tank's: a tank sent to the drakonid another tank holds walks off its
+            // slot to share it, and the next loose one runs at the raid. bwl_nefarian 1111f: two to four tanks on one drakonid in 9-16
+            // fight lines of 46-55 per run in phase one, idle tanks sent there by raid:switch_target ("claimed by another tank 1"), the tank
+            // row drifting to the north doors (-7564,-1198), where the tanks died.
+            if (held && m.tank && enemy->GetVictim() != m.p)
+                continue;
+            bool const hurts = (schools & ~candidateAvoid[i]) != 0;
             bool better = !best || (hurts && !bestHurts);
             if (!better && hurts == bestHurts)
             {
