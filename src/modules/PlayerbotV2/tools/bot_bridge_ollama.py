@@ -749,7 +749,7 @@ def build_prompt(event, actions_on, minds, swearing):
     lines = ["You are in %s%s. Your quest: %s." % (event.get("zone", "?"),
              (", " + event["area"]) if event.get("area") else "", (event.get("quest") or {}).get("name", "none"))]
     if event.get("doing"):
-        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (chris, 2026-11-09)
+        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (Karrz, 2026-11-09)
         lines.append("What you are doing right now: %s. When asked, say this in your own words; don't invent anything "
                      "else." % event["doing"])
     if event.get("weather") or event.get("time_of_day"):

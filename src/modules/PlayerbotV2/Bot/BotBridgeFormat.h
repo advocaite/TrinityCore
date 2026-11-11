@@ -232,7 +232,7 @@ bool IsGroupAct(Act a);
 //  - refused: an emote, sit or stand keeps `said` (a greeting stays a greeting); anything else says why not instead, in the bot's
 //    own words when `why` is written for the player ("Sorry, come closer so we can trade."), else a plain "can't right now";
 //    nothing when the player who asked is gone.
-// Gun said "I couldn't make that (no item came out), sorry." and then "here's your water" with no trade (chris, 2026-11-09).
+// Gun said "I couldn't make that (no item came out), sorry." and then "here's your water" with no trade (Karrz, 2026-11-09).
 std::string LineAfterAction(Act a, bool ok, bool speaks_later, std::string const& why, std::string const& said);
 
 // The list of allowed actions from the config ("follow,stay,..." or "all"); unknown words are ignored.
