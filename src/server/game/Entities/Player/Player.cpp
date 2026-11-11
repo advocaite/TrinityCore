@@ -32866,13 +32866,19 @@ void Player::UpdateTransmogOutfitSlots(uint32 id, std::span<WorldPackets::Transm
     auto outfit = m_values.ModifyValue(&Player::m_activePlayerData)
         .ModifyValue(&UF::ActivePlayerData::TransmogOutfits, id);
 
-    uint32 outfitSlotIndex = 0;
+    // Each slot is written to its own place in the outfit (every outfit holds every slot, at its SlotIndex, as CreateTransmogOutfit and
+    // _LoadTransmogOutfits lay it out). This walked the stored slots forward once and expected the client's slots in the same order,
+    // but the 1.60 client does not always send them sorted (see the price in HandleTransmogOutfitUpdateSlots): a slot that came after a
+    // higher one was written over the stored slot the walk stood on, and a slot past the last stored one ended the save. Weapons and
+    // the cloak kept their new look, the armor slots did not (likely cause of Discord, shredxgod 2026-11-11: a hunter's leather outfit went back to the
+    // worn gear after saving, and the slots showed warnings).
     for (WorldPackets::Transmogrification::TransmogOutfitSlotData const& slot : slots)
     {
-        while (std::pair(*transmogOutfit->Slots[outfitSlotIndex].Slot, *transmogOutfit->Slots[outfitSlotIndex].SlotOption) < std::pair(AsUnderlyingType(slot.Slot), AsUnderlyingType(slot.SlotOption)))
-            if (++outfitSlotIndex >= transmogOutfit->Slots.size())
-                return;
+        TransmogMgr::TransmogOutfitSlotAndOptionInfo const* slotInfo = TransmogMgr::GetSlotAndOption(slot.Slot, slot.SlotOption);
+        if (!slotInfo || slotInfo->SlotIndex >= transmogOutfit->Slots.size())
+            continue;
 
+        uint32 const outfitSlotIndex = slotInfo->SlotIndex;
         auto viewedOutfitSlot = outfit.ModifyValue(&UF::TransmogOutfitData::Slots, outfitSlotIndex);
         SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::Slot), AsUnderlyingType(slot.Slot));
         SetUpdateFieldValue(viewedOutfitSlot.ModifyValue(&UF::TransmogOutfitSlotData::SlotOption), AsUnderlyingType(slot.SlotOption));
