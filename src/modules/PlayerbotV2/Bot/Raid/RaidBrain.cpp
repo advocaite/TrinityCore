@@ -1318,22 +1318,75 @@ bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
     return fromCentre <= rule.reach || (fromCentre <= rule.reach + kFixedSpotFetchReach && bot->IsWithinDistInMap(add, kFixedSpotFetchReach));
 }
 
-// A fixed arc's slot the healers' post cannot see is turned along the arc to the nearest point it can. bwl_nefarian 1111a/b: in the 15 s
-// before each tank death the healers' casts failed on line of sight more often than they were cast (r6d run 2: 202 failures to 143 heals;
-// run 3: 216 to 107; 1111a run 3: 217 to 76), and the healers' sight spots found no point on their post that saw the tank (no "sight
-// spot" walk in those windows). The clean pass (1111a run 1) had next to no failures. The line of sight steps the healers took pointed
-// at the slot north of the camp (-7547,-1214) and the ground just past it.
+// A fixed arc's slots are laid on the points the healers' post sees. bwl_nefarian 1111a/b: in the 15 s before each tank death the healers'
+// casts failed on line of sight more often than they were cast (r6d run 2: 202 failures to 143 heals; run 3: 216 to 107; 1111a run 3: 217
+// to 76), and the line of sight steps the healers took pointed at the slot north of the camp (-7547,-1214). Turning a blind slot a quarter
+// step along the arc (1111e) was too little: the 1111f profile round (-7552,-1236) r 23 from the post (-7552,-1245) is seen at 10..65 and
+// 115..190 degrees and blind at 70..110, where the two middle slots of four sat, (-7547,-1214) and (-7556,-1213); the tanks there fought
+// 37-62 y from the post. The slots now go on seen ground only, in their order along the arc, a step apart (a smaller gap only when the
+// seen ground is too short for that), each as near its even place as the rest allow.
 constexpr float kArcEyeHeight = 2.0f;           // eye height above the post's floor for both ends of the sight line
-constexpr float kArcTurnStepDeg = 4.0f;         // tried in these steps either way
-constexpr float kArcTurnShareOfStep = 0.25f;    // at most this share of the angle between two slots, so neighbours stay apart
-constexpr uint32_t kArcSightMs = 5000;          // a slot's sight is probed again after this long
-struct ArcSight { uint32_t at = 0; float turn = 0.0f; bool seen = true; };
-std::unordered_map<uint64_t, ArcSight> g_arcSight;   // (group, anchor, slot, slot count) -> the turn in use
+constexpr int kArcHalfDeg = 90;                 // the arc is probed this far either side of rowDeg (further when the even slots reach past it)
+constexpr int kArcMarginDeg = 3;                // a slot keeps this many degrees of seen ground either side (1.2 y at r 23): a tank a step off it is still seen
+constexpr uint32_t kArcSightMs = 5000;          // the layout is probed again after this long
+constexpr float kArcGapShares[] = { 1.0f, 0.75f, 0.5f };   // the gap between neighbours as a share of the even step, tried in order
+struct ArcLayout { uint32_t at = 0; std::vector<float> deg; };   // each slot's angle from rowDeg in degrees; empty: the even layout
+std::unordered_map<uint64_t, ArcLayout> g_arcLayout; // (group, anchor, slot count) -> the layout in use
 constexpr uint32_t kArcProfileMs = 60000;            // the whole arc's sight profile is logged this often
 std::unordered_map<uint64_t, uint32_t> g_arcProfile; // (group, anchor) -> when it was last logged
 
-float SeenArcTurn(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, uint32_t slot, uint32_t slots, float a, float step)
+// Slots on the given ground (sample angles, ascending), in order, neighbours at least gap apart, least summed distance from their even
+// places; empty when they do not fit.
+std::vector<float> LayArc(std::vector<int> const& ground, std::vector<float> const& even, float gap)
 {
+    size_t const n = even.size(), g = ground.size();
+    if (!n || g < n)
+        return {};
+    constexpr float kNone = std::numeric_limits<float>::max();
+    std::vector<std::vector<float>> cost(n, std::vector<float>(g, kNone));
+    std::vector<std::vector<int>> from(n, std::vector<int>(g, -1));
+    for (size_t k = 0; k < g; ++k)
+        cost[0][k] = std::abs(float(ground[k]) - even[0]);
+    for (size_t i = 1; i < n; ++i)
+    {
+        float bestPrev = kNone;
+        int bestAt = -1;
+        size_t q = 0;
+        for (size_t k = 0; k < g; ++k)
+        {
+            // every sample at least gap before this one is open to the previous slot
+            for (; q < k && float(ground[k] - ground[q]) >= gap - 0.001f; ++q)
+                if (cost[i - 1][q] < bestPrev)
+                {
+                    bestPrev = cost[i - 1][q];
+                    bestAt = int(q);
+                }
+            if (bestAt < 0)
+                continue;
+            cost[i][k] = bestPrev + std::abs(float(ground[k]) - even[i]);
+            from[i][k] = bestAt;
+        }
+    }
+    int at = -1;
+    for (size_t k = 0; k < g; ++k)
+        if (cost[n - 1][k] < kNone && (at < 0 || cost[n - 1][k] < cost[n - 1][at]))
+            at = int(k);
+    if (at < 0)
+        return {};
+    std::vector<float> slots(n);
+    for (size_t i = n; i-- > 0;)
+    {
+        slots[i] = float(ground[at]);
+        at = from[i][at];
+    }
+    return slots;
+}
+
+// This slot's angle (radians) on the arc: on ground the healers' post sees (above), else its even place.
+float SeenArcAngle(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, uint32_t slot, uint32_t slots, float step)
+{
+    float const rowRad = rule.rowDeg * (float(M_PI) / 180.0f);
+    float const evenRad = rowRad + (float(slot) - float(slots - 1) * 0.5f) * step;
     Stand const* post = nullptr;
     for (Stand const& s : plan.rules->stand)
         if (s.who == Who::Healer && s.enemy == rule.anchor)
@@ -1342,56 +1395,80 @@ float SeenArcTurn(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t 
             break;
         }
     if (!post)
-        return 0.0f;
-    // Once a minute per arc: which points of the whole arc the post sees, every 5 degrees across the half circle round rowDeg ('#' seen,
-    // '.' not), and from where to where. bwl_nefarian 1111e: the post saw none of the north slots, even turned (the four slots probed
-    // there all "stay at"), while the tanks fought 37-62 y from it; the profile is what a re-laid arc can be built on.
-    if (uint32_t& profiled = g_arcProfile[(plan.groupLow << 32) ^ rule.anchor]; !profiled || now - profiled >= kArcProfileMs)
+        return evenRad;
+    uint64_t const key = (plan.groupLow << 32) ^ (uint64_t(rule.anchor) << 8) ^ uint64_t(slots);
+    ArcLayout& layout = g_arcLayout[key];
+    if (!layout.at || now - layout.at >= kArcSightMs)
     {
-        profiled = now ? now : 1u;
-        std::string seenAt;
+        layout.at = now ? now : 1u;
+        float const stepDeg = step * (180.0f / float(M_PI));
+        std::vector<float> even(slots);
+        for (uint32_t i = 0; i < slots; ++i)
+            even[i] = (float(i) - float(slots - 1) * 0.5f) * stepDeg;
+        int const half = std::max(kArcHalfDeg, int(std::ceil(std::abs(even.front()))));
         float const eye = post->z + kArcEyeHeight;
-        for (int deg = -90; deg <= 90; deg += 5)
+        std::vector<char> seen(size_t(2 * half + 1), 0);
+        for (int deg = -half; deg <= half; ++deg)
         {
-            float const t = (rule.rowDeg + float(deg)) * (float(M_PI) / 180.0f);
-            seenAt += bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eye, rule.x + rule.reach * std::cos(t),
-                                                     rule.y + rule.reach * std::sin(t), eye, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing)
-                ? '#' : '.';
+            float const t = rowRad + float(deg) * (float(M_PI) / 180.0f);
+            seen[size_t(deg + half)] = bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eye, rule.x + rule.reach * std::cos(t),
+                                                                      rule.y + rule.reach * std::sin(t), eye, LINEOFSIGHT_ALL_CHECKS,
+                                                                      VMAP::ModelIgnoreFlags::Nothing) ? 1 : 0;
         }
-        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] arc for entry {} round ({:.0f},{:.0f}) r {:.0f}, seen from the healers' post ({:.0f},{:.0f}) at "
-                    "{:.0f}..{:.0f} degrees: {}", rule.enemy, rule.x, rule.y, rule.reach, post->x, post->y, rule.rowDeg - 90.0f, rule.rowDeg + 90.0f, seenAt);
-    }
-    uint64_t const key = (plan.groupLow << 32) ^ (uint64_t(rule.anchor) << 12) ^ (uint64_t(slots) << 6) ^ uint64_t(slot);
-    ArcSight& sight = g_arcSight[key];
-    if (sight.at && now - sight.at < kArcSightMs)
-        return sight.turn;
-    sight.at = now ? now : 1u;
-    float const eyeZ = post->z + kArcEyeHeight;
-    auto const seen = [&](float t)
-    {
-        float const sx = rule.x + rule.reach * std::cos(a + t), sy = rule.y + rule.reach * std::sin(a + t);
-        return bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eyeZ, sx, sy, eyeZ, LINEOFSIGHT_ALL_CHECKS,
-                                              VMAP::ModelIgnoreFlags::Nothing);
-    };
-    float const maxTurn = step * kArcTurnShareOfStep, stepRad = kArcTurnStepDeg * (float(M_PI) / 180.0f);
-    float turn = 0.0f;
-    bool found = seen(0.0f);
-    for (float d = stepRad; !found && d <= maxTurn + 0.001f; d += stepRad)
-        for (float sign : { -1.0f, 1.0f })
-            if (seen(sign * d))
-            {
-                turn = sign * d;
-                found = true;
+        // Once a minute per arc: which points of the whole arc the post sees, every 5 degrees across the half circle round rowDeg ('#' seen,
+        // '.' not), and from where to where.
+        if (uint32_t& profiled = g_arcProfile[(plan.groupLow << 32) ^ rule.anchor]; !profiled || now - profiled >= kArcProfileMs)
+        {
+            profiled = now ? now : 1u;
+            std::string seenAt;
+            for (int deg = -kArcHalfDeg; deg <= kArcHalfDeg; deg += 5)
+                seenAt += seen[size_t(deg + half)] ? '#' : '.';
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] arc for entry {} round ({:.0f},{:.0f}) r {:.0f}, seen from the healers' post ({:.0f},{:.0f}) at "
+                        "{:.0f}..{:.0f} degrees: {}", rule.enemy, rule.x, rule.y, rule.reach, post->x, post->y, rule.rowDeg - 90.0f, rule.rowDeg + 90.0f, seenAt);
+        }
+        // The seen ground with its margin, else the bare seen ground.
+        std::vector<int> inner, bare;
+        for (int deg = -half; deg <= half; ++deg)
+        {
+            if (!seen[size_t(deg + half)])
+                continue;
+            bare.push_back(deg);
+            bool clear = true;
+            for (int d = -kArcMarginDeg; d <= kArcMarginDeg && clear; ++d)
+                clear = deg + d < -half || deg + d > half || seen[size_t(deg + d + half)];
+            if (clear)
+                inner.push_back(deg);
+        }
+        std::vector<float> laid;
+        float gapShare = 0.0f;
+        for (std::vector<int> const* ground : { &inner, &bare })
+        {
+            for (float share : kArcGapShares)
+                if (!(laid = LayArc(*ground, even, stepDeg * share)).empty())
+                {
+                    gapShare = share;
+                    break;
+                }
+            if (!laid.empty())
                 break;
-            }
-    if (turn != sight.turn || found != sight.seen)
-        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] slot {} of {} for entry {}: the healers' post ({:.0f},{:.0f}) {} ({:.0f},{:.0f})",
-                    slot + 1, slots, rule.enemy, post->x, post->y,
-                    !found ? "sees no point within the turn of the slot, it stays at" : turn == 0.0f ? "sees the slot again at" : "cannot see the slot, turned it to",
-                    rule.x + rule.reach * std::cos(a + turn), rule.y + rule.reach * std::sin(a + turn));
-    sight.turn = turn;
-    sight.seen = found;
-    return turn;
+        }
+        if (laid != layout.deg)
+        {
+            std::string at;
+            for (float d : laid)
+                at += (at.empty() ? "" : ", ") + std::to_string(int(std::lround(rule.rowDeg + d)));
+            if (laid.empty())
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} slots for entry {}: the healers' post ({:.0f},{:.0f}) sees too little of the arc, "
+                            "they keep their even places", slots, rule.enemy, post->x, post->y);
+            else
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} slots for entry {} laid where the healers' post ({:.0f},{:.0f}) sees them, at {} degrees "
+                            "(gap {:.0f} of the even {:.0f})", slots, rule.enemy, post->x, post->y, at, stepDeg * gapShare, stepDeg);
+        }
+        layout.deg = std::move(laid);
+    }
+    if (slot >= layout.deg.size())
+        return evenRad;
+    return rowRad + layout.deg[slot] * (float(M_PI) / 180.0f);
 }
 
 // waitFor (fixed rows): set to the loose add this tank waits for at its slot instead of walking out to it.
@@ -1478,10 +1555,9 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
     {
         // An arc round (x, y): every slot <reach> from the centre, neighbours <spacing> apart, the middle one on rowDeg.
         float const step = 2.0f * std::asin(std::min(1.0f, rule.spacing / (2.0f * rule.reach)));
-        float const a = rule.rowDeg * (float(M_PI) / 180.0f) + offset * step;
-        float const turn = SeenArcTurn(plan, rule, bot, now, uint32_t(at - holders.begin()), uint32_t(holders.size()), a, step);
-        outX = rule.x + rule.reach * std::cos(a + turn);
-        outY = rule.y + rule.reach * std::sin(a + turn);
+        float const a = SeenArcAngle(plan, rule, bot, now, uint32_t(at - holders.begin()), uint32_t(holders.size()), step);
+        outX = rule.x + rule.reach * std::cos(a);
+        outY = rule.y + rule.reach * std::sin(a);
         return true;
     }
     float const lateral = offset * rule.spacing;
