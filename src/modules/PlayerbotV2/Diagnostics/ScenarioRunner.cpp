@@ -804,6 +804,63 @@ constexpr float kCheckpointPathSlack = 1.8f;
 // into it. A grid is 533 y across, so this loads at most the four grids round the spawn.
 constexpr float kClearGridRange = 200.f;
 
+// What the killed trash summons as it dies, and what those summons summon in turn, goes the way of the trash: the clearing stands for a
+// raid that has fought it. Zul'Gurub's Mad Servants (15111) at the Edge of Madness cast Portal of Madness (24621) on death (their world DB
+// script); each portal (15141, not selectable) summons two Mad Voidwalkers (15146) 6 s later. The clearing killed the eleven servants at the
+// landing, the portals came up after it, and about twenty voidwalkers were on the raid 11 s after it was placed (zg_grilek, zg_hazzarah,
+// zg_renataki, zg_wushoolay 1110b: 17-20 of 20 dead to Shadow Shock before the order). A summon is killed when it is hostile to the raid,
+// not one the scenario keeps (the boss, its kept entries and goal adds), and its summoner is dead or gone; a living summoner's summons
+// stand (Victor Nefarius' drakonids, a boss's adds). Run at the clearing, at the placement and every 2 s until the order, as the summons
+// of a death come on later map updates. Returns how many died.
+std::size_t KillTrashSummons(Run& run, Player* viewer)
+{
+    Map* map = viewer->GetMap();
+    if (!map)
+        return 0;
+    ScenarioDef const& d = *run.def;
+    auto const kept = [&d](uint32 entry)
+    {
+        return entry == d.arrive_near_entry || entry == d.goal_entry || (d.keep_entry && entry == d.keep_entry) ||
+               (d.keep_entry_b && entry == d.keep_entry_b) || (d.keep_entry_c && entry == d.keep_entry_c) ||
+               (d.goal_adds_needed && (entry == d.goal_adds_a || entry == d.goal_adds_b));
+    };
+    std::size_t killed = 0;
+    std::map<uint32, std::size_t> by_entry;
+    // A portal and its voidwalkers in one call: the second pass finds the voidwalkers' summoner dead.
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        std::vector<Creature*> doomed;
+        for (auto const& [guid, c] : map->GetObjectsStore().Data.FindContainer<Creature>())
+        {
+            if (!c || !c->IsAlive() || c->GetSpawnId() || !c->IsHostileTo(viewer) || kept(c->GetEntry()) || c->IsDungeonBoss() || c->isWorldBoss())
+                continue;
+            TempSummon const* ts = c->ToTempSummon();
+            if (!ts || ts->GetSummonerGUID().IsEmpty() || ts->GetSummonerGUID().IsPlayer())
+                continue;
+            Unit const* summoner = ts->GetSummonerUnit();
+            if (summoner && summoner->IsAlive())
+                continue;
+            doomed.push_back(c);
+        }
+        if (doomed.empty())
+            break;
+        for (Creature* c : doomed)
+        {
+            ++by_entry[c->GetEntry()];
+            c->KillSelf(false);
+        }
+        killed += doomed.size();
+    }
+    if (killed)
+    {
+        std::string text;
+        for (auto const& [entry, n] : by_entry)
+            text += fmt::format(" {} x{}", entry, n);
+        TC_LOG_INFO("playerbot.v2", "[scenario] {} killed {} creatures summoned by dead trash:{}", d.name, killed, text);
+    }
+    return killed;
+}
+
 // A raid scenario tests the boss fight, not the trash on the way: staging kills every living hostile on the map except the goal boss
 // and the creatures formed up with him (Garr's Firesworn), so the instance stands as it does once the trash is cleared. A real kill
 // (no loot recipient, so nothing to loot) rather than a despawn: the respawn timers run as in a cleared instance. Returns how many died.
@@ -876,6 +933,7 @@ std::size_t ClearRaidTrash(Run& run, Player* viewer)
     }
     for (Creature* c : doomed)
         c->KillSelf(false);
+    KillTrashSummons(run, viewer);
     std::string aside;
     for (Creature* c : set_aside)
     {
@@ -3521,6 +3579,8 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                     for (Member const& m : run.members)
                         if (Player* p = Find(m.id))
                         {
+                            if (run.trash_cleared)
+                                KillTrashSummons(run, p);
                             LogNewcomers(run, p, "at the placement");
                             run.newcomers_next_ms = 2000u;
                             break;
@@ -3541,6 +3601,8 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                 for (Member const& m : run.members)
                     if (Player* p = Find(m.id))
                     {
+                        if (run.trash_cleared)
+                            KillTrashSummons(run, p);
                         LogNewcomers(run, p, fmt::format("{} s after the placement", run.run_ms / 1000u).c_str());
                         break;
                     }
