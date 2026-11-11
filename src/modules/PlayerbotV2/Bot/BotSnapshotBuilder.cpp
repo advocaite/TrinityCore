@@ -4687,6 +4687,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         {
             NearbyUnit u{};
             u.guid   = t->GetGUID();
+            u.player_owned = t->GetTypeId() != TYPEID_PLAYER && t->GetCharmerOrOwnerPlayerOrPlayerItself() != nullptr;
             u.entry  = t->GetEntry();
             u.level  = t->GetLevelForTarget(p);   // per-viewer scaled level (see attackers note / audit doc)
             u.hp     = static_cast<int32>(t->GetHealth());

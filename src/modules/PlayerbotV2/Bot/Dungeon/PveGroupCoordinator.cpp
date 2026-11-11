@@ -2250,6 +2250,9 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 for (auto const& u : sn->combat.nearby_enemies)
                 {
                     if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified || u.unit_in_combat) continue;
+                    // A player's pet is no pack mob: one that reads as an enemy belongs to a raider under a mind control and goes back to
+                    // its master's side when the charm ends (bwl_nefarian 1111b: the tanks reserved the warlocks' pets and held for them).
+                    if (u.player_owned) continue;
                     if (!u.victim.IsEmpty() || find_mob(u.guid) || (u.is_cc_locked && member_of(u.cc_caster))) continue;
                     bool known = false;
                     for (NearbyUnit const* p : pack)

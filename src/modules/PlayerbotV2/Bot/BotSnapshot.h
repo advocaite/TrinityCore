@@ -422,6 +422,10 @@ struct NearbyUnit
     // they flee earlier, save trinkets, don't waste long CDs on a duel.
     // Populated by the builder from `unit->GetTypeId() == TYPEID_PLAYER`.
     bool       is_player = false;
+    // A creature a player owns or controls (a pet, a guardian, a totem, a charmed mob). An enemy one in a raid is a raider's pet whose
+    // master Victor Nefarius' Shadow Command turned (bwl_nefarian 1111b: the tanks reserved the warlocks' Succubus, Voidwalker and
+    // Felhunter as "pack mobs not pulled yet" and held for them, 5-22 times a run). Main nearby-enemy scan only.
+    bool       player_owned = false;
 
     // Player-only: Player::GetGuildId(). 0 for non-players or guildless
     // players. Used by Phase B `idle:guild_recruit_nearby` to identify
