@@ -663,12 +663,20 @@ class classic_spell_nefarian_class_call_rogue : public SpellScript
         Player* player = GetHitPlayer();
         if (!caster || !player)
             return;
+        // Nefarian has every rogue cast this on itself, so the caster is the rogue, not him, and the spell hits everyone around it: each
+        // rogue was moved 5 yards from where it stood, and so was every raider beside it. Only the rogue goes, to Nefarian.
+        if (player != caster || player->GetClass() != CLASS_ROGUE)
+            return;
+        Creature* nefarian = player->FindNearestCreature(CLASSIC_BWL_NPC_NEFARIAN, 200.0f, true);
+        if (!nefarian)
+            return;
 
-        // Teleport player to a random position near caster (Nefarian)
+        // Teleport the rogue to a random position near Nefarian
         // Use GetFirstCollisionPosition to avoid teleporting into walls/obstacles
         float angle = frand(0.0f, float(M_PI) * 2);
-        Position pos = caster->GetFirstCollisionPosition(5.0f, angle);
-        player->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), angle - float(M_PI));
+        Position pos = nefarian->GetFirstCollisionPosition(5.0f, angle);
+        // Facing him: the angle above is relative to his facing, so it is no bearing.
+        player->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetAbsoluteAngle(nefarian));
     }
 
     void Register() override
