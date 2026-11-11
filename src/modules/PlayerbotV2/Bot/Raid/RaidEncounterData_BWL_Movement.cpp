@@ -76,9 +76,15 @@ namespace Playerbot::Raid {
         // A tank goes after a loose drakonid within 15 yards and brings it back; one further out (a new one still coming in from its door
         // after its random raider) it waits for at its slot (TankSpotFor).
         constexpr float kNefCampX = -7552.0f, kNefCampY = -1236.0f, kNefHealY = -1245.0f, kNefFloorZ = 476.8f;
-        r.tankSpot.push_back({ 10162, 14263, 23.0f, 18.0f, true, kNefCampX, kNefCampY, 100.0f, { 14261u, 14262u, 14264u, 14265u, 14302u } });
-        r.stand.push_back({ 10162, Who::Ranged, kNefCampX, kNefCampY, kNefFloorZ, 6.0f, false, 0 });
-        r.stand.push_back({ 10162, Who::Healer, kNefCampX, kNefHealY, kNefFloorZ, 6.0f, false, 0 });
+        // The arc and the two posts are phase one's: they end when Nefarian lands (endEnemy 11583). Victor goes invisible and rooted at the
+        // landing but stays in the fight (classic_boss_victor_nefarius.cpp, phase2), so with him as the only gate the layout outlived its
+        // phase: bwl_nefarian 1111j, the tank holding Nefarian walked back to its arc slot 59-86 times a run after the landing and held him
+        // there, 23 y from the ranged camp and about 26 y from the healers' post, at the edge of his Shadow Flame (25 y); the posts kept the
+        // casters and healers there (236 "leave cone" moves, 46 Tail Lash stuns and 47 Bellowing Roar fears in 75 s of run 1's phase 3, and 9
+        // of its deaths after the landing to Shadow Flame, Cleave and Tail Lash, at the camp and the post).
+        r.tankSpot.push_back({ 10162, 14263, 23.0f, 18.0f, true, kNefCampX, kNefCampY, 100.0f, { 14261u, 14262u, 14264u, 14265u, 14302u }, 11583 });
+        r.stand.push_back({ 10162, Who::Ranged, kNefCampX, kNefCampY, kNefFloorZ, 6.0f, false, 0, 100.0f, 0.0f, 0, 11583 });
+        r.stand.push_back({ 10162, Who::Healer, kNefCampX, kNefHealY, kNefFloorZ, 6.0f, false, 0, 100.0f, 0.0f, 0, 11583 });
         // Their priorities and dispels are in the data file.
     }
 } // namespace Playerbot::Raid

@@ -1294,6 +1294,16 @@ constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned
 // beside it, a healer). bwl_nefarian 1109y: a drakonid held at a neighbour's pile (on the arc's far side, 23-26 y from the centre) or on a
 // raider outside the arc counted as "still coming" for every tank further than 15 y; the main tank stood at its slot with nothing for 40 s
 // ("Mctankwa 100%>-") while Mctankwb and Mctankda held three and four each, and those two died first in all three runs.
+// Whether an enemy of this entry is in the fight: alive, among the plan's enemies, and open to attack (a boss still hovering before he lands
+// is not). Stand::endEnemy / TankSpot::endEnemy end a phase's layout with it.
+bool EnemyInFight(Plan const& plan, uint32_t entry)
+{
+    return entry && std::any_of(plan.enemies.begin(), plan.enemies.end(), [&](Unit* e)
+    {
+        return e->GetEntry() == entry && e->IsAlive() && !e->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) && !e->IsImmuneToPC();
+    });
+}
+
 bool ReachedRaid(Plan const& plan, Unit* add)
 {
     Unit* const v = add->GetVictim();
@@ -1488,6 +1498,8 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
 {
     uint64_t const key = (plan.groupLow << 32) ^ rule.anchor;
     TankSpotLock& lock = g_tankSpot[key];
+    if (EnemyInFight(plan, rule.endEnemy))
+        return false;
     if (rule.fixed)
     {
         // A fixed row: the anchor only has to be in the fight, and every living tank has its slot, holding an add or not. A tank goes after
@@ -2654,7 +2666,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         // tank whose victim died turned on the nearest one at the door (bwl_nefarian 1109c run 2: Mctankwc "attacks ... 14263 ... mob
         // in_combat 0", then "takes Bronze Drakonid on Mctankwc dist=54y why=already_on_it"; the first tank to die in each run was 35-48 y
         // from the camp centre).
-        if (rule.fixed && self.tank &&
+        if (rule.fixed && self.tank && !EnemyInFight(plan, rule.endEnemy) &&
             std::any_of(plan.enemies.begin(), plan.enemies.end(), [&](Unit* e) { return e->GetEntry() == rule.anchor && e->IsAlive(); }))
         {
             std::vector<Unit*> adds(plan.enemies.begin(), plan.enemies.end());
@@ -2879,7 +2891,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
     }
     for (Stand const& rule : rules.stand)
     {
-        if (!Matches(rule.who, self, plan.mainTank))
+        if (!Matches(rule.who, self, plan.mainTank) || EnemyInFight(plan, rule.endEnemy))
             continue;
         if (rule.share)
         {
