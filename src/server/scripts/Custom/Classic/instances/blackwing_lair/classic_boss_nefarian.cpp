@@ -636,6 +636,11 @@ class classic_spell_nefarian_class_call_warlock : public SpellScript
         Unit* target = GetHitUnit();
         if (!target)
             return;
+        // Only the warlock the call was cast on summons. Nefarian has every warlock cast this on itself, and the spell hits everyone
+        // around the caster: each raider beside a warlock summoned two more, 25-254 infernals per call instead of two per warlock
+        // (bwl_nefarian 1111d: 254 and 215 at the warlock call, 47 deaths to them, both runs wiped with Nefarian at 81% and 92%).
+        if (target != GetCaster() || target->GetClass() != CLASS_WARLOCK)
+            return;
 
         // Each Warlock summons 2 Corrupted Infernals
         target->CastSpell(target, SPELL_SUMMON_INFERNALS, true);
