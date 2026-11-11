@@ -94,6 +94,7 @@
 #include "Session/LazyLock.h"
 #include "World/WorldMetadata.h"
 #include "ObjectMgr.h"
+#include "QuestDef.h"               // .playerbot xpprobe
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
@@ -638,6 +639,8 @@ public:
             { "auracheck",     HandleAuraCheck,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "proccheck",     HandleProcCheck,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "talentwalk",    HandleTalentWalk,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -4956,6 +4959,110 @@ public:
         }
         handler->PSendSysMessage("learncheck: %s (level %u): %u spells the .learn path would add, %u of them taught by no trainer row; %u already known; lines in %s",
             p->GetName().c_str(), uint32(p->GetLevel()), listed, notTrainer, alreadyKnown, path.c_str());
+        return true;
+    }
+
+    // .playerbot xpprobe <player> <quest id>
+    // Gives the quest to an online player (a bot over SOAP), completes it and rewards it the way a turn-in does (Player::RewardQuest), and
+    // reports the XP it really gained next to the quest's own value and Rate.XP.Quest, so a rate change (.reload config) can be measured
+    // without a client. The quest is taken off the player afterwards (also its rewarded mark), so the probe can run again on the same
+    // player. Refuses a max-level player (quest XP turns into money there).
+    static bool HandleXpProbe(ChatHandler* handler, std::string name, uint32 questId)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+        if (!p || !p->IsInWorld() || !quest)
+        {
+            handler->SendSysMessage(!quest ? "xpprobe: no such quest" : "xpprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (p->IsMaxLevel())
+        {
+            handler->PSendSysMessage("xpprobe: %s is max level, quest XP turns into money there", p->GetName().c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // start from no status, so an earlier run (or the bot's own questing) does not block AddQuest
+        auto const forget = [p, questId]()
+        {
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+                p->RemoveActiveQuest(questId, false);
+            p->RemoveRewardedQuest(questId);
+        };
+        forget();
+
+        uint32 const baseXp = quest->XPValue(p);
+        float const rate = sWorld->getRate(RATE_XP_QUEST);
+        uint32 const expected = p->GetQuestXPReward(quest);
+        uint8 const levelBefore = p->GetLevel();
+        uint32 const xpBefore = p->GetXP();
+
+        p->AddQuest(quest, nullptr);
+        p->CompleteQuest(questId);
+        QuestStatus const status = p->GetQuestStatus(questId);
+        if (status == QUEST_STATUS_COMPLETE)
+            p->RewardQuest(quest, LootItemType::Item, 0, p, false);
+
+        // XP gained across any level-ups: the rest of each level passed, plus what stands in the bar now
+        uint64 gained = 0;
+        uint8 const levelAfter = p->GetLevel();
+        if (levelAfter == levelBefore)
+            gained = p->GetXP() >= xpBefore ? p->GetXP() - xpBefore : 0;
+        else
+        {
+            gained = sObjectMgr->GetXPForLevel(levelBefore) - xpBefore;
+            for (uint8 l = levelBefore + 1; l < levelAfter; ++l)
+                gained += sObjectMgr->GetXPForLevel(l);
+            gained += p->GetXP();
+        }
+
+        forget();
+
+        handler->PSendSysMessage("xpprobe: %s quest %u '%s' level %u->%u: quest value %u, Rate.XP.Quest %.2f, expected %u, gained %u%s",
+            p->GetName().c_str(), questId, quest->GetLogTitle().c_str(), uint32(levelBefore), uint32(levelAfter), baseXp, rate, expected,
+            uint32(gained), status == QUEST_STATUS_COMPLETE ? "" : " (quest did not reach complete, not rewarded)");
+        return true;
+    }
+
+    // .playerbot formprobe <player> <form spell id> [<passive spell id>]
+    // Learns the form spell if needed, takes the form (a triggered cast: no cost, no cooldown, no level check) and reports the armor before
+    // and in the form and whether the form's passive aura is on the player, then leaves the form again and reports the armor back.
+    // Moonkin Form: .playerbot formprobe <druid> 24858 24905 (Bear Form for comparison: 5487 1178).
+    static bool HandleFormProbe(ChatHandler* handler, std::string name, uint32 formSpell, Optional<uint32> passiveSpell)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(formSpell, DIFFICULTY_NONE);
+        if (!p || !p->IsInWorld() || !p->IsAlive() || !info || !info->HasAura(SPELL_AURA_MOD_SHAPESHIFT))
+        {
+            handler->SendSysMessage(!info || !info->HasAura(SPELL_AURA_MOD_SHAPESHIFT) ? "formprobe: not a shapeshift spell"
+                : "formprobe: no such living player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        bool const learned = !p->HasSpell(formSpell);
+        if (learned)
+            p->LearnSpell(formSpell, false);
+
+        p->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        uint32 const armorBefore = p->GetArmor();
+
+        SpellCastResult const result = p->CastSpell(p, formSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        uint32 const armorInForm = p->GetArmor();
+        bool const inForm = p->HasAura(formSpell);
+        bool const hasPassive = passiveSpell && p->HasAura(*passiveSpell);
+
+        p->RemoveAurasDueToSpell(formSpell);
+        uint32 const armorAfter = p->GetArmor();
+        bool const passiveGone = !passiveSpell || !p->HasAura(*passiveSpell);
+
+        handler->PSendSysMessage("formprobe: %s level %u spell %u%s cast result %u, in form %s (form %u); armor %u -> %u in form -> %u after; "
+            "passive %u %s in form, %s after",
+            p->GetName().c_str(), uint32(p->GetLevel()), formSpell, learned ? " (learned now)" : "", uint32(result), inForm ? "yes" : "no",
+            uint32(info->GetEffect(EFFECT_0).MiscValue), armorBefore, armorInForm, armorAfter, passiveSpell.value_or(0),
+            !passiveSpell ? "not checked" : hasPassive ? "present" : "MISSING", passiveGone ? "gone" : "STILL THERE");
         return true;
     }
 
