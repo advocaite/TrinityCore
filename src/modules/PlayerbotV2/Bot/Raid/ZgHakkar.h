@@ -32,6 +32,8 @@ constexpr float kSonDeathReach = 8.0f;            // Poisonous Blood reaches thi
 constexpr float kGatherYards = 4.0f;              // a bot gathering on the Son stands this close to it
 constexpr float kGatherBelowPct = 60.0f;          // the raid gathers once the Son is this low
 constexpr float kGatherReach = 45.0f;             // a bot farther than this from the Son does not walk over
+constexpr float kPlatformFloorZ = 48.0f;          // Hakkar's platform (z 52.9) ends here: below 45.8 he evades (classic_boss_hakkar.cpp), so no
+                                                  // tank fetches a Son from lower down
 
 // When the next siphon is due, in ms from the pull. lastSiphonMs: when one was last seen (0: none yet).
 inline uint32_t SiphonDueMs(uint32_t lastSiphonMs)

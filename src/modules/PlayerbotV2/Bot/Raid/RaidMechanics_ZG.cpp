@@ -233,6 +233,15 @@ void ZgMechanicsElect(Election& e, uint32_t now)
             if (m.p == v && !m.tank)
                 if (RaidOrder* o = e.OrderOf(m.p))
                     o->keep_aggro = true;
+        // A Son still below Hakkar's platform is no tank's to fetch: it comes up on its raider, and a tank sent down to it is where Hakkar
+        // goes when Cause Insanity takes the tank holding him. zg_hakkar r15 run 3: the tank planner gave Mctankwa a loose Son 49 y away
+        // (why=nearest) after Hakkar had turned to Mctankwb; Mctankwb was confused, Hakkar went to Mctankwa at (-11754,-1688), below the
+        // platform, and evaded at 32%. The same walk (a Son 57 y away, why=loose_nearest) took him out in the 0.1.35 final sweep.
+        if (u->GetPositionZ() < kPlatformFloorZ)
+            for (Member& m : e.plan.members)
+                if (m.tank && m.p != v)
+                    if (RaidOrder* o = e.OrderOf(m.p))
+                        o->forbidden_targets.push_back(u->GetGUID());
     }
     Creature* son = SonToPull(e.plan, *c, hakkar, t);
     if (!son)
