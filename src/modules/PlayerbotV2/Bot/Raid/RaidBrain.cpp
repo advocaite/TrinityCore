@@ -1286,6 +1286,9 @@ constexpr uint32_t kAxisStaleMs = 30000;
 struct TankSpotLock { float x = 0, y = 0, bearing = 0; uint32_t seenMs = 0; };
 std::unordered_map<uint64_t, TankSpotLock> g_tankSpot;
 std::unordered_map<uint64_t, uint32_t> g_lastTankSpot;
+// Where a tank stood when it was last sent to its place, and that place, by bot guid: the next walk says how far it got.
+struct TankSpotWalk { float fromX = 0, fromY = 0, toX = 0, toY = 0; };
+std::unordered_map<uint64_t, TankSpotWalk> g_tankSpotWalk;
 
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
 constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned within this reach, in nobody's combat yet, are off limits too
@@ -2757,7 +2760,33 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         }
         if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true, /*hazard*/ false, /*fixedPlace*/ rule.fixed))
         {
-            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f})", bot->GetName(), rule.enemy, tx, ty);
+            // How far the last walk to this same place got. bwl_nefarian 0136-1: the main tank was sent to (-7530,-1229) twelve times in
+            // 30 s, each walk a fresh 5 s spline, and stood the whole time within 6 y of (-7556,-1207) at the north door, where every
+            // fresh drakonid met it; it held five and died at 93 s. Nothing said what stopped it: a walk that got under 2 y closer says
+            // which generator moves the bot now, what is left of its spline, its unit states and the path to the place.
+            uint64_t const me = bot->GetGUID().GetCounter();
+            std::string progress;
+            if (auto it = g_tankSpotWalk.find(me); it != g_tankSpotWalk.end() && Dist2D(it->second.toX, it->second.toY, tx, ty) < 3.0f)
+            {
+                float const was = Dist2D(it->second.fromX, it->second.fromY, tx, ty);
+                progress = fmt::format("; last walk from ({:.0f},{:.0f}) {:.0f} y off, now {:.0f} y off", it->second.fromX, it->second.fromY, was, off);
+                if (was - off < 2.0f)
+                {
+                    PathGenerator path(bot);
+                    bool const built = BotMovement::SehSafeCalculatePath(path, tx, ty, tz);
+                    Unit* const victim = bot->GetVictim();
+                    progress += fmt::format(": NO PROGRESS - generator {} spline_left {} ms, moving {}, rooted {} stunned {} feared {} charmed {}, "
+                        "speed x{:.2f}, victim {} at {:.1f} y, path {} type 0x{:X} length {:.0f} y in {} points",
+                        int(bot->GetMotionMaster()->GetCurrentMovementGeneratorType()), bot->movespline->Finalized() ? 0 : bot->movespline->timeRemaining(),
+                        int(bot->isMoving()), int(bot->HasUnitState(UNIT_STATE_ROOT)), int(bot->HasUnitState(UNIT_STATE_STUNNED)),
+                        int(bot->HasUnitState(UNIT_STATE_FLEEING)), int(bot->IsCharmed()), bot->GetSpeedRate(MOVE_RUN),
+                        victim ? victim->GetEntry() : 0u, victim ? bot->GetExactDist2d(victim) : 0.0f, built ? "built" : "failed",
+                        uint32(path.GetPathType()), built ? path.GetPathLength() : 0.0f, built ? path.GetPath().size() : std::size_t(0));
+                }
+            }
+            g_tankSpotWalk[me] = { bot->GetPositionX(), bot->GetPositionY(), tx, ty };
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f}) from ({:.0f},{:.0f}), {:.0f} y{}",
+                        bot->GetName(), rule.enemy, tx, ty, bot->GetPositionX(), bot->GetPositionY(), off, progress);
             SetMove(out, tx, ty, tz, "tank spot");
             return;
         }
