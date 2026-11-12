@@ -1287,7 +1287,7 @@ struct TankSpotLock { float x = 0, y = 0, bearing = 0; uint32_t seenMs = 0; };
 std::unordered_map<uint64_t, TankSpotLock> g_tankSpot;
 std::unordered_map<uint64_t, uint32_t> g_lastTankSpot;
 // Where a tank stood when it was last sent to its place, and that place, by bot guid: the next walk says how far it got.
-struct TankSpotWalk { float fromX = 0, fromY = 0, toX = 0, toY = 0; };
+struct TankSpotWalk { float fromX = 0, fromY = 0, toX = 0, toY = 0, toZ = 0; uint32_t sentMs = 0; };
 std::unordered_map<uint64_t, TankSpotWalk> g_tankSpotWalk;
 
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
@@ -2797,7 +2797,20 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
             continue;
         uint32_t& at = g_lastTankSpot[bot->GetGUID().GetCounter()];
         if (now - at < 3000)
+        {
+            // The walk sent less than 3 s ago keeps its order until the tank is there. Given for one plan only, the next plan left the tick
+            // to the rotation, and its target switch or chase took the tank off the walk (bwl_nefarian 0136-3: 72 walks got no closer, and in
+            // 48 of them the tank had no walk left by the next one, generator 0 idle or 5 chase; the main tank went from 19 y to 33 y off its
+            // place while being sent there, stayed at the north door, and died there at 182 s with the melee beside it).
+            if (auto it = g_tankSpotWalk.find(bot->GetGUID().GetCounter());
+                it != g_tankSpotWalk.end() && it->second.sentMs == at && Dist2D(it->second.toX, it->second.toY, tx, ty) < 3.0f &&
+                !(!circles.empty() && InsideAny(circles, it->second.toX, it->second.toY, 0.5f)))
+            {
+                SetMove(out, it->second.toX, it->second.toY, it->second.toZ, "tank spot");
+                return;
+            }
             continue;
+        }
         at = now;
         // A tank that does not walk back says why. bwl_nefarian 1111g run 2: Mctankwc stood 15 s at (-7540,-1202), 25 y from its place
         // (-7565,-1217) with a drakonid on it, and logged no walk; the four tanks walked to their places 37-87 times a run, while they
@@ -2839,7 +2852,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                         uint32(path.GetPathType()), built ? path.GetPathLength() : 0.0f, built ? path.GetPath().size() : std::size_t(0));
                 }
             }
-            g_tankSpotWalk[me] = { bot->GetPositionX(), bot->GetPositionY(), tx, ty };
+            g_tankSpotWalk[me] = { bot->GetPositionX(), bot->GetPositionY(), tx, ty, tz, now };
             TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f}) from ({:.0f},{:.0f}), {:.0f} y{}",
                         bot->GetName(), rule.enemy, tx, ty, bot->GetPositionX(), bot->GetPositionY(), off, progress);
             SetMove(out, tx, ty, tz, "tank spot");
