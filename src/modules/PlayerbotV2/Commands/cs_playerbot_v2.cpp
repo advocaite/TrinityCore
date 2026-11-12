@@ -647,6 +647,7 @@ public:
             { "proccheck",     HandleProcCheck,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "questchainprobe", HandleQuestChainProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "equipprobe",    HandleEquipProbe,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "gearpick",      HandleGearPick,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5276,6 +5277,116 @@ public:
         handler->PSendSysMessage("xpprobe: %s quest %u '%s' level %u->%u: quest value %u, Rate.XP.Quest %.2f, expected %u, gained %u%s",
             p->GetName().c_str(), questId, quest->GetLogTitle().c_str(), uint32(levelBefore), uint32(levelAfter), baseXp, rate, expected,
             uint32(gained), status == QUEST_STATUS_COMPLETE ? "" : " (quest did not reach complete, not rewarded)");
+        return true;
+    }
+
+    // .playerbot questchainprobe <player> <first quest id>
+    // Walks a quest chain the way a player meets it: for each quest it reports who starts it (creatures, objects, items), every
+    // requirement check the player fails, then takes, completes and rewards it and looks for what comes next (the reward's next
+    // quest, the addon NextQuestID, a rewarded item that starts a quest, and every quest whose PrevQuestID points back). The walk
+    // goes on with the first next quest the player can take; "chain ends" names the quest after which nothing is offered. Every
+    // walked quest is forgotten again at the end; the XP and the reward items stay. Use a bot of the right race and class.
+    // Paladin Redemption (human): .playerbot questchainprobe <human paladin, level 12+> 1641
+    static bool HandleQuestChainProbe(ChatHandler* handler, std::string name, uint32 firstQuest)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !sObjectMgr->GetQuestTemplate(firstQuest))
+        {
+            handler->SendSysMessage(!p || !p->IsInWorld() ? "questchainprobe: no such player in the world" : "questchainprobe: no such quest");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        auto const forget = [p](uint32 questId)
+        {
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+                p->RemoveActiveQuest(questId, false);
+            p->RemoveRewardedQuest(questId);
+        };
+
+        auto const starters = [](uint32 questId)
+        {
+            std::string out;
+            for (auto const& [entry, creatureTemplate] : sObjectMgr->GetCreatureTemplates())
+                for (uint32 id : sObjectMgr->GetCreatureQuestRelations(entry))
+                    if (id == questId)
+                        out += Trinity::StringFormat(" npc {}", entry);
+            for (auto const& [entry, goTemplate] : sObjectMgr->GetGameObjectTemplates())
+                for (uint32 id : sObjectMgr->GetGOQuestRelations(entry))
+                    if (id == questId)
+                        out += Trinity::StringFormat(" object {}", entry);
+            for (auto const& [entry, itemTemplate] : sObjectMgr->GetItemTemplateStore())
+                if (itemTemplate.GetStartQuest() == questId)
+                    out += Trinity::StringFormat(" item {}", entry);
+            return out.empty() ? std::string(" NONE") : out;
+        };
+
+        std::vector<uint32> walked;
+        uint32 questId = firstQuest;
+        for (uint32 step = 1; questId && step <= 30; ++step)
+        {
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            forget(questId);
+            walked.push_back(questId);
+
+            std::string failed;
+            if (!p->SatisfyQuestClass(quest, false)) failed += " class";
+            if (!p->SatisfyQuestRace(quest, false)) failed += " race";
+            if (!p->SatisfyQuestLevel(quest, false)) failed += " level";
+            if (!p->SatisfyQuestPreviousQuest(quest, false)) failed += Trinity::StringFormat(" previous({})", quest->GetPrevQuestId());
+            if (!p->SatisfyQuestDependentQuests(quest, false)) failed += " dependent";
+            if (!p->SatisfyQuestBreadcrumbQuest(quest, false)) failed += " breadcrumb";
+            if (!p->SatisfyQuestExclusiveGroup(quest, false)) failed += Trinity::StringFormat(" exclusive({})", quest->GetExclusiveGroup());
+            if (!p->SatisfyQuestConditions(quest, false)) failed += " conditions";
+            if (!p->SatisfyQuestReputation(quest, false)) failed += " reputation";
+            if (!p->SatisfyQuestSkill(quest, false)) failed += " skill";
+            handler->PSendSysMessage("questchainprobe: %u. quest %u '%s' started by%s; take: %s", step, questId, quest->GetLogTitle().c_str(),
+                starters(questId).c_str(), failed.empty() ? "yes" : ("NO," + failed).c_str());
+
+            p->AddQuest(quest, nullptr);
+            p->CompleteQuest(questId);
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_COMPLETE)
+            {
+                handler->PSendSysMessage("questchainprobe: quest %u did not reach complete (status %u), walk stops", questId, uint32(p->GetQuestStatus(questId)));
+                break;
+            }
+            p->RewardQuest(quest, LootItemType::Item, 0, p, false);
+
+            // what can come next, in the order the client meets it
+            std::vector<std::pair<uint32, std::string>> next;
+            auto const addNext = [&next](uint32 id, std::string how)
+            {
+                if (id && sObjectMgr->GetQuestTemplate(id))
+                    next.emplace_back(id, std::move(how));
+            };
+            addNext(quest->GetNextQuestInChain(), "reward next");
+            addNext(quest->GetNextQuestId(), "addon NextQuestID");
+            for (uint32 i = 0; i < QUEST_REWARD_ITEM_COUNT; ++i)
+                if (ItemTemplate const* item = sObjectMgr->GetItemTemplate(quest->RewardItemId[i]))
+                    addNext(item->GetStartQuest(), Trinity::StringFormat("reward item {}", item->GetId()));
+            for (auto const& [id, other] : sObjectMgr->GetQuestTemplates())
+                if (other->GetPrevQuestId() == int32(questId) || other->GetPrevQuestId() == -int32(questId))
+                    addNext(id, Trinity::StringFormat("PrevQuestID {}", other->GetPrevQuestId()));
+
+            uint32 chosen = 0;
+            for (auto const& [id, how] : next)
+            {
+                Quest const* candidate = sObjectMgr->GetQuestTemplate(id);
+                bool const walkedAlready = std::find(walked.begin(), walked.end(), id) != walked.end();
+                bool const takeable = !walkedAlready && p->SatisfyQuestClass(candidate, false) && p->SatisfyQuestRace(candidate, false)
+                    && p->SatisfyQuestPreviousQuest(candidate, false) && p->SatisfyQuestExclusiveGroup(candidate, false);
+                handler->PSendSysMessage("questchainprobe:    next %u '%s' (%s)%s", id, candidate->GetLogTitle().c_str(), how.c_str(),
+                    walkedAlready ? " already walked" : takeable ? "" : " not for this player");
+                if (!chosen && takeable)
+                    chosen = id;
+            }
+            if (!chosen)
+                handler->PSendSysMessage("questchainprobe: chain ends after quest %u", questId);
+            questId = chosen;
+        }
+
+        for (uint32 id : walked)
+            forget(id);
         return true;
     }
 
