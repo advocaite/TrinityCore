@@ -61,7 +61,8 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_FROST_WARDING                = 11189,    // 70630 effect 2: % more absorb for Ice Barrier and Frost Ward
     SPELL_MAGE_FRIGID_POWER                 = 1326891,  // 70630: Frost damage buff that Ice Barrier grants for its duration
     SPELL_MAGE_WINTERS_CHILL_TALENT         = 11180,    // effect 1: proc chance
-    SPELL_MAGE_WINTERS_CHILL                = 12579     // 70630 effect 1: % spell power for the caster's next Cone of Cold, per stack
+    SPELL_MAGE_WINTERS_CHILL                = 12579,    // 70630 effect 1: % spell power for the caster's next Cone of Cold, per stack
+    SPELL_MAGE_ARCANE_BLAST_BUFF            = 400573    // 70707: % of Intellect as spell damage and +100% Arcane Blast cost per stack, 4 stacks, 18 s
 };
 
 enum ClassicShamanTalentSpells
@@ -790,6 +791,37 @@ class classic_spell_mage_arcane_wrath : public SpellScript
     void Register() override
     {
         CalcDamage += SpellCalcDamageFn(classic_spell_mage_arcane_wrath::HandleCalcDamage);
+    }
+};
+
+// 400574, 1239696, 1239697, 1239699, 1239700 - Arcane Blast (70707): "Each time you cast Arcane Blast, you gain $400573s1% of your
+// Intellect as Spell Damage and the mana cost of Arcane Blast is increased by $400573s2%. Effect stacks up to $400573u times and lasts
+// $400573d from time of initial application." The client spell has only its damage effect, nothing gave 400573, so the buff never
+// stacked (Discord 2026-11-12, pennywhi). A new stack keeps the time left of the first one.
+class classic_spell_mage_arcane_blast : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_ARCANE_BLAST_BUFF });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        Aura* buff = caster->GetAura(SPELL_MAGE_ARCANE_BLAST_BUFF, caster->GetGUID());
+        int32 const duration = buff ? buff->GetDuration() : 0;
+
+        caster->CastSpell(caster, SPELL_MAGE_ARCANE_BLAST_BUFF, CastSpellExtraArgs(GetSpell()));
+
+        // stacking refreshes the duration; the tooltip counts from the first cast
+        if (duration > 0)
+            if (Aura* stacked = caster->GetAura(SPELL_MAGE_ARCANE_BLAST_BUFF, caster->GetGUID()))
+                stacked->SetDuration(duration);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_mage_arcane_blast::HandleAfterCast);
     }
 };
 
@@ -1583,6 +1615,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_frost_ward_absorb);
     RegisterSpellScript(classic_spell_mage_winters_chill);
     RegisterSpellScript(classic_spell_mage_cone_of_cold_winters_chill);
+    RegisterSpellScript(classic_spell_mage_arcane_blast);
     RegisterSpellScript(classic_spell_mage_missile_barrage);
 
     // Shaman
