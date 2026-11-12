@@ -35,6 +35,15 @@ constexpr uint8_t kSkullIcon = 7, kCrossIcon = 6;
 
 std::unordered_map<uint64_t, uint64_t> g_jobPick;   // bot -> the enemy of its area job (Who::AoeShare row) it was last given
 
+// A boss of the fight last seen on a raider who is no tank (its tank died, or a DPS pulled it off): enemy -> when. For kBossRetakeMs after
+// that the threat hold (PublishThreatHolds) stays for the DPS on it, so the tank that takes it back keeps it. The script drops every threat
+// hold after its start wait, and bwl_nefarian 0136-r8 run 1 shows what that does when a tank dies: the main tank died at 30% (396 s), three
+// tanks taunted him in turn over the next 45 s while the DPS kept their full damage on him, he went back to a DPS bot after each taunt and
+// killed five of them, and the raid reached the Bone Constructs at 20% with 31 of 40 alive.
+std::unordered_map<uint64_t, uint32_t> g_bossOffTank;
+uint32_t g_retakeLogMs = 0;
+constexpr uint32_t kBossRetakeMs = 20000;
+
 // The enemy of this member's area job: the first Priority row for Who::AoeShare that names it while one of that row's enemies is up. Its
 // previous one while it lives and it may hit it, else one that hits a raider who is no tank (the healers and casters it walks into), then
 // the nearest. One in the member's sight before one behind a wall. None: no job now.
@@ -112,6 +121,16 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
             mine.push_back(enemy);
     if (mine.empty())
         return;
+
+    for (Unit* enemy : mine)
+        if (IsBoss(enemy->ToCreature(), plan.rules))
+            if (Player* vp = enemy->GetVictim()->ToPlayer())
+                if (Member const* vm = FindMember(plan, vp); !vm || !vm->tank)
+                    g_bossOffTank[enemy->GetGUID().GetCounter()] = now;
+    if (g_bossOffTank.size() > 256)
+        for (auto it = g_bossOffTank.begin(); it != g_bossOffTank.end();)
+            it = (now - it->second > 120000) ? g_bossOffTank.erase(it) : std::next(it);
+    size_t retakeHeld = 0;
 
     uint64_t const key = (plan.groupLow << 16) ^ uint64_t(plan.mapId);
     FightState& st = g_fights[key];
@@ -196,6 +215,7 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
 
         if (m.tank || m.healer)
             continue;
+        ObjectGuid const threatHold = o.hold_target;   // PublishThreatHolds ran before the script
         // Fight::freeAura: this bot has its own enemy the others cannot see (a Shade of Jin'do); the generic rules keep it.
         if (fight->freeAura && m.p->HasAura(fight->freeAura))
             continue;
@@ -313,8 +333,22 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
         o.fallback_target = focus;
         // The one hold of a scripted fight: the start wait. No threat ratio, no over-threat release clocks.
         o.hold_target = wait ? focus : ObjectGuid::Empty;
+        // A boss that was on a non-tank less than kBossRetakeMs ago and is back on a tank: a DPS bot at the tank's threat holds (see
+        // g_bossOffTank). The hold's own clocks (PublishThreatHolds) still release it.
+        if (!wait && threatHold == focus)
+            if (auto off = g_bossOffTank.find(focus.GetCounter()); off != g_bossOffTank.end() && now - off->second < kBossRetakeMs)
+            {
+                o.hold_target = focus;
+                ++retakeHeld;
+            }
         ++votes[focus.GetCounter()];
         ++dps;
+    }
+    if (retakeHeld && now - g_retakeLogMs >= 3000)
+    {
+        g_retakeLogMs = now;
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_script] group={} map={} {} DPS bots hold at the tank's threat: the boss was on a non-tank in the last {} s",
+                    plan.groupLow, plan.mapId, retakeHeld, kBossRetakeMs / 1000);
     }
     {
         size_t most = 0;

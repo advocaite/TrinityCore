@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 
+class Creature;
 class Player;
 class Unit;
 
@@ -74,6 +75,8 @@ bool Ready(Player* p, uint32_t spellId, Unit* target, bool hostile);
 bool Busy(Player* p);
 uint32_t Stacks(Unit* u, uint32_t aura);
 Member* FindMember(Plan& plan, Player* p);
+// A boss of the encounter (RaidRules::bosses, a world boss or the boss classification).
+bool IsBoss(Creature const* c, RaidRules const* rules);
 // Target schools (RaidBrain.cpp, PublishTargets): what an enemy avoids, whose resistances stand for the raid's casters, what a member deals.
 // reflect (optional): the schools of <avoid> the enemy turns back on the caster, the only ones an area spell must keep off it.
 void EnemySchoolMasks(Unit* enemy, Unit const* caster, uint8_t& prefer, uint8_t& avoid, uint8_t* reflect = nullptr);
