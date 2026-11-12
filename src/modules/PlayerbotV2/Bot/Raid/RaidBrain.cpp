@@ -3510,8 +3510,12 @@ void PublishAuraReactions(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& o
             continue;
         RaidOrder& o = it->second;
         for (HoldByAura const& rule : plan.rules->holdByAura)
+        {
+            if (rule.still && Matches(rule.who, m, plan.mainTank))
+                o.still_aura = rule.aura;
             if (Matches(rule.who, m, plan.mainTank) && m.p->HasAura(rule.aura))
                 o.hold_rotation = true;
+        }
         for (CancelAura const& rule : plan.rules->cancelAura)
             if (!o.cancel_aura && Matches(rule.who, m, plan.mainTank) && m.p->HasAura(rule.aura)
                 && std::any_of(plan.enemies.begin(), plan.enemies.end(), [&](Unit* u) { return u->GetEntry() == rule.enemy; }))

@@ -90,6 +90,10 @@ struct RaidOrder
     // Pause the rotation (Nefarian's priest call). Movement and elected jobs still run.
     bool hold_rotation = false;
 
+    // While the bot carries this aura (Mandokir's Threatening Gaze): nothing at all, see HoldByAura::still. Set for every matching bot for
+    // the whole fight, the bot tests its own auras each tick (HoldStill).
+    uint32_t still_aura = 0;
+
     // The player's boss plan (BossTactics "no fear", "no sheep"): CcDeny kinds left out during this fight, added to the owner's own
     // crowd-control orders by the snapshot builder.
     uint16_t cc_deny = 0;

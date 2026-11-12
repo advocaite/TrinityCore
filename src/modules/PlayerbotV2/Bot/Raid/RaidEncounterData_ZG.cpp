@@ -96,7 +96,7 @@ namespace Playerbot::Raid {
         // Charge he fears everybody within 4 yd of his victim, so the ranged keep apart; a tank takes him back afterwards.
         r.priority.push_back({ 11391, 6 });
         r.priority.push_back({ 14988, 5 });
-        r.holdByAura.push_back({ 24314, Who::Anyone });
+        r.holdByAura.push_back({ 24314, Who::Anyone, /*still=*/true });
         r.spread.push_back({ 11382, 5.0f, Who::Ranged });
         r.spread.push_back({ 11382, 5.0f, Who::Healer });
         r.retaunt.push_back(11382);

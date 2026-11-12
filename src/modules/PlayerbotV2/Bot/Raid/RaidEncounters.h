@@ -236,7 +236,10 @@ struct OnlyAttackers { uint32_t enemy; Who who; };
 
 // A matching bot carrying <aura> pauses its rotation while the aura lasts (Nefarian's priest call: every heal the priest
 // casts hurts its target). Elected jobs (dispels) and movement still run.
-struct HoldByAura { uint32_t aura; Who who; };
+// still: the aura watches the bot and kills it if it moves or gains threat (Mandokir's Threatening Gaze): no move, no job, no swing
+// either, and a running cast is stopped. The bot checks its own auras every tick for it, so the hold starts with the aura, not with the
+// next plan.
+struct HoldByAura { uint32_t aura; Who who; bool still = false; };
 
 // While <enemy> is in the fight, matching bots remove <aura> from themselves at once (Nefarian's paladin call: Blessing of
 // Protection stops a tank or a melee from attacking).

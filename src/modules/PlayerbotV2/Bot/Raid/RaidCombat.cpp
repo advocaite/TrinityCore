@@ -33,6 +33,24 @@ char const* CastRuleName(RaidOrder::CastKind kind)
 
 } // namespace
 
+bool HoldStill(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& emit)
+{
+    // zg_mandokir 0136-3: two of the three raiders his gaze watched died to it. Mcshada had a spread move from the brain, and the move went
+    // before the hold, so it walked off; Mcmageb finished a Scorch in the 300 ms before the next plan gave the hold. The hold now comes
+    // from the bot's own auras each tick and goes before every move.
+    RaidOrder const& o = s.raw().raid_order;
+    if (!o.active || !o.still_aura || !s.is_alive() || !s.has_aura(o.still_aura))
+        return false;
+    if (s.is_casting())
+        emit.cancel_cast();
+    if (s.is_moving())
+        emit.stop_movement();
+    if (!s.victim().IsEmpty())
+        emit.stop_attack();
+    ai.set_last_rule_fired("raid:hold_still");
+    return true;
+}
+
 bool DispatchRaidOrder(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& emit)
 {
     RaidOrder const& o = s.raw().raid_order;

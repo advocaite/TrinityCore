@@ -16,4 +16,8 @@ namespace Playerbot::Raid {
 // normal combat logic run.
 bool DispatchRaidOrder(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& emit);
 
+// The bot carries its order's still_aura (Mandokir's Threatening Gaze): it stops walking, swinging and casting and does nothing else.
+// Called before the hazard step-outs too, which would walk it. Returns true when it took the tick.
+bool HoldStill(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& emit);
+
 } // namespace Playerbot::Raid
