@@ -1817,6 +1817,45 @@ std::vector<Position> const& SpotsHiddenFrom(Unit* enemy, Player* bot, uint32_t 
     return c.spots;
 }
 
+// The spots out of <enemy>'s sight from which <tank> can be seen (and healed), on a fine grid round the tank: rings 6-36 y, 2 y apart,
+// every 5 degrees. The tank stands 1-3 y from the enemy, so the two see nearly the same ground; only a narrow band at the edge of each
+// wall's shadow sees one and not the other, and the 24-direction rings of SpotsHiddenFrom (3-8 y between points) can step over it.
+// bwl_chromaggus 0136-1 / 0136-2 (and the passing r15 and 1110b runs): in the breath windows the healers cast 0.5-1.1 heals on the
+// tanks every 3 s against 1.2-3.9 outside them, and every tank death of 0136-2 (157, 181, 212 s) fell in a breath window with the
+// boss enraged. Cached per enemy while neither it nor the tank moved 3 y, for 10 s at most.
+struct TankSightSpots { uint64_t tank = 0; float ex = 0, ey = 0, tx = 0, ty = 0; uint32_t at = 0; std::vector<Position> spots; };
+std::unordered_map<uint64_t, TankSightSpots> g_tankSightSpots;   // by enemy guid
+
+std::vector<Position> const& SpotsHiddenSeeingTank(Unit* enemy, Player* tank, Player* bot, uint32_t now)
+{
+    TankSightSpots& c = g_tankSightSpots[enemy->GetGUID().GetCounter()];
+    if (c.at && now - c.at < 10000u && c.tank == tank->GetGUID().GetCounter() &&
+        Dist2D(c.ex, c.ey, enemy->GetPositionX(), enemy->GetPositionY()) < 3.0f && Dist2D(c.tx, c.ty, tank->GetPositionX(), tank->GetPositionY()) < 3.0f)
+        return c.spots;
+    c.tank = tank->GetGUID().GetCounter();
+    c.ex = enemy->GetPositionX(); c.ey = enemy->GetPositionY();
+    c.tx = tank->GetPositionX(); c.ty = tank->GetPositionY();
+    c.at = now ? now : 1u;
+    c.spots.clear();
+    Map* map = enemy->GetMap();
+    float const tz = tank->GetPositionZ();
+    for (float r = 6.0f; r <= 36.0f; r += 2.0f)
+        for (int i = 0; i < 72; ++i)
+        {
+            float const a = float(i) * float(M_PI) / 36.0f;
+            float const x = c.tx + r * std::cos(a), y = c.ty + r * std::sin(a);
+            float const z = map->GetHeight(bot->GetPhaseShift(), x, y, tz + 4.0f, true, 12.0f);
+            if (z <= INVALID_HEIGHT + 1.0f || std::fabs(z - tz) > 8.0f)
+                continue;
+            if (EnemySees(enemy, bot, x, y, z) || !tank->IsWithinLOS(x, y, z, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2))
+                continue;
+            c.spots.emplace_back(x, y, z);
+        }
+    TC_LOG_INFO("playerbot.v2.raid", "[raid_sight] {} ({}) at {:.1f},{:.1f}, tank {} at {:.1f},{:.1f}: {} spots out of its sight that see the tank",
+        enemy->GetName(), enemy->GetEntry(), c.ex, c.ey, tank->GetName(), c.tx, c.ty, c.spots.size());
+    return c.spots;
+}
+
 // A walk the bot can make: ground, a complete path, not much longer than 70 y (a hiding place round a corner, not across the instance).
 bool SightReachable(Player* bot, float x, float y, float z)
 {
@@ -2060,21 +2099,36 @@ bool HideBeforeBreathMove(Plan const& plan, Member const& self, uint32_t now, st
             return !EnemySees(enemy, bot, x, y, z) && (circles.empty() || !InsideAny(circles, x, y, 1.0f)) && (!needTank || seesTank(x, y, z));
         };
         SightPick* pick = nullptr;
-        if (auto it = g_sightPick.find(me); it != g_sightPick.end() && it->second.enemy == eg && fits(it->second.x, it->second.y, it->second.z, false))
+        // A healer keeps its last spot while it still sees the tank from it; one that does not is searched again (a spot that sees the
+        // tank first), so a healer that hid where it could not heal does not stay there once the tank or the boss has moved.
+        // With no such spot at all it keeps any hidden one (no new search, and no path probes, every pass).
+        if (auto it = g_sightPick.find(me); it != g_sightPick.end() && it->second.enemy == eg &&
+            (fits(it->second.x, it->second.y, it->second.z, tank != nullptr) ||
+             (tank && fits(it->second.x, it->second.y, it->second.z, false) && SpotsHiddenSeeingTank(enemy, tank, bot, now).empty())))
             pick = &it->second;
         if (!pick)
         {
-            std::vector<Position> spots = SpotsHiddenFrom(enemy, bot, now);
-            std::sort(spots.begin(), spots.end(), [&](Position const& a, Position const& b)
+            auto nearestFirst = [&](std::vector<Position>& v)
             {
-                return bot->GetExactDist2dSq(a.GetPositionX(), a.GetPositionY()) < bot->GetExactDist2dSq(b.GetPositionX(), b.GetPositionY());
-            });
+                std::sort(v.begin(), v.end(), [&](Position const& a, Position const& b)
+                {
+                    return bot->GetExactDist2dSq(a.GetPositionX(), a.GetPositionY()) < bot->GetExactDist2dSq(b.GetPositionX(), b.GetPositionY());
+                });
+            };
+            std::vector<Position> spots = SpotsHiddenFrom(enemy, bot, now);
+            nearestFirst(spots);
+            std::vector<Position> tankSpots;
+            if (tank)
+            {
+                tankSpots = SpotsHiddenSeeingTank(enemy, tank, bot, now);
+                nearestFirst(tankSpots);
+            }
             for (bool needTank : { true, false })
             {
                 if (pick || (needTank && !tank))
                     continue;
                 int tried = 0;
-                for (Position const& s : spots)
+                for (Position const& s : needTank ? tankSpots : spots)
                 {
                     if (!fits(s.GetPositionX(), s.GetPositionY(), s.GetPositionZ(), needTank))
                         continue;
@@ -2105,9 +2159,10 @@ bool HideBeforeBreathMove(Plan const& plan, Member const& self, uint32_t now, st
         if (log)
         {
             logged = now;
-            TC_LOG_INFO("playerbot.v2.raid", "[raid_sight] {} {} for {}'s breath ({} s into the fight{}): spot {:.1f},{:.1f} {:.1f} y away",
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_sight] {} {} for {}'s breath ({} s into the fight{}): spot {:.1f},{:.1f} {:.1f} y away{}",
                 bot->GetName(), d > 2.0f ? "hides" : "waits hidden", enemy->GetName(), t / 1000u,
-                casting ? fmt::format(", casting {}", casting) : std::string(), pick->x, pick->y, d);
+                casting ? fmt::format(", casting {}", casting) : std::string(), pick->x, pick->y, d,
+                !tank ? "" : seesTank(pick->x, pick->y, pick->z) ? ", the main tank in sight" : ", the main tank NOT in sight");
         }
         // A healer that sees the tank from its spot keeps healing; everyone else holds (its target is out of sight).
         if (!tank || !seesTank(pick->x, pick->y, pick->z))
