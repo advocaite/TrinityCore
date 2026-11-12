@@ -3,12 +3,12 @@
 Optional. Python 3, standard library only. Works with any service that speaks the OpenAI-style chat API: a local Ollama
 (the default), LM Studio, Open WebUI, a model on a second PC, or an online service with a key.
 
-    ollama pull llama3.2:3b
+    ollama pull qwen3.5:2b
     python bot_bridge_ollama.py                       (in the repack: finds server\\BotBridge by itself)
     python bot_bridge_ollama.py "C:\\WoW Forever\\server\\BotBridge"
     python bot_bridge_ollama.py --url http://192.168.1.20:8080/v1 --model my-model --key sk-...
 
-Options: --url (default http://127.0.0.1:11434/v1, Ollama)  --model llama3.2:3b  --key (or the BOT_BRIDGE_API_KEY
+Options: --url (default http://127.0.0.1:11434/v1, Ollama)  --model qwen3.5:2b  --key (or the BOT_BRIDGE_API_KEY
 environment variable)  --workers 2  --timeout 45  --no-actions  --no-swearing  --no-typing-delay  --minds FOLDER  --think
 --log FILE
 (--host / --port still work and mean http://HOST:PORT/v1.)
@@ -1259,7 +1259,7 @@ def main():
     ap.add_argument("folder", nargs="?", default=default if os.path.isdir(default) else "BotBridge",
                     help="the server's BotBridge folder (default: ..\\..\\server\\BotBridge next to the repack)")
     ap.add_argument("--url", default=None, help="OpenAI-style API address (default http://127.0.0.1:11434/v1, Ollama)")
-    ap.add_argument("--model", default="llama3.2:3b")
+    ap.add_argument("--model", default="qwen3.5:2b")
     ap.add_argument("--key", default=os.environ.get("BOT_BRIDGE_API_KEY", ""), help="API key, if the service needs one")
     ap.add_argument("--host", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)

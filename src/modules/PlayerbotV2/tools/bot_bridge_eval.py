@@ -4,7 +4,7 @@ choice for the launcher's tiers) can be compared with the last one.
 Optional. Python 3, standard library only. Uses bot_bridge_ollama.py next to it, with the same prompt and the same checks
 the real program uses; only nothing is written to the server.
 
-    python bot_bridge_eval.py                                   (Ollama on this PC, llama3.2:3b)
+    python bot_bridge_eval.py                                   (Ollama on this PC, qwen3.5:2b)
     python bot_bridge_eval.py --model qwen2.5:14b --out results-qwen14b.json
     python bot_bridge_eval.py --model qwen2.5:3b --compare results-qwen14b.json
     python bot_bridge_eval.py --url http://192.168.1.20:11434/v1 --model qwen2.5:14b --runs 3
@@ -93,7 +93,7 @@ def score(b, case, reply):
 def main():
     ap = argparse.ArgumentParser(description="Score a model on the bot chat test set.")
     ap.add_argument("--url", default="http://127.0.0.1:11434/v1")
-    ap.add_argument("--model", default="llama3.2:3b")
+    ap.add_argument("--model", default="qwen3.5:2b")
     ap.add_argument("--key", default=os.environ.get("BOT_BRIDGE_API_KEY", ""))
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--runs", type=int, default=1, help="answers per case (the model varies; 3 gives a steadier score)")

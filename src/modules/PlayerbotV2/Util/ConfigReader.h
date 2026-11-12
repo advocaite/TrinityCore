@@ -366,7 +366,7 @@ public:
         bool        say_reply         = true;
         std::string host              = "127.0.0.1";
         uint32      port              = 11434;
-        std::string model             = "llama3.2:3b";
+        std::string model             = "qwen3.5:2b";
         uint32      timeout_ms        = 45000;
         uint32      max_tokens        = 60;
         float       temperature       = 0.8f;

@@ -1468,8 +1468,8 @@ Playerbot.Chatter.BotCooldownMs   = 60000
 
 # Chat model (optional, off by default): bots answer whispers and party chat with a locally run language model through
 # Ollama (https://ollama.com) instead of the keyword replies above. Replies are generated text, so they can be odd or
-# wrong. Needs Ollama running on this PC with the model pulled first, e.g. `ollama pull llama3.2:3b` (about 2 GB;
-# `llama3.2:1b`, about 1.3 GB, for a slower PC). The model uses 2 to 4 GB of memory while loaded. The world never waits
+# wrong. Needs Ollama running on this PC with the model pulled first, e.g. `ollama pull qwen3.5:2b` (about 2.7 GB;
+# `qwen3.5:0.8b`, about 1 GB, for a slower PC). The model uses 2 to 4 GB of memory while loaded. The world never waits
 # for it: requests run on their own thread, and a reply that is not back in time is dropped.
 #   Enable           1 = on.
 #   Whispers / Party 1 = the model answers whispers / party chat (party: a bot named in the line, else PartyChance).
@@ -1502,8 +1502,8 @@ Playerbot.Chatter.BotCooldownMs   = 60000
 #                    "what about you?" makes sense. Default 8 (four exchanges).
 #   HistoryMinutes   a conversation quiet for this long is forgotten and the next line starts fresh.
 #   Language         "auto" = answer in the player's language (a line in Cyrillic is answered in Russian); a language name
-#                    ("Russian", "German", ...) = always that language. Small models write English best; llama3.2 does
-#                    not officially support Russian, so for Russian players gemma3:4b or qwen2.5:3b are the better pick.
+#                    ("Russian", "German", ...) = always that language. qwen3.5 (the default) writes Russian; llama3.2
+#                    does not officially support it, so Russian players keep qwen3.5 or take gemma4.
 #   ExtraPrompt      text added to every request's instructions (style, server name, ...).
 Playerbot.ChatModel.Enable          = 0
 Playerbot.ChatModel.Whispers        = 1
@@ -1511,7 +1511,7 @@ Playerbot.ChatModel.Party           = 1
 Playerbot.ChatModel.Say             = 1
 Playerbot.ChatModel.Host            = "127.0.0.1"
 Playerbot.ChatModel.Port            = 11434
-Playerbot.ChatModel.Model           = "llama3.2:3b"
+Playerbot.ChatModel.Model           = "qwen3.5:2b"
 Playerbot.ChatModel.TimeoutMs       = 45000
 Playerbot.ChatModel.MaxTokens       = 60
 Playerbot.ChatModel.Temperature     = 0.8

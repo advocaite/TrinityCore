@@ -1,13 +1,32 @@
 # The models behind the launcher's AI BOTS tab (in the repack: repack\bot-bridge\models.txt). All free, all from Ollama.
+#
 #   <tier> = <Ollama model> | <download GB> | <graphics card memory GB it needs, 0 = none> | <answers at once>
-# "Answers at once" is both the AI program's --workers and Ollama's OLLAMA_NUM_PARALLEL (the launcher sets it when it starts
-# Ollama). Each one keeps its own context in the card's memory, so small cards keep 2.
-# A tier missing here keeps the launcher's own default. Change a line, then press "Apply the change" in the tab.
-# Picked from the speed tests of 2026-11-08: valid answers every time, typical answer well under 1.5 s.
-cpu  = llama3.2:1b  | 1.3 | 0  | 1
-# low = llama3.2:3b  | 2.0 | 4  | 2   (before lfm3 passed with thinking off, 2026-11-08)
-med  = llama3.1:8b  | 4.9 | 8  | 2
-high = qwen2.5:14b  | 9.0 | 16 | 4
-# Candidates still being tested (thinking models, measured again with thinking off):
-low  = lfm3:1.7b   | 1.7 | 4  | 2
-# med = lfm2.5:8b   | 5.0 | 8  | 2
+#
+# One line per tier: the model the tab suggests for that size of graphics card. "Answers at once" is both the AI program's
+# --workers and Ollama's OLLAMA_NUM_PARALLEL (the launcher sets it when it starts Ollama). Each one keeps its own context in
+# the card's memory, so small cards keep 2. A tier missing here keeps the launcher's own default.
+#
+#   extra = <Ollama model> | <download GB> | <graphics card memory GB it needs, 0 = none> | <answers at once> | <note> | <note in Russian>
+#
+# More models for the tab's Model list (the player can also type any other Ollama model name there). The note is shown
+# beside the name (the Russian one in the Russian launcher), keep it short. This file is UTF-8. A model bigger than the PC's graphics card is still listed, marked as too big.
+# Change a line, then press "Apply the change" in the tab. Launchers older than 0.1.36 read only the tier lines.
+#
+# 0.1.36: newer defaults, Qwen 3.5 (2026, 201 languages, Russian included, Apache 2.0). Thinking models: the program and the
+# server ask them to answer straight away. Checked on the test PC with the speed test and the chat test set
+# (bot_bridge_eval.py) before release; a tier that did worse than its old model keeps the old one.
+cpu  = qwen3.5:0.8b | 1.0 | 0  | 1
+low  = qwen3.5:2b   | 2.7 | 4  | 2
+med  = qwen3.5:4b   | 3.4 | 8  | 2
+high = qwen3.5:9b   | 6.6 | 16 | 4
+# The models before 0.1.36 (from the speed tests of 2026-11-08), still in the list:
+extra = llama3.2:1b  | 1.3 | 0  | 1 | older, English best | старая, лучше на английском
+extra = lfm3:1.7b    | 1.1 | 4  | 2 | very fast         | очень быстрая
+extra = llama3.2:3b  | 2.0 | 4  | 2 | older, English best | старая, лучше на английском
+extra = llama3.1:8b  | 4.9 | 8  | 2 | older, English best | старая, лучше на английском
+extra = qwen2.5:14b  | 9.0 | 16 | 4 | older, good Russian | старая, хороший русский
+# Other free models worth a try:
+extra = gemma4:e2b   | 4.6 | 8  | 2 | Google, many languages | Google, много языков
+extra = gemma4:e4b   | 6.6 | 12 | 2 | Google, many languages | Google, много языков
+extra = gemma4:12b   | 7.7 | 16 | 4 | Google, many languages | Google, много языков
+extra = lfm2.5:8b    | 5.2 | 8  | 2 | fast for its size | быстрая для размера

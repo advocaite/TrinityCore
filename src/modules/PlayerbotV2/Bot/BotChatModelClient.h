@@ -20,7 +20,7 @@ struct Settings
 {
     std::string   host        = "127.0.0.1";
     std::uint16_t port        = 11434;
-    std::string   model       = "llama3.2:3b";
+    std::string   model       = "qwen3.5:2b";
     std::uint32_t timeout_ms  = 45000;
     std::uint32_t max_tokens  = 60;
     float         temperature = 0.8f;

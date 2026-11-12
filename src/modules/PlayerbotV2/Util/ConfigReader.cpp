@@ -215,7 +215,7 @@ void ConfigReader::apply_from_loaded_config()
         m.say_reply         = c.GetBoolDefault("Playerbot.ChatModel.Say", true, true);
         m.host              = c.GetStringDefault("Playerbot.ChatModel.Host", "127.0.0.1", true);
         m.port              = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.Port", 11434, true), 1, 65535));
-        m.model             = c.GetStringDefault("Playerbot.ChatModel.Model", "llama3.2:3b", true);
+        m.model             = c.GetStringDefault("Playerbot.ChatModel.Model", "qwen3.5:2b", true);
         m.timeout_ms        = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.TimeoutMs", 45000, true), 1000, 120000));
         m.max_tokens        = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.MaxTokens", 60, true), 10, 400));
         m.temperature       = std::clamp(float(c.GetFloatDefault("Playerbot.ChatModel.Temperature", 0.8f, true)), 0.0f, 2.0f);
