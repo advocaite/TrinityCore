@@ -643,6 +643,7 @@ public:
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "collisionprobe", HandleCollisionProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "langprobe",     HandleLangProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5328,6 +5329,54 @@ public:
                 *fromX, *fromY, *fromZ, found ? "found" : "NOT found", uint32(path.GetPathType()), uint32(points.size()), path.GetPathLength(), endDist,
                 end.x, end.y, end.z);
         }
+        return true;
+    }
+
+    // .playerbot collisionprobe <creature entry> [<player>]
+    // The collision height of each model of a creature template: the model's raw CollisionHeight, the height the core uses
+    // (CreatureModelDataEntry::GetCollisionHeight, which reads the bounding box when the client marks the height "not set") and the
+    // scaled unit height. With a player, every creature of that entry within 60 yards of the player is listed with its live
+    // Unit::GetCollisionHeight and whether the player and the creature see each other (Map line of sight, as spells and melee check it).
+    static bool HandleCollisionProbe(ChatHandler* handler, uint32 entry, Optional<std::string> name)
+    {
+        CreatureTemplate const* tmpl = sObjectMgr->GetCreatureTemplate(entry);
+        if (!tmpl)
+        {
+            handler->PSendSysMessage("collisionprobe: no creature template %u", entry);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        for (CreatureModel const& model : tmpl->Models)
+        {
+            CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(model.CreatureDisplayID);
+            CreatureModelDataEntry const* modelData = display ? sCreatureModelDataStore.LookupEntry(display->ModelID) : nullptr;
+            if (!modelData)
+            {
+                handler->PSendSysMessage("collisionprobe: %u display %u: no display or model data", entry, model.CreatureDisplayID);
+                continue;
+            }
+            handler->PSendSysMessage("collisionprobe: %u display %u model %u: raw CollisionHeight %.2f, used %.2f, bounds top %.2f, unit height %.2f",
+                entry, model.CreatureDisplayID, display->ModelID, modelData->CollisionHeight, modelData->GetCollisionHeight(), modelData->GeoBox[5],
+                modelData->GetCollisionHeight() * modelData->ModelScale * display->CreatureModelScale);
+        }
+
+        if (!name)
+            return true;
+        std::string playerName = *name;
+        Player* p = normalizePlayerName(playerName) ? ObjectAccessor::FindPlayerByName(playerName) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("collisionprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        std::list<Creature*> creatures;
+        p->GetCreatureListWithEntryInGrid(creatures, entry, 60.0f);
+        handler->PSendSysMessage("collisionprobe: %u creature(s) of entry %u within 60 yd of %s", uint32(creatures.size()), entry, p->GetName().c_str());
+        for (Creature const* c : creatures)
+            handler->PSendSysMessage("collisionprobe: spawn %llu at (%.1f, %.1f, %.1f), %.1f yd: unit height %.2f, line of sight %s", uint64(c->GetSpawnId()),
+                c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), p->GetDistance(c), c->GetCollisionHeight(),
+                p->IsWithinLOSInMap(c) ? "yes" : "NO");
         return true;
     }
 
