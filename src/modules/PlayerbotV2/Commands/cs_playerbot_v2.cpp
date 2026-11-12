@@ -582,6 +582,7 @@ public:
             { "quests",        HandleQuests,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "crafting",      HandleCrafting,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "stuck",         HandleStuck,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "flips",         HandleFlips,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bg",            HandleBg,            rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "mark",          HandleMark,          rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "unmark",        HandleUnmark,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -1892,6 +1893,15 @@ public:
     static bool HandleCrafting(ChatHandler* handler)
     {
         const std::string report = Playerbot::Diagnostics::FleetCrafting();
+        for (auto const& line : Trinity::Tokenize(report, '\n', true))
+            handler->SendSysMessage(std::string{line});
+        return true;
+    }
+
+    // .playerbot flips: bots that stop and start because two rules take turns (Diagnostics::FleetFlips)
+    static bool HandleFlips(ChatHandler* handler)
+    {
+        const std::string report = Playerbot::Diagnostics::FleetFlips();
         for (auto const& line : Trinity::Tokenize(report, '\n', true))
             handler->SendSysMessage(std::string{line});
         return true;

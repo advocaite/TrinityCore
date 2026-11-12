@@ -1,5 +1,6 @@
 ﻿#include "BotInspector.h"
 #include <cmath>            // std::sqrt for the nearby-enemy distance dump
+#include <cstring>          // std::strcmp for the FleetFlips pair names
 #include "PerfCounters.h"
 #include "WedgeWatchdog.h"
 #include "../PlayerbotV2.h"   // Module::instance().wedge_watchdog() for WedgesReport
@@ -1012,6 +1013,50 @@ std::string FleetStuck()
         return "No bots in registry.";
     std::string out = fmt::format("Stuck bots: {}/{} (currently blacklisted; will auto-retry after timer)\n",
                                    stuck_count, total_in_world);
+    for (auto const& l : lines) out += l + "\n";
+    return out;
+}
+
+// `.playerbot flips`: bots whose latest rule changes go back and forth between the same two rules (A > B > A > B ...). The rule
+// history keeps only changes, so a bot that stops and starts because two goals take turns shows a long two-rule tail; a bot that
+// just moves on from one job to the next does not. Lists each such bot and the fleet's pairs by count, so the pair to fix is
+// named by data instead of guessed from a video. Run it a few times: a bot that is still listed a minute later is flipping now.
+std::string FleetFlips()
+{
+    if (!Services::Initialized()) return "PlayerbotV2 not initialized.";
+
+    constexpr size_t kMinTail = 6;
+    uint32 total_in_world = 0;
+    std::map<std::string, uint32> pairs;
+    std::vector<std::string> lines;
+    Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
+    {
+        if (!e.ai) return;
+        ++total_in_world;
+        std::vector<char const*> hist;
+        e.ai->for_each_rule_history([&](size_t /*idx*/, char const* name) { hist.push_back(name); });
+        if (hist.size() < kMinTail) return;
+        // length of the tail that alternates between the last two entries
+        char const* a = hist[hist.size() - 1];
+        char const* b = hist[hist.size() - 2];
+        size_t tail = 2;
+        while (tail < hist.size() && hist[hist.size() - 1 - tail] == (tail % 2 == 0 ? a : b))
+            ++tail;
+        if (tail < kMinTail) return;
+        std::string const pair = std::strcmp(a, b) < 0 ? fmt::format("{} <> {}", a, b) : fmt::format("{} <> {}", b, a);
+        ++pairs[pair];
+        std::string name = "?";
+        if (CharacterCacheEntry const* ce = sCharacterCache->GetCharacterCacheByGuid(ObjectGuid::Create<HighGuid::Player>(id)))
+            name = ce->Name;
+        lines.push_back(fmt::format("  {:<14} : {} changes back and forth, now {} : {}", name, tail, a, pair));
+    });
+    if (total_in_world == 0)
+        return "No bots in registry.";
+    std::string out = fmt::format("Flipping bots: {}/{} (last {}+ rule changes between the same two rules)\n", lines.size(), total_in_world, kMinTail);
+    std::vector<std::pair<std::string, uint32>> sorted(pairs.begin(), pairs.end());
+    std::sort(sorted.begin(), sorted.end(), [](auto const& l, auto const& r) { return l.second != r.second ? l.second > r.second : l.first < r.first; });
+    for (auto const& [pair, count] : sorted)
+        out += fmt::format("  pair x{} : {}\n", count, pair);
     for (auto const& l : lines) out += l + "\n";
     return out;
 }

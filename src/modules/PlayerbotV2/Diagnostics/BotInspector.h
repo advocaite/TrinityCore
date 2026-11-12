@@ -52,6 +52,9 @@ std::string FleetCrafting();
 // cross-map POI, etc).
 std::string FleetStuck();
 
+// Bots whose latest rule changes alternate between the same two rules (stop-start), and the pairs by count (`.playerbot flips`).
+std::string FleetFlips();
+
 // Fleet BG state — counts bots queued and in-BG, per BG type id, with
 // alliance/horde score, time remaining, and FC carrier presence. Lets
 // a GM verify the BG queue + auto-port + bg_run flow at fleet scale
