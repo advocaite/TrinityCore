@@ -46,6 +46,8 @@
 #include "WorldSession.h"
 #include "api/client/v1/club_listener.pb.h"
 #include "api/client/v1/club_membership_listener.pb.h"
+#include <algorithm>
+#include <memory>
 
 size_t const MAX_GUILD_BANK_TAB_TEXT_LEN = 500;
 
@@ -2773,6 +2775,38 @@ void Guild::BroadcastToGuild(WorldSession* session, bool officerOnly, std::strin
                 if (player->GetSession() && _HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) &&
                     !player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID(), session->GetAccountGUID()))
                     player->SendDirectMessage(data);
+    }
+}
+
+void Guild::BroadcastToGuild(WorldSession* session, bool officerOnly, std::function<std::string const&(Player const* listener)> const& textFor,
+                             uint32 language) const
+{
+    // The same rights and ignore checks as BroadcastToGuild(session, officerOnly, msg, language); only the text is chosen per member.
+    if (!session || !session->GetPlayer() || !_HasRankRight(session->GetPlayer(), officerOnly ? GR_RIGHT_OFFCHATSPEAK : GR_RIGHT_GCHATSPEAK))
+        return;
+
+    std::vector<std::pair<std::string const*, std::unique_ptr<WorldPackets::Chat::Chat>>> built;
+    for (auto const& [guid, member] : m_members)
+    {
+        Player* player = member.FindConnectedPlayer();
+        if (!player || !player->GetSession() || !_HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) ||
+            player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID(), session->GetAccountGUID()))
+            continue;
+
+        std::string const& msg = textFor(player);
+        if (msg.empty())
+            continue;
+
+        auto itr = std::find_if(built.begin(), built.end(), [&](auto const& b) { return b.first == &msg; });
+        if (itr == built.end())
+        {
+            std::unique_ptr<WorldPackets::Chat::Chat> packet = std::make_unique<WorldPackets::Chat::Chat>();
+            packet->Initialize(officerOnly ? CHAT_MSG_OFFICER : CHAT_MSG_GUILD, Language(language), session->GetPlayer(), nullptr, msg);
+            packet->Write();
+            built.emplace_back(&msg, std::move(packet));
+            itr = std::prev(built.end());
+        }
+        player->SendDirectMessage(itr->second->GetRawPacket());
     }
 }
 

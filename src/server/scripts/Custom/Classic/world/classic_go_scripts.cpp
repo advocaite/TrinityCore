@@ -22,8 +22,10 @@
 #include "AreaTrigger.h"
 #include "AreaTriggerAI.h"
 #include "Battleground.h"
+#include "CellImpl.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
+#include "GridNotifiersImpl.h"
 #include "Player.h"
 #include "SharedDefines.h"
 #include "Creature.h"
@@ -199,11 +201,16 @@ static bool IsAtAdventurerCamp(Unit* unit)
     return false;
 }
 
-// the campfire (spell focus 4) the player is resting at, nullptr if none is close enough
+// the campfire (spell focus 4) the player is resting at, nullptr if none is close enough. Searched as a spell's focus requirement is
+// (WorldSession::UpdateCampfireRest does the same): the nearest spell focus of any kind missed the fire when a forge or anvil stood
+// closer, and the minute of rest then gave no buffs (Discord, ikero3078 2026-11-11, Kharanos).
 static GameObject* FindCampfire(Unit* unit)
 {
-    GameObject* fire = unit->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, CAMPFIRE_RANGE);
-    return fire && fire->GetGOInfo()->spellFocus.spellFocusType == SPELL_FOCUS_CAMPFIRE ? fire : nullptr;
+    GameObject* fire = nullptr;
+    Trinity::GameObjectFocusCheck check(unit, SPELL_FOCUS_CAMPFIRE);
+    Trinity::GameObjectSearcher<Trinity::GameObjectFocusCheck> searcher(unit, fire, check);
+    Cell::VisitGridObjects(unit, searcher, CAMPFIRE_RANGE);
+    return fire;
 }
 
 class classic_spell_campfire_rest : public AuraScript

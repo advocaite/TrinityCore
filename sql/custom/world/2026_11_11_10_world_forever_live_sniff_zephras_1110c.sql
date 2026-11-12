@@ -313,7 +313,9 @@ INSERT INTO `creature_template_addon` (`entry`, `emote`) VALUES
 
 -- 11. Grey and common drops live gave that our Zephras mobs never drop (vanilla level 1-5 items). Small samples, so the chance
 --     is a low guess: 3 for an item seen once, 10 for one seen twice. Rows we already have stay as they are.
-INSERT IGNORE INTO `creature_loot_template` (`Entry`, `ItemType`, `Item`, `Chance`, `QuestRequired`, `LootMode`, `GroupId`, `MinCount`, `MaxCount`, `Comment`) VALUES
+--     The loot table has no unique key, so the rows of this section are removed first to keep a second run from doubling them.
+DELETE FROM `creature_loot_template` WHERE `Comment` LIKE 'Forever live drop 2026-11-10 (%';
+INSERT INTO `creature_loot_template` (`Entry`, `ItemType`, `Item`, `Chance`, `QuestRequired`, `LootMode`, `GroupId`, `MinCount`, `MaxCount`, `Comment`) VALUES
 (250926, 0, 1372, 3, 0, 1, 0, 1, 1, 'Forever live drop 2026-11-10 (Scrawny Ursera, 1 of 15 kills)'),
 (250926, 0, 1374, 3, 0, 1, 0, 1, 1, 'Forever live drop 2026-11-10 (Scrawny Ursera, 1 of 15 kills)'),
 (250926, 0, 1380, 3, 0, 1, 0, 1, 1, 'Forever live drop 2026-11-10 (Scrawny Ursera, 1 of 15 kills)'),

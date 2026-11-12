@@ -99,7 +99,9 @@ fi
 for bin in "${required[@]}"; do
     if [[ ! -x "$OUTPUT_PATH/$bin" ]]; then
         die "Required binary not found or not executable: $OUTPUT_PATH/$bin
-Build the worldserver project first (cmake --build build)."
+The extractors are built only with -DTOOLS=1: configure with it, then
+  cmake --build build --target mapextractor vmap4extractor vmap4assembler mmaps_generator
+and pass the build's bin folder as --output-path (doc/LinuxServerSetup.md, step 7)."
     fi
 done
 

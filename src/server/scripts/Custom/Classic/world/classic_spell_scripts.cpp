@@ -2211,8 +2211,107 @@ class classic_spell_quest_testing_the_wells : public SpellScript
     }
 };
 
+// Shaman weapon imbues of 1.60: one DUMMY aura per imbue, the enchant on the weapon tells the rank.
+static Item* ClassicImbuedWeapon(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+{
+    Player* player = aurEff->GetBase()->GetUnitOwner()->ToPlayer();
+    DamageInfo* damage = eventInfo.GetDamageInfo();
+    if (!player || !damage || !eventInfo.GetActionTarget())
+        return nullptr;
+    WeaponAttackType const attack = damage->GetAttackType();
+    if (attack != BASE_ATTACK && attack != OFF_ATTACK)
+        return nullptr;
+    Item* weapon = player->GetWeaponForAttack(attack, true);
+    if (!weapon || weapon->GetGUID() != aurEff->GetBase()->GetCastItemGUID())
+        return nullptr;
+    return weapon;
+}
+
+// 439431 - Windfury Weapon
+class classic_spell_sha_windfury_weapon : public AuraScript
+{
+    // enchant -> the rank's attack power + extra attacks spell
+    static uint32 GetRankSpell(uint32 enchantId)
+    {
+        switch (enchantId)
+        {
+            case 283:  return 8233;
+            case 284:  return 8236;
+            case 525:  return 10484;
+            case 1669:
+            case 7569: return 16361;
+            case 8293: return 8233;
+            default:   return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 8233, 8236, 10484, 16361 });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo);
+        if (!weapon)
+            return false;
+        uint32 const rank = GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
+        // the attacks it granted do not grant more
+        return rank && GetTarget()->GetLastExtraAttackSpell() != rank;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        if (Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo))
+            if (uint32 rank = GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)))
+                GetTarget()->CastSpell(GetTarget(), rank, CastSpellExtraArgs(aurEff).SetCastItem(weapon));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_sha_windfury_weapon::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_windfury_weapon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Talents of 1.60 whose proc chance is an effect value scaled by the talent rank, not SpellAuraOptions.ProcChance (100).
+class classic_spell_proc_chance_from_effect : public AuraScript
+{
+protected:
+    static SpellEffIndex ChanceEffect(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 11180:   // Winter's Chill: $m2
+            case 12298:   // Shield Specialization (warrior): $m2
+            case 14909:   // Searing Light: $m2
+            case 16850:   // Improved Starfire: $s2
+            case 20150:   // Shield Specialization (paladin): $m2
+            case 1224716: // Puncturing Wounds: $m2
+                return EFFECT_1;
+            default:
+                return EFFECT_0;
+        }
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        AuraEffect const* chance = GetEffect(ChanceEffect(GetId()));
+        return chance && roll_chance(chance->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_proc_chance_from_effect::CheckProc);
+    }
+};
+
+
 void AddSC_classic_spell_scripts()
 {
+    RegisterSpellScript(classic_spell_sha_windfury_weapon);
+    RegisterSpellScript(classic_spell_proc_chance_from_effect);
     RegisterSpellScript(classic_spell_warr_gore_drinker);
     RegisterSpellScript(classic_spell_dru_not_from_shadowmeld);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);

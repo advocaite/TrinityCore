@@ -21,6 +21,7 @@
 #include "Common.h"
 #include "ObjectGuid.h"
 #include <ctime>
+#include <functional>
 #include <map>
 #include <unordered_set>
 
@@ -214,6 +215,9 @@ class TC_GAME_API Channel
         void List(Player const* player) const;
         void Announce(Player const* player);
         void Say(ObjectGuid const& guid, std::string const& what, uint32 lang) const;
+        // Say with each member reading the text `textFor` gives for them: a bot's line in the reader's language (PlayerbotV2
+        // BotLanguage). The returned reference must stay valid for the call; members given the same text share one packet per locale.
+        void Say(ObjectGuid const& guid, uint32 lang, std::function<std::string const&(Player const* listener)> const& textFor) const;
         void SayAs(std::string const& senderName, std::string const& what) const;     // not a player: the Discord bot (DiscordChannel)
         void AddonSay(ObjectGuid const& guid, std::string const& prefix, std::string const& what, bool isLogged) const;
         void DeclineInvite(Player const* player);

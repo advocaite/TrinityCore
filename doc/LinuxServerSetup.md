@@ -97,6 +97,19 @@ tar -cf - -C "PATH/TO/DATADIR" dbc gt maps vmaps cameras | ssh root@SERVER_IP "m
 
 (~680 MB.)
 
+If the game client is on the Linux machine itself (for example a desktop running the game under Proton or Wine), the data can be
+extracted there instead. The extractors are only built with `-DTOOLS=1`, so configure with it (step 6 turns them off), build, and
+point the script at the build's `bin` folder:
+
+```
+cmake .. -DCMAKE_BUILD_TYPE=Release -DTOOLS=1 -DWITH_WARNINGS=0
+make -j2 mapextractor vmap4extractor vmap4assembler mmaps_generator
+tools/extract_client_data.sh --client-path "/path/to/World of Warcraft/_forever_" --output-path /root/TrinityCore/build/bin
+```
+
+The data folders then lie in that `bin` folder; copy `dbc`, `gt`, `maps`, `vmaps` and `cameras` (and `mmaps` if made) to the data
+folder of step 7.
+
 ## 8. Databases
 
 All four databases are created by worldserver's auto-setup on the first start (section 10).

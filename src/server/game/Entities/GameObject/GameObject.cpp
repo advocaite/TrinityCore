@@ -58,6 +58,7 @@
 #include "Util.h"
 #include "Vignette.h"
 #include "World.h"
+#include "WorldSession.h"
 #include <G3D/Box.h>
 #include <G3D/CoordinateFrame.h>
 #include <G3D/Quat.h>
@@ -2920,6 +2921,9 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
                     itr->second = user->GetGUID(); //this slot in now used by player
                     user->NearTeleportTo(x_lowest, y_lowest, GetPositionZ(), GetOrientation());
                     user->SetStandState(UnitStandStateType(UNIT_STAND_STATE_SIT_LOW_CHAIR + info->chair.chairheight));
+                    // sitting on a bench by a campfire starts the camp rest, as sitting on the ground does (see WorldSession::UpdateCampfireRest)
+                    if (Player* player = user->ToPlayer())
+                        player->GetSession()->UpdateCampfireRest(UNIT_STAND_STATE_SIT_LOW_CHAIR + info->chair.chairheight);
                     if (info->chair.triggeredEvent)
                         GameEvents::Trigger(info->chair.triggeredEvent, user, this);
                     return;
