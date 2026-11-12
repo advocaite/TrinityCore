@@ -3956,6 +3956,12 @@ void Spell::_cast(bool skipCheck)
     // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
     SendSpellGo();
 
+    // the swing itself (AttackerStateUpdate casts the queued ability in place of the white hit); an on-next-swing spell cast any
+    // other way, such as a melee override that sends its own attacker state, is no swing of its own
+    if (m_spellInfo->IsNextMeleeSwingSpell())
+        if (Unit const* unitCaster = m_caster->ToUnit(); unitCaster && unitCaster->GetCurrentSpell(CURRENT_MELEE_SPELL) == this)
+            SendNextMeleeSwingAttackerState();
+
     if (!m_spellInfo->HasAttribute(SPELL_ATTR12_START_COOLDOWN_ON_CAST_START))
         SendSpellCooldown();
 
@@ -4848,6 +4854,75 @@ void Spell::SendSpellStart()
 
     DeathRecap::RecordCast(m_caster, true, m_spellInfo->Id, m_SpellVisual.SpellXSpellVisualID, m_SpellVisual.ScriptVisualID, m_casttime, castFlags,
         m_targets.GetUnitTargetGUID());
+}
+
+// Classic 1.60 (Blizzard sniffs of client 70888, 11 Nov 2026): an on-next-swing ability (Heroic Strike, Raptor Strike, Maul,
+// Cleave) takes the place of a white swing, and the official server follows its SMSG_SPELL_GO with an SMSG_ATTACKER_STATE_UPDATE
+// for that swing, before the spell's damage log: 0 damage, MeleeSpellID = the ability, HitInfo AFFECTS_VICTIM | UNK14 |
+// NO_ANIMATION (CRITICALHIT on a crit), MISS | NO_ANIMATION on a miss, and the victim state of the roll (hit, dodge, parry).
+// No SMSG_ATTACK_SWING_LANDED_LOG follows it. The client's built-in swing timer restarts on this packet: without it the timer
+// stopped after a Heroic Strike (eyelash, Discord 2026-11-02, client 70707).
+void Spell::SendNextMeleeSwingAttackerState()
+{
+    Unit* unitCaster = m_caster->ToUnit();
+    if (!unitCaster)
+        return;
+
+    for (TargetInfo const& targetInfo : m_UniqueTargetInfo)
+    {
+        if (targetInfo.TargetGUID == unitCaster->GetGUID())
+            continue;
+
+        Unit* victim = ObjectAccessor::GetUnit(*unitCaster, targetInfo.TargetGUID);
+        if (!victim)
+            continue;
+
+        uint32 hitInfo = HITINFO_NO_ANIMATION;
+        uint8 victimState = VICTIMSTATE_HIT;
+        switch (targetInfo.MissCondition)
+        {
+            case SPELL_MISS_NONE:
+                hitInfo |= HITINFO_AFFECTS_VICTIM | HITINFO_UNK14;
+                if (targetInfo.IsCrit)
+                    hitInfo |= HITINFO_CRITICALHIT;
+                break;
+            case SPELL_MISS_DODGE:   hitInfo |= HITINFO_AFFECTS_VICTIM | HITINFO_UNK14; victimState = VICTIMSTATE_DODGE;     break;
+            case SPELL_MISS_PARRY:   hitInfo |= HITINFO_AFFECTS_VICTIM | HITINFO_UNK14; victimState = VICTIMSTATE_PARRY;     break;
+            case SPELL_MISS_BLOCK:   hitInfo |= HITINFO_AFFECTS_VICTIM | HITINFO_UNK14;                                      break;
+            case SPELL_MISS_EVADE:   hitInfo |= HITINFO_MISS;                           victimState = VICTIMSTATE_EVADES;    break;
+            case SPELL_MISS_IMMUNE:
+            case SPELL_MISS_IMMUNE2: hitInfo |= HITINFO_MISS;                           victimState = VICTIMSTATE_IS_IMMUNE; break;
+            case SPELL_MISS_DEFLECT: hitInfo |= HITINFO_MISS;                           victimState = VICTIMSTATE_DEFLECTS;  break;
+            default:                 hitInfo |= HITINFO_MISS;                           victimState = VICTIMSTATE_INTACT;    break;
+        }
+
+        WorldPackets::CombatLog::AttackerStateUpdate packet;
+        packet.Flags = hitInfo;
+        packet.AttackerGUID = unitCaster->GetGUID();
+        packet.VictimGUID = victim->GetGUID();
+        packet.SubDmg.emplace();
+        packet.SubDmg->SchoolMask = unitCaster->GetMeleeDamageSchoolMask(m_attackType);
+        packet.VictimState = victimState;
+        packet.MeleeSpellID = m_spellInfo->Id;
+        packet.LogData.Initialize(unitCaster);
+
+        WorldPackets::Spells::ContentTuningParams contentTuningParams;
+        if (contentTuningParams.GenerateDataForUnits(unitCaster, victim))
+            packet.ContentTuning = contentTuningParams;
+
+        unitCaster->SendCombatLogMessage(&packet);
+
+        // once per ability, so a test run can see the swing packet went out without a client
+        {
+            static std::mutex loggedMutex;
+            static std::unordered_set<uint32> logged;
+            std::lock_guard<std::mutex> lock(loggedMutex);
+            if (logged.insert(m_spellInfo->Id).second)
+                TC_LOG_INFO("playerbot.v2", "[next_swing_state] spell {} by {}: attacker state sent, flags 0x{:X}, victim state {}", m_spellInfo->Id,
+                    unitCaster->GetName(), hitInfo, uint32(victimState));
+        }
+        break;                                              // one swing: the main target (Cleave's second target has no swing)
+    }
 }
 
 void Spell::SendSpellGo()
