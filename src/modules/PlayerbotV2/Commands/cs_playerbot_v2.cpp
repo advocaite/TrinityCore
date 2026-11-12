@@ -100,6 +100,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "ClassicRage.h"          // .playerbot rageprobe
+#include "Api/BotItemScorer.h"     // .playerbot gearpick
 #include "ConditionMgr.h"         // .playerbot visualprobe
 #include "Trainer.h"
 #include "TraitMgr.h"
@@ -645,6 +646,7 @@ public:
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "equipprobe",    HandleEquipProbe,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "gearpick",      HandleGearPick,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "rageprobe",     HandleRageProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "visualprobe",   HandleVisualProbe,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5194,6 +5196,62 @@ public:
             "slot %u", p->GetName().c_str(), uint32(p->GetClass()), uint32(p->GetLevel()), itemId, proto->GetName(DEFAULT_LOCALE),
             proto->GetClass(), proto->GetSubClass(), uint32(proto->GetInventoryType()), uint32(use), uint32(equip), equip == EQUIP_ERR_OK ? " (OK)" : "",
             equip == EQUIP_ERR_OK ? uint32(dest & 255) : 255u);
+        return true;
+    }
+
+    // .playerbot gearpick <player> <inventory type> [count]
+    // The items the bot gear scorer (Gear::ScoreItemForBot: quest rewards, loot, trades, the gear generator) ranks highest for the
+    // player in one inventory type (5 = chest, 1 = head, 7 = legs, 13 = one-hand, 17 = two-hand...), among the armor and weapons the
+    // player can use with a required level from 8 under to its own level. Each line gives the score and the item's Strength,
+    // Agility, Intellect and Stamina shares, so a spec that ranks the wrong main stat first shows at a glance.
+    static bool HandleGearPick(ChatHandler* handler, std::string name, uint32 inventoryType, Optional<uint32> countArg)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("gearpick: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        int32 const level = int32(p->GetLevel());
+        std::vector<std::pair<int32, ItemTemplate const*>> picks;
+        for (auto const& [id, tpl] : sObjectMgr->GetItemTemplateStore())
+        {
+            if (uint32(tpl.GetInventoryType()) != inventoryType || (tpl.GetClass() != ITEM_CLASS_ARMOR && tpl.GetClass() != ITEM_CLASS_WEAPON))
+                continue;
+            if (tpl.GetBaseRequiredLevel() > level || tpl.GetBaseRequiredLevel() < level - 8 || tpl.GetQuality() < ITEM_QUALITY_UNCOMMON
+                || tpl.GetQuality() > ITEM_QUALITY_EPIC)
+                continue;
+            if (p->CanUseItem(&tpl) != EQUIP_ERR_OK)
+                continue;
+            picks.emplace_back(::Playerbot::Gear::ScoreItemForBot(&tpl, p), &tpl);
+        }
+
+        std::ranges::sort(picks, std::ranges::greater(), &std::pair<int32, ItemTemplate const*>::first);
+        uint32 const count = std::min<uint32>(countArg.value_or(8), uint32(picks.size()));
+        handler->PSendSysMessage("gearpick: %s class %u spec %u level %d, inventory type %u: %u usable items, top %u",
+            p->GetName().c_str(), uint32(p->GetClass()), uint32(::Playerbot::Classic::EffectiveSpecId(p)), level, inventoryType,
+            uint32(picks.size()), count);
+        for (uint32 i = 0; i < count; ++i)
+        {
+            ItemTemplate const* tpl = picks[i].second;
+            int32 str = 0, agi = 0, intel = 0, sta = 0;
+            for (uint32 s = 0; s < MAX_ITEM_PROTO_STATS; ++s)
+            {
+                int32 const share = tpl->GetStatPercentEditor(s);
+                switch (tpl->GetStatModifierBonusStat(s))
+                {
+                    case ITEM_MOD_STRENGTH:  str += share;   break;
+                    case ITEM_MOD_AGILITY:   agi += share;   break;
+                    case ITEM_MOD_INTELLECT: intel += share; break;
+                    case ITEM_MOD_STAMINA:   sta += share;   break;
+                    default: break;
+                }
+            }
+            handler->PSendSysMessage("  %d  %u %s (subclass %u, req %d): str %d agi %d int %d sta %d", picks[i].first, tpl->GetId(),
+                tpl->GetName(DEFAULT_LOCALE), tpl->GetSubClass(), tpl->GetBaseRequiredLevel(), str, agi, intel, sta);
+        }
         return true;
     }
 

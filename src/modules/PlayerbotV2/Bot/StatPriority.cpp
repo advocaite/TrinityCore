@@ -109,8 +109,9 @@ std::unordered_map<uint32, StatPriority> const& SpecTable()
         // ===== Shaman =====
         // Elemental (262): Int caster.
         { 262, MakeRow(0.0f, 0.0f, 0.80f, W_ILVL_PRIMARY, 0.0f, 0.75f, 0.85f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 4.0f) },
-        // Enhancement (263): Agi melee dual-wield.
-        { 263, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.75f, 0.85f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
+        // Enhancement (263): Classic 1.60 Strength melee: 2 attack power per Strength, Intellect gives attack power through
+        // Mental Dexterity (the bots' build) and mana, Agility only crit and dodge (BotItemScorer IsUsefulSecondaryPrimary).
+        { 263, MakeRow(W_ILVL_PRIMARY, 0.55f, 0.85f, 0.60f, 0.0f, 0.75f, 0.85f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
         // Restoration (264): Int healer, Haste-favored.
         { 264, MakeRow(0.0f, 0.0f, 0.85f, W_ILVL_PRIMARY, 0.55f, 0.65f, 0.85f, 0.75f, 0.65f, 0.40f, 0.30f, 0.30f, 4.0f) },
 

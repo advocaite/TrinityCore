@@ -59,6 +59,18 @@ ItemSubclassArmor PreferredArmorForClass(uint8 cls)
 
 namespace {
 
+// Classic 1.60 enhancement shaman: attack power is level * 2 + Strength * 2 (no Agility: VMaNGOS / Player::UpdateAttackPowerAndDamage),
+// and the bots' build takes Mental Dexterity (aura 598: attack power from 50/100/150% of Intellect). So Strength is the main stat,
+// Intellect gives attack power and the mana for Stormstrike and shocks, and Agility only crit and dodge (1% crit per 20 at 60).
+// The retail rule (Agility main, Strength and Intellect wasted) made the bots wear agility leather and mail over strength mail
+// (Discord 12 Nov: "shaman bots gear favor agi a bit too much").
+bool IsUsefulSecondaryPrimary(uint8 cls, uint16 spec, uint32 statType)
+{
+    if (cls == CLASS_SHAMAN && spec == 263)
+        return statType == ITEM_MOD_AGILITY || statType == ITEM_MOD_INTELLECT;
+    return false;
+}
+
 // Stat-block scorer. Modern items can carry:
 //   - Static primary (ITEM_MOD_STRENGTH/AGILITY/INTELLECT)
 //   - "Smart" combined primaries that resolve to spec at runtime
@@ -88,6 +100,9 @@ int32 ScoreStatBlock(ItemTemplate const* tpl, uint8 cls, uint16 spec)
             primary_match = (primary == ITEM_MOD_STRENGTH || primary == ITEM_MOD_INTELLECT);
 
         if (primary_match) { total += 500; continue; }
+
+        // A second primary the spec still turns into damage (Classic 1.60 attack power, Player::UpdateAttackPowerAndDamage).
+        if (IsUsefulSecondaryPrimary(cls, spec, uint32(stat_type))) { total += 250; continue; }
 
         // Wrong fixed primary - wasted on this bot.
         if (stat_type == ITEM_MOD_STRENGTH ||
@@ -169,7 +184,7 @@ uint32 PrimaryStatForBot(uint8 cls, uint16 spec)
             return spec == 270 ? ITEM_MOD_INTELLECT : ITEM_MOD_AGILITY;  // MW vs BrM/WW
 
         case CLASS_SHAMAN:
-            return spec == 263 ? ITEM_MOD_AGILITY : ITEM_MOD_INTELLECT;  // Enh vs Ele/Resto
+            return spec == 263 ? ITEM_MOD_STRENGTH : ITEM_MOD_INTELLECT;  // Enh (Classic: Strength gives the attack power) vs Ele/Resto
 
         case CLASS_PRIEST:
         case CLASS_MAGE:
@@ -382,7 +397,8 @@ RaidWeights WeightsFor(RaidRole role, uint8 cls, uint16 spec)
                 case CLASS_PALADIN: w.str = 1.0f; w.agi = 0.4f; w.intel = 0.25f; w.mana = 0.05f; break;
                 case CLASS_ROGUE:   w.str = 0.4f; w.agi = 1.0f; break;
                 case CLASS_DRUID:   w.str = 0.8f; w.agi = 1.0f; w.intel = 0.15f; break;
-                case CLASS_SHAMAN:  w.str = 0.6f; w.agi = 0.9f; w.intel = 0.3f; w.mana = 0.05f; break;
+                // Classic: 2 attack power per Strength, 1.5 per Intellect with Mental Dexterity (plus mana), Agility crit only
+                case CLASS_SHAMAN:  w.str = 1.0f; w.agi = 0.55f; w.intel = 0.6f; w.mana = 0.05f; break;
                 default:            w.str = 0.8f; w.agi = 0.8f; break;
             }
             break;
