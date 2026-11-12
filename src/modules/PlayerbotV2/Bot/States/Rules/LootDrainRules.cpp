@@ -40,6 +40,11 @@ constexpr float kLootRange = 11.0f;
 constexpr float kHumanLootLeashYd = 20.0f;
 // A bot tank leads: bots walk only to corpses this close to the anchor tank (rejoin_tank pulls a follower back at 40 y).
 constexpr float kTankLootLeashYd = 28.0f;
+// A bot group in the open world: bots walk only to corpses this close to the leader. ingroup:follow_recall honours the loot walk's
+// detour lease only while the bot is within 45 y of its anchor and nobody in the group fights (State_InGroup kDetourMaxRange).
+constexpr float kGroupLootLeashYd = 40.0f;
+// A queued corpse this far from the bot is not its kill site any more (it hearthed, took a flight, was summoned): dropped.
+constexpr float kLootWalkMaxYd = 100.0f;
 // A corpse with an idle hostile mob this close is not walked to (the walk would pull it).
 constexpr float kLootIdleMobClearYd = 16.0f;
 constexpr uint16 SKILL_SKINNING_LOCAL = 393;
@@ -376,6 +381,15 @@ bool LootDrainFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
                     // a corpse on a ledge / across a gap loops idle:move_to_corpse
                     // forever (live: Wylius wedged 273s on it).
                     const uint64 corpse_walk_low = c->GetGUID().GetCounter();
+                    // Out of reach of any loot walk: the queue kept corpses 400 to 8000 y away, and grouped bots walked toward them
+                    // until the walk deadline while the follow recall pulled them back (r13 12 Nov: 10-13 move_to_corpse <>
+                    // follow_recall flips, [loot_walk_give_up] dist=426y..8023y).
+                    if (dist > kLootWalkMaxYd)
+                    {
+                        ai.clear_loot_corpse_walk(corpse_walk_low);
+                        q.pop_front();
+                        continue;
+                    }
                     if (ai.loot_corpse_walk_overdue(corpse_walk_low, s.published_at_ms()))
                     {
                         TC_LOG_INFO("playerbot.v2",
@@ -416,6 +430,36 @@ bool LootDrainFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
                                 q.push_back(q.front());
                                 q.pop_front();
                                 continue;
+                            }
+                        }
+                    // A bot group in the open world: the walk goes only where the follow recall lets it finish, a corpse near the leader
+                    // and nobody in the group fighting. Others wait in the queue (the group moves on, the walk deadline drops them).
+                    if (s.in_group() && !s.is_in_instance() && !quest_only)
+                        if (auto const* mems = g.members())
+                        {
+                            bool fight = false;
+                            GroupMemberSummary const* lead = nullptr;
+                            for (GroupMemberSummary const& m : *mems)
+                            {
+                                if (!m.online || m.map_id != s.map_id() || m.guid == s.guid()) continue;
+                                fight |= m.in_combat;
+                                if (m.guid == g.leader()) lead = &m;
+                            }
+                            if (fight)
+                                return;
+                            if (lead)
+                            {
+                                const float lx = c->GetPositionX() - lead->x, ly = c->GetPositionY() - lead->y;
+                                if (lx * lx + ly * ly > kGroupLootLeashYd * kGroupLootLeashYd)
+                                {
+                                    if (rotate_sentinel == c->GetGUID())
+                                        return;         // came full circle this tick: every queued corpse is too far
+                                    if (rotate_sentinel.IsEmpty())
+                                        rotate_sentinel = c->GetGUID();
+                                    q.push_back(q.front());
+                                    q.pop_front();
+                                    continue;
+                                }
                             }
                         }
                     // An idle hostile mob beside the corpse (the rest of the pack, a patrol standing by it) is aggroed by the walk: the
