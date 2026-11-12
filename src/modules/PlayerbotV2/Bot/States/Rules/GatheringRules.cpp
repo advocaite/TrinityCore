@@ -33,7 +33,12 @@ bool Gatherable(BotSnapshotView const& s, BotSnapshot::NearbyObject const& o)
 {
     if (o.go_type == GO_GATHERING_NODE_LOCAL)
         return true;
-    return o.gather_skill != 0 && o.gather_ready && s.skill_value(o.gather_skill) >= o.gather_req;
+    if (o.gather_skill == 0 || !o.gather_ready)
+        return false;
+    // The skill itself first: a lock that asks for level 0 is still no vein for a bot without Mining (r10: bots without the skill
+    // walked to every Copper Vein, skill 0 >= 0).
+    uint16 const have = s.skill_value(o.gather_skill);
+    return have > 0 && have >= o.gather_req;
 }
 
 // The herb or vein whose loot the bot's gathering spell opened: it waits for the bot to take it (API::gather_node).
@@ -46,6 +51,21 @@ BotSnapshot::NearbyObject const* OpenGatherLoot(BotSnapshotView const& s)
         if (obj.guid == open && obj.gather_skill != 0)
             return &obj;
     return nullptr;
+}
+
+// The bot is casting its gathering spell on a node: it holds still until the spell ends. Without this the rules below it moved the bot on
+// the next tick and the 3 s cast broke (r10 12 Nov: 28 of 29 casts SPELL_FAILED_MOVING or broken, nothing looted).
+bool CastingOnNode(BotSnapshotView const& s)
+{
+    if (!s.is_casting())
+        return false;
+    ObjectGuid const node = s.current_cast_object();
+    if (node.IsEmpty())
+        return false;
+    for (auto const& obj : s.raw().world_objects.nearby_objects)
+        if (obj.guid == node)
+            return obj.gather_skill != 0 || obj.go_type == GO_GATHERING_NODE_LOCAL;
+    return false;
 }
 
 // The player a companion follows: its owner, else the player leading its group. Null when not with one on this map.
@@ -114,7 +134,9 @@ bool GatherGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
     if (!can_gather) return false;
     // A bot with a player picks nodes only when told to ("gather on"); IdleRuleRegistry::tick lets these rules through then.
     if (s.is_led_by_player() && !CompanionMayGather(s, ai, g)) return false;
-    if (s.in_combat() || s.is_casting()) return false;
+    if (s.in_combat()) return false;
+    if (CastingOnNode(s)) return true;   // GatherFire holds the bot still for its gathering cast
+    if (s.is_casting()) return false;
     // The is_moving check was previously here — removed 2026-05-22 so
     // gather can fire opportunistically during travel. Real players
     // detour ~12y to grab a node they're walking past instead of
@@ -148,6 +170,14 @@ bool GatherFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,Bo
     float bx, by, bz; s.position(bx, by, bz);
     constexpr float kInteract = 5.0f;
     constexpr float kInt2 = kInteract * kInteract;
+    // Casting on a node: claim the tick so no lower rule moves the bot (a companion's follow honours the lease).
+    if (CastingOnNode(s))
+    {
+        if (s.is_led_by_player())
+            ai.grant_detour(now_ms);
+        ai.set_last_rule_fired("idle:gather");
+        return true;
+    }
     // The gathering spell finished and opened the node's loot: take it (the same use, API::gather_node).
     if (auto const* open = OpenGatherLoot(s))
     {
@@ -186,8 +216,9 @@ bool GatherFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,Bo
 // left untouched.
 bool GatherFullGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
-    // Quest-first (2026-06-16): yield to a reachable quest action. Not a companion: its quests are its player's to lead.
-    if (!s.is_led_by_player() && s.has_actionable_quest()) return false;
+    // Quest-first (2026-06-16): yield to a reachable quest action. Not a companion: its quests are its player's to lead. Not either
+    // while its gathering cast runs or the node's loot waits: walking off breaks the one and leaves the other open.
+    if (!s.is_led_by_player() && s.has_actionable_quest() && !CastingOnNode(s) && !OpenGatherLoot(s)) return false;
     return GatherGate(s, ai, g, now_ms);
 }
 
@@ -197,6 +228,7 @@ bool GatherFullGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
 // quest_accept so detouring doesn't preempt quest hand-ins.
 bool GatherDetourGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
+    if (CastingOnNode(s) || OpenGatherLoot(s)) return false;   // idle:gather owns the bot until the node is picked
     if (!GatherGate(s, ai, g, now_ms)) return false;
     // GatherGate already checks: skill, !combat, !casting, !recently
     // combat, !dungeon/BG, !flying. Detour adds nothing extra here —

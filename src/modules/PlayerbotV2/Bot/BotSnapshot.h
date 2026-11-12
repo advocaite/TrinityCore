@@ -2071,6 +2071,8 @@ struct CastState
     // Heal is in-flight on member A but member B dropped to 15% HP,
     // bot cancels and re-aims rather than letting B die mid-cast.
     ObjectGuid current_cast_target;
+    // Game object GUID this cast is aimed at (an herb or vein the gathering spell opens), Empty otherwise.
+    ObjectGuid current_cast_object;
     // ID of the most recent spell the bot SUCCESSFULLY cast (set by
     // the IntentVisitor on CastSpellIntent → Result::Ok). Drives the
     // Monk Windwalker Combo Strikes mastery — repeating the same

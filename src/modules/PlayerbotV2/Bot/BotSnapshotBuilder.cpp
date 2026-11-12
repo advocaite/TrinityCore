@@ -3921,6 +3921,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             const int32 rem            = casting->GetRemainingCastTime();
             snap->cast.current_cast_remaining = Ms{rem > 0 ? rem : 0};
             snap->cast.current_cast_target   = casting->m_targets.GetUnitTargetGUID();
+            snap->cast.current_cast_object   = casting->m_targets.GetGOTargetGUID();
             break;
         }
     }

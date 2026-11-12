@@ -215,6 +215,7 @@ public:
     uint32 current_cast_spell_id() const { return s_->cast.current_cast_spell_id; }
     Ms     current_cast_remaining() const { return s_->cast.current_cast_remaining; }
     ObjectGuid current_cast_target() const { return s_->cast.current_cast_target; }
+    ObjectGuid current_cast_object() const { return s_->cast.current_cast_object; }
     uint32 last_cast_spell_id() const { return s_->cast.last_cast_spell_id; }
     bool   is_ready(uint32 spell_id) const;
     Ms     cd_remaining(uint32 spell_id) const;

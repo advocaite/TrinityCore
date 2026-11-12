@@ -7620,7 +7620,7 @@ Result API::gather_node(GameObject* obj)
         SkillType const skill = SkillByLockType(LockType(lock->Index[i]));
         if (skill != SKILL_HERBALISM && skill != SKILL_MINING)
             continue;
-        if (p_->GetSkillValue(skill) < lock->Skill[i])
+        if (p_->GetSkillValue(skill) == 0 || p_->GetSkillValue(skill) < lock->Skill[i])
             continue;
         uint32 const spell = OpenLockSpellFor(p_, lock->Index[i]);
         if (!spell)
@@ -7629,6 +7629,11 @@ Result API::gather_node(GameObject* obj)
             return Result::Locked;
         if (p_->IsMounted())
             p_->RemoveAurasByType(SPELL_AURA_MOUNTED);
+        // The cast has a cast time and the core refuses it while the bot moves (SPELL_FAILED_MOVING: 28 of 29 casts in r10 12 Nov,
+        // the bot still on the detour's spline as it reached the node). A player stops at the herb: the bot stands, its movers
+        // dropped so none re-splines it under the cast, and a walking flag left from the spline is cleared.
+        stop_movement(/*clear_generators*/ true);
+        ClearStaleMoveFlags(p_);
         if (!p_->HasInArc(static_cast<float>(M_PI), obj))
             p_->SetFacingToObject(obj, true);
         SpellCastResult const r = p_->CastSpell(obj, spell, false);
