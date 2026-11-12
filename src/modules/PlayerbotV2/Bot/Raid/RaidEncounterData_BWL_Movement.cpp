@@ -45,7 +45,11 @@ namespace Playerbot::Raid {
         r.avoidEnemy.push_back({ 12017, 22.0f, Who::Healer });
         // Nefarian (11583): Shadow Flame 22539 and Cleave 20691 to the front (classic_boss_nefarian.cpp:314,341). Tail Lash 23364 behind
         // him: melee stand at his sides.
-        r.avoidFrontal.push_back({ 11583, 25.0f, 55.0f, Who::NonTank });
+        // Shadow Flame reaches 45 yards (its spell data, printed on every death to it: "radius=45"), not the 25 the cone had: of 134 bots it
+        // killed in the Nefarian sweeps from 1109w to 0136-r8, 62 stood 25-46 y from him (12 of 22 in the 0136 sweeps), outside the
+        // cone the bots stepped out of (healers at their hold, casters at work, bots walking). 46 = the 45 and a step for his size. The
+        // drakes cast the same spell; their 24 y cone lost nobody to it in these sweeps, so it stays.
+        r.avoidFrontal.push_back({ 11583, 46.0f, 55.0f, Who::NonTank });
         r.avoidFrontal.push_back({ 11583, 20.0f, 45.0f, Who::NonTank, 180.0f });
         // His tank puts his front away from the raid: with no rule he faced whoever he walked at, and with no tank on him he walked into the
         // camp (bwl_nefarian 1110a run 1: Shadow Flame killed three casters standing on the camp 9 y in front of him, Cleave and his swings
