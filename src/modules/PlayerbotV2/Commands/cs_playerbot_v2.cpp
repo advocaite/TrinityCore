@@ -104,6 +104,8 @@
 #include "ConditionMgr.h"         // .playerbot visualprobe
 #include "Trainer.h"
 #include "TraitMgr.h"
+#include "TransmogrificationPackets.h"  // .playerbot transmogprobe
+#include "TransmogMgr.h"                // .playerbot transmogprobe
 #include "Containers.h"
 #include "MapUtils.h"
 #include "DB2Stores.h"
@@ -652,6 +654,7 @@ public:
             { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "collisionprobe", HandleCollisionProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "transmogprobe", HandleTransmogProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "langprobe",     HandleLangProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5519,6 +5522,104 @@ public:
                 *fromX, *fromY, *fromZ, found ? "found" : "NOT found", uint32(path.GetPathType()), uint32(points.size()), path.GetPathLength(), endDist,
                 end.x, end.y, end.z);
         }
+        return true;
+    }
+
+    // .playerbot transmogprobe <player>
+    // Checks where an outfit save lands (Player::UpdateTransmogOutfitSlots, what CMSG_TRANSMOG_OUTFIT_UPDATE_SLOTS calls). On the
+    // player's lowest outfit id, every stored slot is written once in reverse slot order (the 1.60 client does not send the slots
+    // sorted) with a test appearance id, each slot is read back at its own index, and the outfit is then written back as it was.
+    // A bot is the safe target: the test values are live for one world tick on whoever holds the outfit.
+    static bool HandleTransmogProbe(ChatHandler* handler, std::string name)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("transmogprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 outfitId = 0;
+        for (auto const& entry : p->m_activePlayerData->TransmogOutfits)
+            if (p->m_activePlayerData->TransmogOutfits.Get(entry.first) && (!outfitId || entry.first < outfitId))
+                outfitId = entry.first;
+
+        UF::TransmogOutfitData const* outfit = outfitId ? p->m_activePlayerData->TransmogOutfits.Get(outfitId) : nullptr;
+        if (!outfit || outfit->Slots.empty())
+        {
+            handler->PSendSysMessage("transmogprobe: %s has no outfit (%u outfits)", p->GetName().c_str(),
+                uint32(p->m_activePlayerData->TransmogOutfits.size()));
+            return true;
+        }
+
+        auto const toPacketSlot = [](UF::TransmogOutfitSlotData const& stored)
+        {
+            WorldPackets::Transmogrification::TransmogOutfitSlotData slot;
+            slot.Slot = static_cast<TransmogOutfitSlot>(*stored.Slot);
+            slot.SlotOption = static_cast<TransmogOutfitSlotOption>(*stored.SlotOption);
+            slot.SheatheCategory = static_cast<TransmogOutfitSlotOptionSheatheCategory>(*stored.SheatheCategory);
+            slot.AppearanceDisplayType = static_cast<TransmogOutfitDisplayType>(*stored.AppearanceDisplayType);
+            slot.IllusionDisplayType = static_cast<TransmogOutfitDisplayType>(*stored.IllusionDisplayType);
+            slot.ItemModifiedAppearanceID = *stored.ItemModifiedAppearanceID;
+            slot.SpellItemEnchantmentID = *stored.SpellItemEnchantmentID;
+            slot.Flags = *stored.Flags;
+            return slot;
+        };
+
+        std::vector<WorldPackets::Transmogrification::TransmogOutfitSlotData> original;
+        for (UF::TransmogOutfitSlotData const& stored : outfit->Slots)
+            original.push_back(toPacketSlot(stored));
+
+        // test values: slot i gets appearance 900000000 + i, sent from the last slot to the first
+        constexpr uint32 TestAppearanceBase = 900000000;
+        std::vector<WorldPackets::Transmogrification::TransmogOutfitSlotData> test;
+        for (std::size_t i = original.size(); i-- > 0;)
+        {
+            WorldPackets::Transmogrification::TransmogOutfitSlotData slot = original[i];
+            slot.ItemModifiedAppearanceID = TestAppearanceBase + uint32(i);
+            test.push_back(slot);
+        }
+
+        p->UpdateTransmogOutfitSlots(outfitId, test);
+
+        outfit = p->m_activePlayerData->TransmogOutfits.Get(outfitId);
+        uint32 inPlace = 0, misplaced = 0, unknownSlot = 0;
+        std::string wrong;
+        for (std::size_t i = 0; i < original.size(); ++i)
+        {
+            TransmogMgr::TransmogOutfitSlotAndOptionInfo const* slotInfo = TransmogMgr::GetSlotAndOption(original[i].Slot, original[i].SlotOption);
+            if (!slotInfo)
+            {
+                ++unknownSlot;
+                continue;
+            }
+
+            UF::TransmogOutfitSlotData const& stored = outfit->Slots[i];
+            bool const ok = slotInfo->SlotIndex == i && *stored.Slot == AsUnderlyingType(original[i].Slot)
+                && *stored.SlotOption == AsUnderlyingType(original[i].SlotOption) && *stored.ItemModifiedAppearanceID == TestAppearanceBase + uint32(i);
+            if (ok)
+                ++inPlace;
+            else
+            {
+                ++misplaced;
+                // int8/uint8 are widened so they print as numbers, not characters
+                wrong += Trinity::StringFormat(" [{}: slot {} option {} holds slot {} option {} appearance {}]", i, int32(AsUnderlyingType(original[i].Slot)),
+                    int32(AsUnderlyingType(original[i].SlotOption)), int32(*stored.Slot), int32(*stored.SlotOption), uint32(*stored.ItemModifiedAppearanceID));
+            }
+        }
+
+        p->UpdateTransmogOutfitSlots(outfitId, original);
+
+        outfit = p->m_activePlayerData->TransmogOutfits.Get(outfitId);
+        uint32 restored = 0;
+        for (std::size_t i = 0; i < original.size(); ++i)
+            if (*outfit->Slots[i].ItemModifiedAppearanceID == original[i].ItemModifiedAppearanceID)
+                ++restored;
+
+        handler->PSendSysMessage("transmogprobe: %s outfit %u, %u slots written last to first: %u at their own place, %u misplaced, "
+            "%u with no slot info; %u of %u put back -> %s%s", p->GetName().c_str(), outfitId, uint32(original.size()), inPlace, misplaced,
+            unknownSlot, restored, uint32(original.size()), misplaced || restored != original.size() ? "FAIL" : "PASS", wrong.c_str());
         return true;
     }
 
