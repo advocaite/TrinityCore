@@ -3315,6 +3315,12 @@ void ElectRetaunt(Election& e)
                     continue;
                 if ((pass == 0) != (m.p == plan.mainTank))
                     continue;
+                // A tank that cannot act gets no taunt order: the boss stays loose and the next tank never gets one either. zg_hakkar
+                // 0136-thekal: Cause Insanity charmed the main tank at 103 s; it was given the re-taunt every pass (its Taunt failed
+                // BAD_TARGETS, Hakkar being its friend while charmed), the off-tank stood idle, and Hakkar beat a shadow priest from
+                // 106 s until the charm ran out; he went loose on the same priest at 175 s and reset at 30% at 203 s.
+                if (m.p->IsCharmed() || m.p->HasUnitState(UNIT_STATE_CONTROLLED) || Controlled(m.p))
+                    continue;
                 for (Ranks const* family : { &kTaunt, &kGrowl })
                 {
                     uint32_t const id = KnownRank(m.p, *family);
