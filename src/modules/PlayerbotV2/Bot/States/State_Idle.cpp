@@ -20657,7 +20657,9 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
         // wander resumes when the moment passes.
         const bool chat_pause_active =
             s.published_at_ms() < ai.chat_pause_until_ms();
-        if (wander_allowed_by_rest && hp_above_engage_gate && !chat_pause_active)
+        // A follower in a small party of world bots goes where its leader goes (idle:party_follow, looked at every 1.5 s); a wander
+        // step in between walked it off on its own bearing, r10 12 Nov: 10 party_follow <> wander flips.
+        if (wander_allowed_by_rest && hp_above_engage_gate && !chat_pause_active && !V2::Parties::Following(s))
         {
             // Diagnostic: every wander fire snapshots WHY the higher-
             // priority rules cascaded down here. Throttled per-bot to
