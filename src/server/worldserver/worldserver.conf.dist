@@ -3968,6 +3968,15 @@ AuctionHouseBot.Vanilla.ValueCurve.Epic = 150
 AuctionHouseBot.Vanilla.ValueCurve.Scale = 1
 
 #
+#    AuctionHouseBot.Vanilla.ValueCurve.FullValueItemLevel
+#       Description: Below this item level the curve price is multiplied by (item level / this), so low-level goods
+#                    are cheaper than item level squared alone makes them. Example with 60: an item level 20 green
+#                    with Green = 20 is worth 20 x 20 x 20 x 20 / 60 copper (about 27 silver). Never below the vendor price.
+#       Default:     0 - (Disabled)
+
+AuctionHouseBot.Vanilla.ValueCurve.FullValueItemLevel = 0
+
+#
 #    AuctionHouseBot.Alliance.Items.Amount.Ratio
 #       Description: Enable/Disable (disabled if 0) the part of AHBot that puts items up for auction on Alliance AH
 #       Default:     100 - (Enabled with 100% of items specified in AuctionHouse.Items.Amount.color section)
