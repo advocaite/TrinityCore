@@ -1,6 +1,11 @@
 # ForeverCore
 
-A server for the **WoW Forever client (Classic 1.60.1, build 70862)**, based on TrinityCore.
+### [Download latest launcher](https://github.com/Karrz1/Karrz-playerbots-wow-forever/releases/latest/download/WoWForeverLauncher.exe)
+
+Built ForeverCore yourself, or joining a friend? Put `WoWForeverLauncher.exe` in any folder, start it, pick join and
+enter the server's address. Send the same link to friends who want to join.
+
+A server for the **WoW Forever client (Classic 1.60.1, build 70888)**, based on TrinityCore.
 
 - Blizzlike: it plays like Blizzard's realms. Fixes come from real game data or fix the server itself.
 - No custom items, quests or rates. Every option starts at Blizzard's setting.
@@ -8,8 +13,7 @@ A server for the **WoW Forever client (Classic 1.60.1, build 70862)**, based on 
 
 **Want to play?** Download the Windows repack from the
 [latest release](https://github.com/Karrz1/Karrz-playerbots-wow-forever/releases/latest) (the
-`WoW-Forever-Bots-<version>.zip` file). You turn bots on or off when you start it. The launcher updates itself from
-[its own releases](https://github.com/Karrz1/foreverlauncher-releases/releases).
+`WoW-Forever-Bots-<version>.zip` file). You turn bots on or off when you start it.
 
 ## Build it with us
 
