@@ -1838,10 +1838,19 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
         static std::unordered_map<BotId, uint32> cast_since;
         static std::unordered_map<BotId, uint32> stale_logged_ms;
         static uint32 cast_lines = 0;
+        static uint32 cast_window_ms = 0;
+        constexpr uint32 kCastLinesPerWindow = 6000;
         if (total - last_cast_check >= std::chrono::milliseconds(500))
         {
             last_cast_check = total;
             uint32 const now_ms = GameTime::GetGameTimeMS();
+            // The line budget is per 5 minutes, not per server run: 1,500 for the whole run were spent 145 s into a raid sweep's first
+            // fight (bwl_nefarian 0136-r9: all 1,499 lines in run 1, none in runs 2 and 3), so the end of a fight never showed what the casters cast (Nefarian's phase 3). A 40-man raid in a fight logs about 600 lines a minute.
+            if (now_ms - cast_window_ms >= 300000u)
+            {
+                cast_window_ms = now_ms;
+                cast_lines = 0;
+            }
             Services::Registry().for_each([&](BotId id, BotRegistryEntry const& e)
             {
                 if (!e.ai) return;
@@ -1854,7 +1863,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
                 if (seen != now_spell)
                 {
                     cast_since[id] = now_ms;
-                    if (cast_lines < 1500)
+                    if (cast_lines < kCastLinesPerWindow)
                     {
                         ++cast_lines;
                         TC_LOG_INFO("playerbot.v2", "[cast_state] {} spell {} -> {} ({}) casting_state={} mounted={} combat={}", p->GetName(), seen, now_spell,
@@ -1862,7 +1871,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
                     }
                     seen = now_spell;
                 }
-                else if (now_spell && cast_since[id] && now_ms - cast_since[id] >= 8000u && cast_lines < 1500)
+                else if (now_spell && cast_since[id] && now_ms - cast_since[id] >= 8000u && cast_lines < kCastLinesPerWindow)
                 {
                     // One cast that has been the current spell for 8 s or more: a cast bar that is not filling.
                     ++cast_lines;
