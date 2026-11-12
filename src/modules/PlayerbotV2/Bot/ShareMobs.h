@@ -49,6 +49,16 @@ inline bool LeaveElite(BotSnapshotView const& s, NearbyUnit const& u)
     return u.is_elite_or_rare && Applies(s);
 }
 
+// LeaveElite for a mob that is not on this bot or its pet: one that attacks the bot is fought back, one that is fighting somebody else
+// - a hunter taming a rare beast - is not the bot's to finish. For the pickers that look past the idle grind pick: the path-threat pull
+// and the in-combat last-ditch target (fox4039, Discord 12 Nov: world bots kept killing the rare beasts hunters came to tame).
+inline bool LeaveIdleElite(BotSnapshotView const& s, NearbyUnit const& u)
+{
+    if (!LeaveElite(s, u))
+        return false;
+    return u.victim != s.guid() && (s.pet_guid().IsEmpty() || u.victim != s.pet_guid());
+}
+
 // A grind spot a real player is standing in: pick another.
 inline bool SpotTaken(BotSnapshotView const& s, float x, float y)
 {

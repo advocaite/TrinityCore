@@ -19,6 +19,7 @@
 #include "World.h"
 #include "SpellFamily.h"
 #include "GroupControl.h"
+#include "ShareMobs.h"
 
 namespace Playerbot {
 
@@ -687,6 +688,8 @@ NearbyUnit const* BotSnapshotView::path_threat(float tx, float ty,
         // tick faster than combat:disengage_no_progress can shake it). Pacified
         // is the robust catch for dummies that lack the NO_XP flag in data.
         if (u.no_xp_kill || u.is_pacified)           continue;
+        // A bot of the world opens on no elite or rare (ShareMobs::LeaveElite): not by pulling it off its path either.
+        if (V2::ShareMobs::LeaveIdleElite(*this, u)) continue;
         if (!exclude_guid.IsEmpty() && u.guid == exclude_guid) continue;
         // Grey-con mobs don't aggro and don't threaten — ignore.
         // TC's aggro line: a creature with level + 5 < attacker.level

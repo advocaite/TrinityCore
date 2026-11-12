@@ -39,6 +39,7 @@ struct Stranger
     std::uint8_t attacker_hp_pct = 0;
     bool pvp_flagged = false;          // flagged for PvP (or free-for-all): a heal would flag an unflagged healer
     bool pvp_fight = false;            // fighting a player or a player's pet, or in a duel: no stranger steps into that
+    bool taming = false;               // a hunter channelling Tame Beast: the beast hitting him is to be his pet, no stranger kills it
 };
 
 enum class Kind : std::uint8_t { Buff, Help, Rez, Heal };   // two bits of the cooldown key
@@ -74,7 +75,7 @@ inline Stranger const* PickHelpTarget(std::vector<Stranger> const& list, std::ui
     Stranger const* best = nullptr;
     for (Stranger const& p : list)
     {
-        if (!p.alive || !p.attacker || p.hp_pct > hp_pct) continue;
+        if (!p.alive || !p.attacker || p.hp_pct > hp_pct || p.taming) continue;
         if (p.attacker_level > bot_level + level_over) continue;
         if (!Reachable(p, map, alliance, bot_group, bx, by, range)) continue;
         if (!best || p.hp_pct < best->hp_pct) best = &p;

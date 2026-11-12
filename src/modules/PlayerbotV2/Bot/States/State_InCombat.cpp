@@ -28,6 +28,7 @@
 #include "Bot/Battleground/BgTactics.h"       // BgTargetPick::Pick — combat:bg_victim_invalid
 #include "Bot/Battleground/BattlegroundScript.h" // BattlegroundAdvice — BgCarrierHomeward (BUG BG-P0a)
 #include "Bot/States/MaintainHelpers.h"          // DungeonCombatPositioning / BgCarrierHomeward
+#include "Bot/ShareMobs.h"                      // LeaveIdleElite: the last-ditch target
 #include "Group/GroupSnapshot.h"
 #include "Combat/ApRegistry.h"
 #include "Combat/ApRotation.h"
@@ -5071,6 +5072,8 @@ void DispatchInCombat(BotAI& ai,
         auto skip_target = [&](NearbyUnit const& u) -> bool
         {
             if (u.no_xp_kill || u.is_pacified || (shield_on && u.guid == shielded))
+                return true;
+            if (V2::ShareMobs::LeaveIdleElite(snapshot, u))   // a bot of the world opens on no elite or rare that is not on it
                 return true;
             if (group_pull_discipline && !fights_group(u))
             {

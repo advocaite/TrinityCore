@@ -384,7 +384,9 @@ Playerbot.World.Kindness.HelpCooldownSec = 180
 
 # Leave real players their mobs: a world bot (no owner, not led by a player) does not open on a mob within CampRadius yards of a real
 # player it is not grouped with, nor, while that player is within QuestRadius yards, on a mob his open kill or collect quests need. It
-# also skips a grind spot a player stands in. Mobs that attack the bot are still fought. Counters in the [world] line (share_mobs).
+# also skips a grind spot a player stands in. It opens on no elite or rare at all (rare beasts stay for hunters to tame), not even
+# one in its path, and does not come to finish one that is fighting somebody else. Mobs that attack the bot are still fought.
+# The kindness help above never comes against the beast a hunter is taming. Counters in the [world] line (share_mobs).
 # Enable = 0 switches it off.
 Playerbot.World.ShareMobs.Enable = 1
 Playerbot.World.ShareMobs.CampRadius = 35

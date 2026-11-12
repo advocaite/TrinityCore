@@ -14,6 +14,7 @@
 #include "../Bot/BotChatModel.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"
+#include "Spell.h"
 #include "StrangerBoard.h"
 #include "SpellAuras.h"
 #include "../Bot/SpellFamily.h"
@@ -698,6 +699,12 @@ void WorldBotSpawner::PublishStrangers()
         st.has_mana = p->GetMaxPower(POWER_MANA) > 0;
         st.pvp_flagged = p->IsPvP() || p->IsFFAPvP();
         st.pvp_fight = p->duel != nullptr;
+        // Tame Beast (1515, and the Classic rune copy 411631) is a 20 s channel whose periodic aura ends in 13535 (the taming itself).
+        // The beast fights the hunter all the while and his health drops: the kindness rule used to come and kill it (Discord 12 Nov).
+        if (Spell const* channel = p->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+            for (SpellEffectInfo const& eff : channel->GetSpellInfo()->GetEffects())
+                if (eff.TriggerSpell == 13535)
+                    st.taming = true;
         for (auto const& [spell, app] : p->GetAppliedAuras())
         {
             if (!app || !app->IsPositive()) continue;
