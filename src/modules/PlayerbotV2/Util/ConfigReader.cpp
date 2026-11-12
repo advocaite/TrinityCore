@@ -187,6 +187,7 @@ void ConfigReader::apply_from_loaded_config()
     bhv_pull_back_            = c.GetBoolDefault("Playerbot.Behavior.PullBack", true, true);
     bhv_tank_ranged_weapon_   = c.GetBoolDefault("Playerbot.Behavior.TankRangedWeapon", true, true);
     bhv_ammo_supply_          = c.GetBoolDefault("Playerbot.Behavior.AmmoSupply", true, true);
+    bhv_sell_outclassed_gear_ = c.GetBoolDefault("Playerbot.Behavior.SellOutclassedGear", true, true);
     bhv_raid_gear_            = c.GetBoolDefault("Playerbot.Behavior.RaidGear", true, true);
     gear_raid_enchants_       = c.GetBoolDefault("Playerbot.Gear.RaidEnchants", true, true);
     bhv_accept_owner_trade_   = c.GetBoolDefault("Playerbot.Behavior.AcceptOwnerTrade", true, true);

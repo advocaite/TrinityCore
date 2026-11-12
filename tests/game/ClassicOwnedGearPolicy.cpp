@@ -18,6 +18,7 @@
 #include "tc_catch2.h"
 
 #include "../../src/modules/PlayerbotV2/Bot/Gear/OwnedGearPolicy.h"
+#include "../../src/modules/PlayerbotV2/Api/OutclassedGear.h"
 
 using namespace Playerbot::V2::Gear::Owned;
 
@@ -156,4 +157,39 @@ TEST_CASE("The gear refresh key also changes with the owner's mode", "[ClassicOw
 {
     CHECK(RefreshKey(60, 0, GearMode::Match) != RefreshKey(60, 0, GearMode::T3));
     CHECK(RefreshKey(60, 0, GearMode::T3) == RefreshKey(60, 0, GearMode::T3));
+}
+
+TEST_CASE("A bag piece is sold only when every slot it fits holds a clearly better piece of its kind", "[ClassicOwnedGearPolicy]")
+{
+    using Playerbot::Gear::IsOutclassed;
+    using Playerbot::Gear::WornInSlot;
+    WornInSlot const better{ false, true, 200, 20 };
+    WornInSlot const close{ false, true, 104, 20 };       // under 5 % better: a close call keeps it
+    WornInSlot const lower_ilvl{ false, true, 200, 9 };   // scores higher but is a lower item level
+    WornInSlot const empty{};
+    WornInSlot const other_kind{ false, false, 500, 30 }; // a two-hander against a one-hander
+
+    WornInSlot one[] = { better };
+    CHECK(IsOutclassed(100, 10, one, 1));
+    WornInSlot c[] = { close };
+    CHECK_FALSE(IsOutclassed(100, 10, c, 1));
+    WornInSlot l[] = { lower_ilvl };
+    CHECK_FALSE(IsOutclassed(100, 10, l, 1));
+    WornInSlot e[] = { empty };
+    CHECK_FALSE(IsOutclassed(100, 10, e, 1));             // an empty slot: the piece is a gain
+    WornInSlot k[] = { other_kind };
+    CHECK_FALSE(IsOutclassed(100, 10, k, 1));
+    // Rings and trinkets: both slots must hold better pieces.
+    WornInSlot rings[] = { better, empty };
+    CHECK_FALSE(IsOutclassed(100, 10, rings, 2));
+    WornInSlot rings2[] = { better, better };
+    CHECK(IsOutclassed(100, 10, rings2, 2));
+    // A piece the bot cannot wear, or no slot at all, is not this rule's business.
+    CHECK_FALSE(IsOutclassed(-1000, 10, one, 1));
+    CHECK_FALSE(IsOutclassed(100, 10, one, 0));
+    // Small scores: at least 2 points better.
+    WornInSlot small1[] = { WornInSlot{ false, true, 11, 5 } };
+    CHECK_FALSE(IsOutclassed(10, 5, small1, 1));
+    WornInSlot small2[] = { WornInSlot{ false, true, 12, 5 } };
+    CHECK(IsOutclassed(10, 5, small2, 1));
 }

@@ -337,6 +337,8 @@ public:
     bool behavior_pull_back()           const { return bhv_pull_back_; }
     bool behavior_tank_ranged_weapon()  const { return bhv_tank_ranged_weapon_; }
     bool behavior_ammo_supply()         const { return bhv_ammo_supply_; }
+    // Playerbot.Behavior.SellOutclassedGear: a vendor visit also sells soulbound gear the bot has outgrown (Api/OutclassedGear.h).
+    bool behavior_sell_outclassed_gear() const { return bhv_sell_outclassed_gear_; }
     bool behavior_raid_gear()           const { return bhv_raid_gear_; }
     bool gear_raid_enchants()           const { return gear_raid_enchants_; }
     bool behavior_accept_owner_trade()  const { return bhv_accept_owner_trade_; }
@@ -686,6 +688,7 @@ private:
     bool   bhv_pull_back_            = true;
     bool   bhv_tank_ranged_weapon_   = true;
     bool   bhv_ammo_supply_          = true;
+    bool   bhv_sell_outclassed_gear_ = true;
     bool   bhv_raid_gear_            = true;
     bool   gear_raid_enchants_       = true;
     bool   bhv_accept_owner_trade_   = true;

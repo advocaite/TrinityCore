@@ -791,6 +791,12 @@ Playerbot.DamageParity.AllLegs = 0
 #                     is pointed at them, whenever the stock drops under 30% (1000 = 300). Out of combat, bots only,
 #                     5 min between tries. Hunter pet food is untouched. Off: nothing restocks ammo.
 Playerbot.Behavior.AmmoSupply = 1
+#   SellOutclassedGear  a vendor visit (and the bag clearing a bot does with no vendor near) also sells soulbound weapons and armor
+#                     the bot has outgrown: every slot the piece could go in already holds one of the same kind that scores at
+#                     least 5% higher for its class and spec and has at least its item level. Never epics, quest or account-bound
+#                     pieces, a piece still tradeable to the group, shirts, tabards, or anything while resistance gear is worn or
+#                     inside an instance. Off: such pieces stay in the bags (greys and unusable soulbound pieces are sold as before).
+Playerbot.Behavior.SellOutclassedGear = 1
 Playerbot.Behavior.Formation = 1
 Playerbot.Behavior.DistanceOrder = 1
 Playerbot.Behavior.OwnerMainTank = 1

@@ -24,6 +24,9 @@
 #include "Bot/Raid/ShieldRules.h"
 #include "Diagnostics/DamageParity.h"
 #include "BotItemScorer.h"
+#include "OutclassedGear.h"
+#include "Bot/BotAI.h"
+#include "Bot/BotRegistry.h"
 #include "Player.h"
 #include "Corpse.h"
 #include "Log.h"
@@ -6344,6 +6347,111 @@ static bool BotShouldVendorBoeGreen(Player* p, Item* it, ItemTemplate const* tmp
     return true;
 }
 
+// The kind of piece an inventory type is, for comparing a bag piece with a worn one (OutclassedGear.h): a two-hander is not
+// compared with a one-hander, a shield not with an off-hand weapon, a relic not with a bow.
+static int OutclassKind(uint32 inv_type)
+{
+    switch (inv_type)
+    {
+        case INVTYPE_2HWEAPON:                                   return 1;
+        case INVTYPE_WEAPON: case INVTYPE_WEAPONMAINHAND:
+        case INVTYPE_WEAPONOFFHAND:                              return 2;
+        case INVTYPE_SHIELD:                                     return 3;
+        case INVTYPE_HOLDABLE:                                   return 4;
+        case INVTYPE_RANGED: case INVTYPE_RANGEDRIGHT:
+        case INVTYPE_THROWN:                                     return 5;
+        case INVTYPE_RELIC:                                      return 6;
+        case INVTYPE_CHEST: case INVTYPE_ROBE:                   return 7;
+        default:                                                 return 100 + int(inv_type);
+    }
+}
+
+// A soulbound piece in the bags that what the bot wears outclasses in every slot it could go in (Api/OutclassedGear.h). Never a
+// piece a group mate could still be handed (the loot trade window), a quest item, an heirloom or account-bound piece, an epic,
+// a shirt or a tabard; never while raid resistance gear or the Onyxia cloak is worn (the own pieces wait in the bags then) or in
+// an instance. Playerbot.Behavior.SellOutclassedGear.
+static bool BotOutclassedBagGear(Player* p, Item* it, ItemTemplate const* tmpl)
+{
+    if (!p || !it || !tmpl || !Services::Config().behavior_sell_outclassed_gear())
+        return false;
+    uint32 const cls = tmpl->GetClass();
+    if (cls != ITEM_CLASS_WEAPON && cls != ITEM_CLASS_ARMOR)
+        return false;
+    if (!it->IsSoulBound() || it->IsBOPTradeable() || it->IsRefundable())
+        return false;
+    uint32 const quality = tmpl->GetQuality();
+    if (quality > ITEM_QUALITY_RARE || quality == ITEM_QUALITY_POOR)
+        return false;
+    uint32 const bonding = tmpl->GetBonding();
+    if (bonding == BIND_QUEST || bonding == BIND_BNET_ACCOUNT || bonding == BIND_BNET_ACCOUNT_UNTIL_EQUIPPED ||
+        bonding == BIND_WOW_ACCOUNT || tmpl->GetStartQuest() != 0)
+        return false;
+    uint32 const inv = tmpl->GetInventoryType();
+    if (inv == INVTYPE_BODY || inv == INVTYPE_TABARD || inv == INVTYPE_NON_EQUIP || inv == INVTYPE_BAG)
+        return false;
+    if (p->GetMap() && p->GetMap()->Instanceable())
+        return false;
+    if (BotAI const* ai = Services::Registry().ai(p->GetGUID().GetCounter()))
+        if (ai->resist_gear_school() != 0 || ai->fight_cloak())
+            return false;
+    if (p->CanUseItem(tmpl) != EQUIP_ERR_OK)
+        return false;   // cannot wear it: IsBagRot's own soulbound branch
+
+    // The slots it could go in, as Player::FindEquipSlot lists them.
+    uint8 slots[2] = { NULL_SLOT, NULL_SLOT };
+    switch (inv)
+    {
+        case INVTYPE_HEAD:      slots[0] = EQUIPMENT_SLOT_HEAD; break;
+        case INVTYPE_NECK:      slots[0] = EQUIPMENT_SLOT_NECK; break;
+        case INVTYPE_SHOULDERS: slots[0] = EQUIPMENT_SLOT_SHOULDERS; break;
+        case INVTYPE_CHEST:
+        case INVTYPE_ROBE:      slots[0] = EQUIPMENT_SLOT_CHEST; break;
+        case INVTYPE_WAIST:     slots[0] = EQUIPMENT_SLOT_WAIST; break;
+        case INVTYPE_LEGS:      slots[0] = EQUIPMENT_SLOT_LEGS; break;
+        case INVTYPE_FEET:      slots[0] = EQUIPMENT_SLOT_FEET; break;
+        case INVTYPE_WRISTS:    slots[0] = EQUIPMENT_SLOT_WRISTS; break;
+        case INVTYPE_HANDS:     slots[0] = EQUIPMENT_SLOT_HANDS; break;
+        case INVTYPE_FINGER:    slots[0] = EQUIPMENT_SLOT_FINGER1; slots[1] = EQUIPMENT_SLOT_FINGER2; break;
+        case INVTYPE_TRINKET:   slots[0] = EQUIPMENT_SLOT_TRINKET1; slots[1] = EQUIPMENT_SLOT_TRINKET2; break;
+        case INVTYPE_CLOAK:     slots[0] = EQUIPMENT_SLOT_BACK; break;
+        case INVTYPE_WEAPON:
+            slots[0] = EQUIPMENT_SLOT_MAINHAND;
+            if (p->CanDualWield())
+                slots[1] = EQUIPMENT_SLOT_OFFHAND;
+            break;
+        case INVTYPE_2HWEAPON:
+        case INVTYPE_WEAPONMAINHAND: slots[0] = EQUIPMENT_SLOT_MAINHAND; break;
+        case INVTYPE_WEAPONOFFHAND:
+        case INVTYPE_SHIELD:
+        case INVTYPE_HOLDABLE:  slots[0] = EQUIPMENT_SLOT_OFFHAND; break;
+        case INVTYPE_RANGED:
+        case INVTYPE_RANGEDRIGHT:
+        case INVTYPE_THROWN:
+        case INVTYPE_RELIC:     slots[0] = EQUIPMENT_SLOT_RANGED; break;
+        default:                return false;
+    }
+
+    int const kind = OutclassKind(inv);
+    Gear::WornInSlot worn[2];
+    size_t n = 0;
+    for (uint8 slot : slots)
+    {
+        if (slot == NULL_SLOT)
+            continue;
+        Gear::WornInSlot& w = worn[n++];
+        Item const* cur = p->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        ItemTemplate const* ct = cur ? cur->GetTemplate() : nullptr;
+        if (!ct)
+            continue;   // empty: the bag piece would be a gain
+        w.empty = false;
+        // A worn one-hander (or off-hand weapon) is the same kind as a bag one-hander in either hand.
+        w.same_kind = OutclassKind(ct->GetInventoryType()) == kind;
+        w.score = Gear::ScoreItemForBot(ct, p);
+        w.item_level = cur->GetItemLevel(p);
+    }
+    return Gear::IsOutclassed(Gear::ScoreItemForBot(tmpl, p), it->GetItemLevel(p), worn, n);
+}
+
 // Bag rot: what a bot sells at a vendor, and what it clears for room when no vendor is near (API::make_room).
 // Greys, trade goods for a profession the bot lacks, soulbound gear it cannot wear and, when bags are tight, outgrown BoE greens.
 static bool IsBagRot(Player* p, Item* it, ItemTemplate const* tmpl, bool bags_tight)
@@ -6398,6 +6506,11 @@ static bool IsBagRot(Player* p, Item* it, ItemTemplate const* tmpl, bool bags_ti
     // for items BotShouldVendorBoeGreen clears (all upgrade / quest /
     // heirloom / account-bound protections enforced inside).
     else if (bags_tight && BotShouldVendorBoeGreen(p, it, tmpl))
+    {
+        return true;
+    }
+    // (5) Soulbound gear the bot has outgrown: what it wears beats it in every slot it could go in (BotOutclassedBagGear).
+    else if (BotOutclassedBagGear(p, it, tmpl))
     {
         return true;
     }
