@@ -4639,11 +4639,18 @@ public:
                 for (::Playerbot::Classic::TalentSlot const& slot : tab)
                     slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
             }
-            TCode::Error const error = !parsed.ok() ? parsed.error : TCode::Validate(parsed, layout).error;
-            if (error != TCode::Error::None || (parsed.cls && parsed.cls != p->GetClass()))
+            // The same checks in the same order as the whisper: the code itself, the link's class, then the fit on the class's tabs.
+            if (parsed.ok() && parsed.cls && parsed.cls != p->GetClass())
             {
-                handler->PSendSysMessage("talentcode: refused (error %u, link class %u, bot class %u): %s", uint32(error), uint32(parsed.cls),
-                    uint32(p->GetClass()), std::string(TCode::ErrorText(error)).c_str());
+                handler->PSendSysMessage("talentcode: refused (wrong class: link class %u, bot class %u): that link is for a %s, I'm a %s",
+                    uint32(parsed.cls), uint32(p->GetClass()), std::string(TCode::SlugOfClass(parsed.cls)).c_str(),
+                    std::string(TCode::SlugOfClass(p->GetClass())).c_str());
+                return false;
+            }
+            TCode::Error const error = !parsed.ok() ? parsed.error : TCode::Validate(parsed, layout).error;
+            if (error != TCode::Error::None)
+            {
+                handler->PSendSysMessage("talentcode: refused (error %u): %s", uint32(error), std::string(TCode::ErrorText(error)).c_str());
                 return false;
             }
             ::Playerbot::Classic::SetTalentCode(p->GetGUID(), TCode::Encode(parsed.tabs));
