@@ -4110,7 +4110,51 @@ Result API::stop_attack(bool clear_ghost_combat)
     // gating) stop reading a fight that doesn't exist. Guarded on the
     // attacker list so a bot in a REAL fight can never combat-drop: with
     // live attackers their refs re-establish combat instantly anyway.
-    if (clear_ghost_combat && p_->getAttackers().empty() && p_->IsInCombat())
+    // A creature the bot is in combat with that is alive and still has the bot, a group member or one of their pets as its victim is a
+    // running fight, even while it cannot be attacked: the bot's scan of the fight lists attackable enemies only. zg_thekal 0136-1: at
+    // 1% Thekal, Lor'Khan and Zath feign death (uninteractible, lying dead, still in combat with the raid), the scan found nobody fighting
+    // the group, and 17 of 20 raiders dropped their combat with the trio 1 s later, 134 times each over 25 min. The trio never rose
+    // as Thekal's tiger, and the raid stood at the trio's corpses until the scenario timed out (the 0134 pass ran into the same clear
+    // but lived).
+    Unit* fightStillOn = nullptr;
+    Unit* fightVictim = nullptr;
+    if (clear_ghost_combat && p_->IsInCombat())
+        for (auto const& [guid, ref] : p_->GetCombatManager().GetPvECombatRefs())
+        {
+            Unit* const other = ref->GetOther(p_);
+            Unit* const victim = other && other->IsAlive() ? other->GetVictim() : nullptr;
+            if (!victim)
+                continue;
+            Player* const victimPlayer = victim->GetCharmerOrOwnerPlayerOrPlayerItself();
+            if (victimPlayer && (victimPlayer == p_ || p_->IsInSameRaidWith(victimPlayer)))
+            {
+                fightStillOn = other;
+                fightVictim = victim;
+                break;
+            }
+        }
+    if (fightStillOn)
+    {
+        static std::mutex sMutex;
+        static std::unordered_map<uint64, uint32> sLast;
+        uint32 const now = getMSTime();
+        bool log = false;
+        {
+            std::lock_guard<std::mutex> lock(sMutex);
+            if (sLast.size() > 4096)
+                sLast.clear();
+            uint32& last = sLast[p_->GetGUID().GetCounter()];
+            if (!last || now - last >= 10000u)
+            {
+                last = now ? now : 1u;
+                log = true;
+            }
+        }
+        if (log)
+            TC_LOG_INFO("playerbot.v2", "[ghost_combat] {} keeps its combat: {} ({}) is alive and fights {}{}", p_->GetName(), fightStillOn->GetName(),
+                fightStillOn->GetEntry(), fightVictim->GetName(), p_->IsValidAttackTarget(fightStillOn) ? "" : " (cannot be attacked now)");
+    }
+    else if (clear_ghost_combat && p_->getAttackers().empty() && p_->IsInCombat())
     {
         TC_LOG_INFO("playerbot.v2",
             "[ghost_combat] {} clearing wedged combat state (no victim, no attackers)",
