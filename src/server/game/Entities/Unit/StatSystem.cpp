@@ -1343,8 +1343,9 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
     float dmgMultiplier    = GetCreatureDifficulty()->DamageModifier; // = DamageModifier * GetDamageMod(rank);
 
     // Classic 1.60 (vanilla): the VMaNGOS hit of the creature, per hit whatever its swing time (the client's damage per second table and the
-    // old damage modifiers are 0-60% off per creature, and scale the hit with the swing)
-    if (attType != RANGED_ATTACK && !IsPet() && !IsGuardian())
+    // old damage modifiers are 0-60% off per creature, and scale the hit with the swing). A spawn with its own level
+    // (creature_classic_level_spawn) is not at the vanilla level that hit belongs to: it hits for its class and level below.
+    if (attType != RANGED_ATTACK && !IsPet() && !IsGuardian() && !sObjectMgr->GetCreatureClassicSpawnLevel(GetSpawnId()))
         if (ObjectMgr::CreatureClassicMelee const* classic = sObjectMgr->GetCreatureClassicMelee(GetEntry()); classic && classic->DamageMax > 0.0f)
         {
             float const mainHand = CanUseAttackType(attType) ? 1.0f : 0.0f;

@@ -1097,6 +1097,8 @@ class TC_GAME_API ObjectMgr
         CreatureModelInfo const* GetCreatureModelRandomGender(CreatureModel* model, CreatureTemplate const* creatureTemplate) const;
         CreatureSummonedData const* GetCreatureSummonedData(uint32 entryId) const;
         std::pair<uint8, uint8> const* GetCreatureClassicLevel(uint32 entry) const;
+        // Classic 1.60: level range of one spawn, for an entry that Forever also placed somewhere else at another level; nullptr when none
+        std::pair<uint8, uint8> const* GetCreatureClassicSpawnLevel(ObjectGuid::LowType spawnId) const;
         ClassicCreatureStats const* GetCreatureClassicStats(uint32 entry) const;
         ClassicCreatureClassLevelStats const* GetCreatureClassicClassLevelStats(uint8 level, uint8 unitClass) const;
         int8 const* GetSpellClassicSummonLevelOffset(uint32 spellId) const;
@@ -1283,6 +1285,7 @@ class TC_GAME_API ObjectMgr
         void LoadCreatureTemplates();
         void LoadCreatureClassicLevels();
         void LoadCreatureClassicMelee();
+        void LoadCreatureClassicSpawnLevels();
         // Classic 1.60: vanilla (VMaNGOS) melee hit and swing time of a creature, nullptr when it has none
         struct CreatureClassicMelee
         {
@@ -1896,6 +1899,7 @@ class TC_GAME_API ObjectMgr
         CreatureDataContainer _creatureDataStore;
         CreatureTemplateContainer _creatureTemplateStore;
         std::unordered_map<uint32, std::pair<uint8, uint8>> _creatureClassicLevelStore;
+        std::unordered_map<ObjectGuid::LowType, std::pair<uint8, uint8>> _creatureClassicSpawnLevelStore;
         std::unordered_map<uint32, ClassicCreatureStats> _creatureClassicStatsStore;
         std::unordered_map<uint16, ClassicCreatureClassLevelStats> _creatureClassicClassLevelStatsStore;
         std::unordered_map<uint32, int8> _spellClassicSummonLevelOffsetStore;
