@@ -217,10 +217,24 @@ std::vector<std::string> AcceptAll(Player* sender, Player* bot, std::string_view
         ++taken;
     }
 
-    // Offers of the NPCs next to me (the snapshot's own can-take filter), one named quest or all.
+    // Offers of the NPCs and quest objects next to me (the snapshot's own can-take filter), one named quest or all.
     std::string_view const a = Trim(arg);
     uint32 const want = (a.empty() || a == "all" || a == "*") ? 0 : ExtractQuestId(a);
     std::string const needle = (a.empty() || a == "all" || a == "*" || want) ? std::string{} : TitleNeedle(a);
+
+    // Quests that start from an item in my bags (a dropped letter, a head, a wanted note): taken from the item at once, as a
+    // player does with a right click. The bot's own idle:quest_start_item does this too, a few seconds later.
+    for (auto const& si : snap->quest_discovery.quest_starting_items)
+    {
+        if (taken >= kMaxAcceptPerOrder) break;
+        if (si.item_guid.IsEmpty()) continue;
+        if (want && si.quest_id != want) continue;
+        if (!needle.empty() && Lower(CompanionQuest::QuestLabel(si.quest_id)).find(needle) == std::string::npos) continue;
+        emit.accept_quest(si.item_guid, si.quest_id, sender ? sender->GetGUID() : ObjectGuid::Empty);
+        LogOrder(bot, "accept from item", si.quest_id);
+        out.push_back(fmt::format("Starting from an item in my bags: {}", CompanionQuest::QuestLabel(si.quest_id)));
+        ++taken;
+    }
     for (auto const& off : snap->quest_discovery.quest_offers)
     {
         if (taken >= kMaxAcceptPerOrder) break;

@@ -1364,8 +1364,12 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
             auto snap = Services::Snapshots().latest(id);
             bool offered = false;
             if (snap)
+            {
                 for (auto const& off : snap->quest_discovery.quest_offers)
                     offered = offered || off.quest_id == a.quest;
+                for (auto const& si : snap->quest_discovery.quest_starting_items)   // an item in my bags starts it
+                    offered = offered || si.quest_id == a.quest;
+            }
             if (!offered)
             {
                 QuestRefusal const why = API(bot).why_cant_take_quest(a.quest);

@@ -252,6 +252,8 @@ TEST_CASE("BotLocale: why a quest accept was refused", "[BotLocale]")
         CHECK(ru.Knows(s));
     }
     CHECK(ru.Knows("The quest share ran out before I could take it."));
+    CHECK(Translate(Lang::Ru, "Starting from an item in my bags: An Undelivered Letter")
+          == "Беру задание от предмета в сумке: An Undelivered Letter");
 }
 
 TEST_CASE("BotLocale: unknown lines come back in English", "[BotLocale]")

@@ -383,6 +383,7 @@ std::vector<Catalog::Entry> const& RussianEntries()
         { "I can't take quests right now.", "Сейчас я не могу брать задания." },
         { "Taking the shared quest: {}", "Беру общее задание: {}" },
         { "Accepting: {}", "Беру задание: {}" },
+        { "Starting from an item in my bags: {}", "Беру задание от предмета в сумке: {}" },
         { "Nothing on offer right here; I'll pick up what the quest givers near us have for the next 45 seconds.",
           "Здесь заданий нет; следующие 45 секунд беру то, что дадут ближайшие NPC с заданиями." },
         { "That quest isn't on offer from anyone next to me.", "Это задание никто рядом со мной не дает." },

@@ -2997,6 +2997,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                             BotSnapshot::StartingItem si{};
                             si.item_entry = ii.entry;
                             si.quest_id   = start_qid;
+                            si.item_guid  = item->GetGUID();
                             snap->quest_discovery.quest_starting_items.push_back(si);
                         }
                     }

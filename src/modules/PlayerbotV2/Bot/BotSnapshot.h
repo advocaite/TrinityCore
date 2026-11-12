@@ -1112,7 +1112,8 @@ struct PositionState
 // In The World") are never accepted and gate the whole racial starter chain.
 struct QuestTurnIn { ObjectGuid giver; uint32 quest_id; bool auto_accept = false; };
 // Bag-item that starts a not-yet-accepted quest.
-struct StartingItem { uint32 item_entry; uint32 quest_id; };
+// item_guid: the item in the bags, the quest giver an accept names (API::accept_quest takes a quest from an item as from an NPC).
+struct StartingItem { uint32 item_entry; uint32 quest_id; ObjectGuid item_guid; };
 // World quest discovery row. type 0=offer, 1=turn-in.
 struct WorldQuestEntry
 {
