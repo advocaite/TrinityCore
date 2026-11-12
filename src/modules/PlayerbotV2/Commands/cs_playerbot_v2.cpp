@@ -99,6 +99,8 @@
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "ClassicRage.h"          // .playerbot rageprobe
+#include "ConditionMgr.h"         // .playerbot visualprobe
 #include "Trainer.h"
 #include "TraitMgr.h"
 #include "Containers.h"
@@ -642,6 +644,9 @@ public:
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "equipprobe",    HandleEquipProbe,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "rageprobe",     HandleRageProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "visualprobe",   HandleVisualProbe,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "collisionprobe", HandleCollisionProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5164,6 +5169,123 @@ public:
             p->GetName().c_str(), uint32(p->GetLevel()), formSpell, learned ? " (learned now)" : "", uint32(result), inForm ? "yes" : "no",
             uint32(info->GetEffect(EFFECT_0).MiscValue), armorBefore, armorInForm, armorAfter, passiveSpell.value_or(0),
             !passiveSpell ? "not checked" : hasPassive ? "present" : "MISSING", passiveGone ? "gone" : "STILL THERE");
+        return true;
+    }
+
+    // .playerbot equipprobe <player> <item id>
+    // Whether the player could equip the item as the client's equip request does it (CanEquipNewItem with no slot given: the slot the
+    // server picks itself, as for a right click), with the result code and the slot. Druid idols, paladin librams and shaman totems go in
+    // the ranged slot (17); EQUIP_ERR 0 is OK. Nothing is created or equipped.
+    static bool HandleEquipProbe(ChatHandler* handler, std::string name, uint32 itemId)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+        if (!p || !p->IsInWorld() || !proto)
+        {
+            handler->SendSysMessage(!proto ? "equipprobe: no such item" : "equipprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint16 dest = 0;
+        InventoryResult const equip = p->CanEquipNewItem(NULL_SLOT, dest, itemId, true);
+        InventoryResult const use = p->CanUseItem(proto);
+        handler->PSendSysMessage("equipprobe: %s (class %u level %u) item %u %s: class %u subclass %u inventory type %u; can use %u, can equip %u%s, "
+            "slot %u", p->GetName().c_str(), uint32(p->GetClass()), uint32(p->GetLevel()), itemId, proto->GetName(DEFAULT_LOCALE),
+            proto->GetClass(), proto->GetSubClass(), uint32(proto->GetInventoryType()), uint32(use), uint32(equip), equip == EQUIP_ERR_OK ? " (OK)" : "",
+            equip == EQUIP_ERR_OK ? uint32(dest & 255) : 255u);
+        return true;
+    }
+
+    // .playerbot rageprobe <player> [damage]
+    // Rage from damage taken (Classic: damage / conversion(level) * 2.5): a hostile creature near the player (its attacker, its target, or
+    // the nearest one in 40 y) deals it `damage` (default 20) through Unit::DealDamage as a melee hit does, and the rage before, after and
+    // expected is reported. Needs a rage user (warrior, druid in Bear Form) with more health than the damage.
+    static bool HandleRageProbe(ChatHandler* handler, std::string name, Optional<uint32> damageArg)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !p->IsAlive() || p->GetPowerType() != POWER_RAGE)
+        {
+            handler->SendSysMessage(!p || !p->IsInWorld() || !p->IsAlive() ? "rageprobe: no such living player in the world" : "rageprobe: the player does not use rage now");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 const damage = std::max<uint32>(1, damageArg.value_or(20));
+        if (p->GetHealth() <= damage)
+        {
+            handler->SendSysMessage("rageprobe: the damage would kill the player");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Unit* attacker = !p->getAttackers().empty() ? *p->getAttackers().begin() : p->GetVictim();
+        if (!attacker)
+        {
+            Unit* nearest = nullptr;
+            Trinity::NearestAttackableUnitInObjectRangeCheck check(p, p, 40.0f);
+            Trinity::UnitLastSearcher<Trinity::NearestAttackableUnitInObjectRangeCheck> searcher(p, nearest, check);
+            Cell::VisitAllObjects(p, searcher, 40.0f);
+            attacker = nearest;
+        }
+        if (!attacker || attacker == p)
+        {
+            handler->SendSysMessage("rageprobe: no hostile creature within 40 y of the player");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        int32 const before = p->GetPower(POWER_RAGE);
+        float const expected = ClassicRage::RageFromDamage(float(damage), float(p->GetLevel()), false) * sWorld->getRate(RATE_POWER_RAGE_INCOME) * 10.0f;
+        CleanDamage clean(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
+        Unit::DealDamage(attacker, p, damage, &clean, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+        int32 const after = p->GetPower(POWER_RAGE);
+        handler->PSendSysMessage("rageprobe: %s level %u took %u from %s: rage %d -> %d (tenths), gained %d, expected about %d%s",
+            p->GetName().c_str(), uint32(p->GetLevel()), damage, attacker->GetName().c_str(), before, after, after - before, int32(expected),
+            after > before || before >= p->GetMaxPower(POWER_RAGE) ? "" : " - NO RAGE FROM THE HIT");
+        return true;
+    }
+
+    // .playerbot visualprobe <spell id> [player]
+    // The spell's SpellXSpellVisual rows as the server holds them (client data plus hotfixes): visual, priority, probability and the caster
+    // conditions, whether the player meets each, and the visual the server sends in SMSG_SPELL_GO for that caster (0 = none: the client then
+    // shows no animation and plays no sound for the cast).
+    static bool HandleVisualProbe(ChatHandler* handler, uint32 spellId, Optional<std::string> name)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE);
+        if (!info)
+        {
+            handler->SendSysMessage("visualprobe: no such spell");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Player* p = nullptr;
+        if (name)
+        {
+            std::string n = *name;
+            p = normalizePlayerName(n) ? ObjectAccessor::FindPlayerByName(n) : nullptr;
+        }
+
+        uint32 rows = 0;
+        for (SpellXSpellVisualEntry const* visual : sSpellXSpellVisualStore)
+        {
+            if (visual->SpellID != spellId)
+                continue;
+            ++rows;
+            char const* playerCond = !visual->CasterPlayerConditionID ? "none" : !p ? "?" :
+                ConditionMgr::IsPlayerMeetingCondition(p, visual->CasterPlayerConditionID) ? "met" : "NOT MET";
+            UnitConditionEntry const* unitCondition = sUnitConditionStore.LookupEntry(visual->CasterUnitConditionID);
+            char const* unitCond = !visual->CasterUnitConditionID ? "none" : !unitCondition ? "not in the data" : !p ? "?" :
+                ConditionMgr::IsUnitMeetingCondition(p, nullptr, unitCondition) ? "met" : "NOT MET";
+            handler->PSendSysMessage("visualprobe: row %u difficulty %u visual %u priority %u probability %.2f; player condition %u %s, unit condition %u %s",
+                visual->ID, uint32(visual->DifficultyID), visual->SpellVisualID, uint32(visual->Priority), visual->Probability,
+                visual->CasterPlayerConditionID, playerCond, visual->CasterUnitConditionID, unitCond);
+        }
+
+        uint32 const sent = info->GetSpellXSpellVisualId(p);
+        handler->PSendSysMessage("visualprobe: spell %u %s: %u SpellXSpellVisual rows; the server sends row %u%s%s", spellId,
+            info->SpellName ? (*info->SpellName)[DEFAULT_LOCALE] : "", rows, sent, p ? " for " : " for no caster", p ? p->GetName().c_str() : "");
         return true;
     }
 
