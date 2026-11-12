@@ -79,6 +79,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <mutex>
@@ -168,8 +169,10 @@ struct HealTiming
     uint32     need_ms = 0;       // raid healer: last time its assignment needed healing (RaidHealerMayDamage)
     uint32     need_eval_ms = 0;  // ... and the last time that was checked
     uint32     pick_logged_ms = 0; // last NoteRaidPick line
-    uint64     dispel_key = 0;     // last assigned dispel cast (member + debuff type) ...
-    uint32     dispel_ms = 0;      // ... and when (published_at_ms clock)
+    // The last assigned dispel casts (member + debuff type) and when (published_at_ms clock), oldest overwritten. One slot let
+    // two jobs take turns past the repeat window (A, B, A, B), and a priest spent its mana on them.
+    std::array<uint64, 8> dispel_keys{};
+    std::array<uint32, 8> dispel_ms{};
 };
 
 template <typename F>
@@ -1400,7 +1403,30 @@ inline bool DispelRecently(void const* ctx, uint64 key)
 {
     BotSnapshotView const& s = *static_cast<BotSnapshotView const*>(ctx);
     uint32 const now = s.published_at_ms();
-    return WithHealTiming(s, [&](HealTiming& t) { return t.dispel_key == key && t.dispel_ms && now - t.dispel_ms < kDispelRepeatMs; });
+    return WithHealTiming(s, [&](HealTiming& t)
+    {
+        for (size_t i = 0; i < t.dispel_keys.size(); ++i)
+            if (t.dispel_keys[i] == key && t.dispel_ms[i] && now - t.dispel_ms[i] < kDispelRepeatMs)
+                return true;
+        return false;
+    });
+}
+
+inline void NoteDispelCast(BotSnapshotView const& s, uint64 key)
+{
+    uint32 const now = s.published_at_ms() | 1u;
+    WithHealTiming(s, [&](HealTiming& t)
+    {
+        size_t slot = 0;
+        for (size_t i = 0; i < t.dispel_keys.size(); ++i)
+        {
+            if (t.dispel_keys[i] == key) { slot = i; break; }
+            if (t.dispel_ms[i] < t.dispel_ms[slot]) slot = i;
+        }
+        t.dispel_keys[slot] = key;
+        t.dispel_ms[slot] = now;
+        return 0;
+    });
 }
 
 inline bool ShouldAssignedDispel(ApPredicateContext const& ctx)
@@ -1414,7 +1440,7 @@ inline void DoAssignedDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
     Classic::CastPick const d = Classic::PickDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot });
     if (d.spell && e.cast(d.spell, d.target))
     {
-        WithHealTiming(ctx.bot, [&](HealTiming& t) { t.dispel_key = d.key; t.dispel_ms = ctx.bot.published_at_ms(); return 0; });
+        NoteDispelCast(ctx.bot, d.key);
         Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
         if (Classic::IsCurseDispelSpell(d.spell))
             Classic::NoteRaidSupport(Classic::RaidSupportKind::Decurse, ctx.bot.map_id());
@@ -1433,7 +1459,7 @@ inline void DoControlDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
     Classic::CastPick const d = Classic::PickControlDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot });
     if (d.spell && e.cast(d.spell, d.target))
     {
-        WithHealTiming(ctx.bot, [&](HealTiming& t) { t.dispel_key = d.key; t.dispel_ms = ctx.bot.published_at_ms(); return 0; });
+        NoteDispelCast(ctx.bot, d.key);
         Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
     }
 }

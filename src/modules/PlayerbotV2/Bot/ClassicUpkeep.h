@@ -175,6 +175,10 @@ CastPick PickControlDispel(BotSnapshotView const& s, GroupSnapshotView const& g,
 
 // Mana below which a bot takes no dispel job (and is left out of the plan).
 constexpr int32 kDispelMinManaPct = 15;
+// A healer in combat keeps its mana for the heals: below this it takes no dispel job except one that frees a member taken out of
+// the fight (a Hex, a Fear: the control jobs), and the plan hands the job to a dispeller with mana to spare. Discord (manashield,
+// 12 Nov): priest bots dispelled until they were out of mana, at 15 % there is nothing left to heal with.
+constexpr int32 kHealerDispelMinManaPct = 40;
 
 // Encounter-owned dispels: auras a raid encounter layer removes itself
 // (RaidOrder cast jobs that run before the rotation). The generic dispel

@@ -1971,7 +1971,9 @@ constexpr CureSpell kCures[] = {
 //   - a druid in any form can't cast it (Moonkin, Travel, a Restoration
 //     druid that shifted);
 //   - mounted (PickDispel and the idle gate skip a mounted bot);
-//   - below kDispelMinManaPct mana (ShouldAssignedDispel, the idle gate).
+//   - below kDispelMinManaPct mana (ShouldAssignedDispel, the idle gate);
+//     a healer in combat below kHealerDispelMinManaPct is left out per job
+//     (DispelManaOk, in PickDispelImpl's assignment).
 // Bots only: a human dispels by hand.
 uint8 MemberCureTypes(BotSnapshotView const& s, GroupMemberSummary const& m)
 {
@@ -1987,6 +1989,16 @@ uint8 MemberCureTypes(BotSnapshotView const& s, GroupMemberSummary const& m)
         if (c.cls == m.cls && m.level >= SpellLevel(c.spell))
             types |= c.types;
     return types;
+}
+
+// The mana a dispeller keeps for itself on a job: a healer in combat keeps kHealerDispelMinManaPct for its heals, except to free a
+// member taken out of the fight.
+static bool DispelManaOk(GroupMemberSummary const& m, bool control)
+{
+    if (m.max_mana <= 0)
+        return true;
+    int32 const floor = !control && m.in_combat && m.role == Role::Healer ? kHealerDispelMinManaPct : kDispelMinManaPct;
+    return int64(m.mana) * 100 >= int64(m.max_mana) * floor;
 }
 
 struct DispelJob
@@ -3058,6 +3070,7 @@ static CastPick PickDispelImpl(BotSnapshotView const& s, GroupSnapshotView const
         {
             Dispeller& d = dispellers[(start + i) % n];
             if (!(d.types & job.type)) continue;
+            if (!DispelManaOk(*d.m, job.control)) continue;
             if (d.m->guid != m.guid && MemberDist2(m, d.m->x, d.m->y, d.m->z) > 30.0f * 30.0f) continue;
             if (!best || d.load < best->load)
                 best = &d;
