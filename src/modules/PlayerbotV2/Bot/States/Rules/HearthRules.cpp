@@ -11,6 +11,8 @@
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/States/MaintainHelpers.h"   // ChunkedWalkToward
+#include "Bot/TownErrandConfig.h"
+#include "Bot/World/ZonePicker.h"           // IsVanillaCapitalZone
 #include "UnitDefines.h"
 #include "World/WorldMetadata.h"
 
@@ -27,10 +29,15 @@ constexpr float kInnInteract = 5.0f;
 bool WalkInnkeeperGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,uint32)
 {
     const uint32 zid = s.zone_id();
-    if (zid == 0) return false;
-    if (ai.hearth_zone() == zid) return false;
+    if (!ai.hearth_rebind_due(zid)) return false;
     if (s.has_actionable_quest()) return false;   // quest work in reach wins; the quest walkers would pull the bot back over the 80 y line
-    return ai.ms_in_zone(zid) >= ::Playerbot::BotAI::kHearthRebindThresholdMs;
+    // A capital's resident binds on its errand to the inn (idle:town_errand picks the inn while a rebind is due, idle:homebind binds
+    // it there): two walks to two places in the same city took turns every tick, r10 and r13 12 Nov: 18 and then 58-63
+    // town_errand <> walk_to_innkeeper_rebind flips in Stormwind, where this walk's chunks also met the level guard over the canals.
+    if (::Playerbot::V2::TownErrand::Cfg().errands && ::Playerbot::V2::World::IsVanillaCapitalZone(zid)
+        && !s.in_group() && !s.has_owner_character())
+        return false;
+    return true;
 }
 
 bool WalkInnkeeperFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32 now_ms)
@@ -131,6 +138,7 @@ bool HomebindFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     if (!inn) return false;
     emit.bind_homebind(inn->guid);
     ai.set_last_homebind_innkeeper(inn->guid);
+    ai.set_hearth_zone(s.zone_id());   // bound here: no walk to an innkeeper for this zone any more
     ai.set_last_rule_fired("idle:homebind");
     return true;
 }

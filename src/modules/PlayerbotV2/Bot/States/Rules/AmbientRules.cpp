@@ -1083,6 +1083,12 @@ static bool PickErrand(BotSnapshotView const& s, BotAI& ai, TE::State& st, uint3
     uint64 const bot = s.bot_id();
     uint32 const map = s.map_id();
     auto full = [&](TE::Dest const& d) { return TE::Spots::Get().Full(TE::Spots::PlaceKey(map, d.x, d.y), bot, now_ms, PlaceCap(d.kind)); };
+    // Home now (10 minutes in this city, not bound here): the next errand is an inn with room, where idle:homebind binds the
+    // hearthstone. The walk to the innkeeper (idle:walk_to_innkeeper_rebind) leaves a capital's residents to this. Every inn full:
+    // the usual errands, and the inn next time.
+    if (!leaving && ai.hearth_rebind_due(s.zone_id())
+        && std::any_of(dests.begin(), dests.end(), [&](TE::Dest const& d) { return d.kind == TE::Kind::Inn && !full(d); }))
+        std::erase_if(dests, [](TE::Dest const& d) { return d.kind != TE::Kind::Inn; });
     int const k = TE::Pick(dests, bx, by, TE::Cfg().radius, leaving ? TE::Recent{} : st.recent, float(ai.rng().unit()), full);
     if (k < 0) return false;
     TE::Dest const& d = dests[size_t(k)];

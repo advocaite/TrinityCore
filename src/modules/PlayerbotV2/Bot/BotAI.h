@@ -408,6 +408,11 @@ public:
     // zone past the threshold.
     uint32 hearth_zone() const { return hearth_zone_; }
     void   set_hearth_zone(uint32 z) { hearth_zone_ = z; }
+    // The bot has lived in this zone long enough to make it home and is not bound here yet.
+    bool   hearth_rebind_due(uint32 zone_id) const
+    {
+        return zone_id != 0 && hearth_zone_ != zone_id && ms_in_zone(zone_id) >= kHearthRebindThresholdMs;
+    }
 
     // Once-per-session calendar RSVP gate. Bots auto-accept all pending
     // calendar invites a single time per BotAI lifetime so raid sign-ups
