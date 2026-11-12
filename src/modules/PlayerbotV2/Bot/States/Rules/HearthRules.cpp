@@ -10,6 +10,7 @@
 #include "Bot/BotAI.h"
 #include "Bot/BotSnapshotView.h"
 #include "Bot/BotIntentEmitter.h"
+#include "Bot/States/MaintainHelpers.h"   // ChunkedWalkToward
 #include "UnitDefines.h"
 #include "World/WorldMetadata.h"
 
@@ -32,7 +33,7 @@ bool WalkInnkeeperGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     return ai.ms_in_zone(zid) >= ::Playerbot::BotAI::kHearthRebindThresholdMs;
 }
 
-bool WalkInnkeeperFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32)
+bool WalkInnkeeperFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32 now_ms)
 {
     float bx2, by2, bz2; s.position(bx2, by2, bz2);
     float target_x = 0.f, target_y = 0.f, target_z = 0.f;
@@ -79,17 +80,11 @@ bool WalkInnkeeperFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
         ai.set_hearth_zone(s.zone_id());
         return false;
     }
-    const float kStep =
-        ai.personality().risk_tolerance == RiskTolerance::Cautious ? 25.0f :
-        ai.personality().risk_tolerance == RiskTolerance::Reckless ? 50.0f :
-        35.0f;
     const float dist = std::sqrt(dsq);
-    const float scale = std::min(kStep, dist) / dist;
-    const float tx = bx2 + (target_x - bx2) * scale;
-    const float ty = by2 + (target_y - by2) * scale;
+    const float ahead = std::min(35.0f, dist) / dist;
     if (NearbyUnit const* threat = s.path_threat(
-            tx, ty,
-            /*max_forward*/ std::min(kStep, 35.0f),
+            bx2 + (target_x - bx2) * ahead, by2 + (target_y - by2) * ahead,
+            /*max_forward*/ std::min(dist, 35.0f),
             /*half_width*/  10.0f))
     {
         if (emit.start_attack(threat->guid))
@@ -98,7 +93,13 @@ bool WalkInnkeeperFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
             return true;
         }
     }
-    emit.move_to(tx, ty, target_z, /*run*/ true);
+    // The shared chunked walk (stall escape, deflection) to within 9 y; the last yards to the 5 y bind range as one pathed move.
+    if (::Playerbot::States::ChunkedWalkToward(s, ai, emit, target_x, target_y, target_z, "idle:walk_to_innkeeper_rebind", now_ms))
+        return true;
+    if (dist > 9.0f)
+        return false;   // the walk gave up: unreachable this episode
+    if (!emit.move_to(target_x, target_y, target_z, /*run*/ true) && !emit.move_already_emitted(target_x, target_y, target_z))
+        return false;
     ai.set_last_rule_fired("idle:walk_to_innkeeper_rebind");
     return true;
 }
@@ -144,8 +145,8 @@ void RegisterHearthRules(IdleRuleRegistry& r)
         rule.priority = 240;
         rule.gate     = &WalkInnkeeperGate;
         rule.fire     = &WalkInnkeeperFire;
-        // Rebind decisions change at zone-level granularity; 5s throttle.
-        rule.min_interval_ms = 5000;
+        // Looked at every tick (the gate is two compares): with a 5 s throttle the walk held the bot one tick in five and the rules
+        // below walked it elsewhere in between, r10 12 Nov: 18 town_errand <> walk_to_innkeeper_rebind flips in the capitals.
         r.register_rule(std::move(rule));
     }
     {
