@@ -140,7 +140,7 @@ TEST_CASE("A build is written back as the calculator writes it", "[ClassicTalent
     CHECK(Encode({ {}, {}, {} }).empty());
     Parsed const p = Parse("050205223101311531-5500003-003");
     CHECK(Encode(p.tabs) == "050205223101311531-5500003-003");
-    CHECK(Link(8, "05--003") == "https://www.wowhead.com/forever/talent-calc/mage/v205--003");
+    CHECK(Link(8, "05--003") == "https://www.wowhead.com/forever/talent-calc/mage/vkndmh05--003_t0");
     CHECK(Parse(Link(1, "--05003201")).tabs == Parse("--05003201").tabs);
     CHECK(Link(6, "1").empty());   // no death knights in Forever
 }
@@ -172,3 +172,38 @@ TEST_CASE("A levelling bot buys the tab with most points first, row by row", "[C
     REQUIRE(tie.size() == 2);
     CHECK(tie[0].tab == 0);
 }
+
+// T4 (11-12): Wowhead's Forever calculator writes the tree version as a word now ("vkndmh"), and moves an older "v2" link to it.
+TEST_CASE("A link of the current calculator trees (a word for the version) is read like the older v2 one", "[ClassicTalentCode]")
+{
+    Parsed const now = Parse("https://www.wowhead.com/forever/talent-calc/warrior/vkndmh--05003201_t0/2BEffh");
+    REQUIRE(now.ok());
+    CHECK(now.cls == 1);
+    CHECK(now.tabs == Parse("https://www.wowhead.com/forever/talent-calc/warrior/v2--05003201_t0/2BEffh").tabs);
+    CHECK(Validate(now, Warrior()).total == 11);
+
+    Parsed const mage = Parse("https://www.wowhead.com/forever/talent-calc/mage/vkndmh-55523331230133131_t0");
+    REQUIRE(mage.ok());
+    CHECK(mage.tabs[0].empty());
+    CHECK(Validate(mage, Mage()).perTab == std::vector<int>{ 0, 44, 0 });
+    CHECK(Parse("vkndmh050205223101311531-5500003-003").tabs == Parse("050205223101311531-5500003-003").tabs);
+}
+
+// T4: the bots' own builds held talents in rows their tab had not opened (the game data opens a row by the points of all three tabs);
+// Wowhead dropped them. RowsOpen is the talent frame's rule the walk now keeps.
+TEST_CASE("A build with points in a row its own tab has not opened breaks the talent frame's rule", "[ClassicTalentCode]")
+{
+    auto tabs = [](char const* code) { return Parse(code).tabs; };
+    // The bot builds Wowhead dropped talents from.
+    CHECK_FALSE(RowsOpen(tabs("30303013-350500355022100031-000003"), Warrior()));   // Anger Management on 9 Arms points; Thunder Clap on none
+    CHECK_FALSE(RowsOpen(tabs("000205-55523331230133131"), Mage()));                // Arcane Subtlety with no top-row point
+    // What Wowhead kept of them, and builds made in the calculator.
+    CHECK(RowsOpen(tabs("30303-350500355022100031"), Warrior()));
+    CHECK(RowsOpen(tabs("-55523331230133131"), Mage()));
+    CHECK(RowsOpen(tabs("050205223101311531-5500003-003"), Mage()));
+    CHECK(RowsOpen(tabs("--05003201"), Warrior()));
+    // A levelling bot part way down a build: top rows first keeps it open.
+    CHECK(RowsOpen(tabs("0502052"), Mage()));
+    CHECK_FALSE(RowsOpen(tabs("0002"), Mage()));
+}
+
