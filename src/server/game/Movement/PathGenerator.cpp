@@ -857,11 +857,19 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
 void PathGenerator::NormalizePath(bool meshPoints)
 {
     constexpr float kMaxNormalizeDrop = 6.0f;
+    // A unit that walks into water without swimming (an amphibious creature, CREATURE_STATIC_FLAG_AMPHIBIOUS: the Durotar surf
+    // crawlers) crosses navmesh water polygons, and those lie on the water surface. Its point belongs on the bed below, however
+    // deep: left on the surface, the spline lifted it out of the water and the next position update dropped it back (Discord
+    // 2026-11-10, noobiru: crabs on the Echo Isles hopping a couple of yards above the water).
+    Unit const* unit = _source->ToUnit();
+    bool const walksWaterBed = unit && !unit->CanSwim() && !unit->CanFly();
     for (uint32 i = 0; i < _pathPoints.size(); ++i)
     {
         float z = _pathPoints[i].z;
         _source->UpdateAllowedPositionZ(_pathPoints[i].x, _pathPoints[i].y, z);
-        if (!meshPoints || z >= _pathPoints[i].z - kMaxNormalizeDrop)
+        bool const throughWater = meshPoints && walksWaterBed && z < _pathPoints[i].z - kMaxNormalizeDrop
+            && _source->GetMap()->IsInWater(_source->GetPhaseShift(), _pathPoints[i].x, _pathPoints[i].y, _pathPoints[i].z - 0.5f);
+        if (!meshPoints || z >= _pathPoints[i].z - kMaxNormalizeDrop || throughWater)
             _pathPoints[i].z = z;
     }
 }
