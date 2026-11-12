@@ -648,6 +648,7 @@ public:
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "questchainprobe", HandleQuestChainProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "groundz",       HandleGroundZ,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "equipprobe",    HandleEquipProbe,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "gearpick",      HandleGearPick,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -5277,6 +5278,36 @@ public:
         handler->PSendSysMessage("xpprobe: %s quest %u '%s' level %u->%u: quest value %u, Rate.XP.Quest %.2f, expected %u, gained %u%s",
             p->GetName().c_str(), questId, quest->GetLogTitle().c_str(), uint32(levelBefore), uint32(levelAfter), baseXp, rate, expected,
             uint32(gained), status == QUEST_STATUS_COMPLETE ? "" : " (quest did not reach complete, not rewarded)");
+        return true;
+    }
+
+    // .playerbot groundz <map> <x> <y> [<z to search down from>]
+    // Lists every standing surface under a point, top down (terrain .map plus VMap: ledges, cave roofs and floors, the valley
+    // floor), with no player or bot needed, so a spawn's height can be checked or chosen from the console. A creature spawned off
+    // these surfaces floats or sits inside the rock (Incinerator Gar'im, 2026-11-04).
+    static bool HandleGroundZ(ChatHandler* handler, uint32 mapId, float x, float y, Optional<float> fromZ)
+    {
+        if (!sMapStore.LookupEntry(mapId) || !Trinity::IsValidMapCoord(x, y))
+        {
+            handler->SendSysMessage("groundz: no such map or point");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::shared_ptr<TerrainInfo> terrain = sTerrainMgr.LoadTerrain(mapId);
+        PhaseShift const& phaseShift = PhasingHandler::GetEmptyPhaseShift();
+        float const gridZ = terrain->GetGridHeight(phaseShift, mapId, x, y);
+        handler->PSendSysMessage("groundz: map %u (%.2f, %.2f) terrain (.map) %.2f", mapId, x, y, gridZ);
+
+        float z = fromZ.value_or(2000.0f);
+        for (uint32 i = 1; i <= 10; ++i)
+        {
+            float const surface = terrain->GetStaticHeight(phaseShift, mapId, x, y, z, true, 4000.0f);
+            if (surface <= INVALID_HEIGHT)
+                break;
+            handler->PSendSysMessage("groundz:   surface %u at %.2f", i, surface);
+            z = surface - 3.0f;   // under this floor, down to the next one
+        }
         return true;
     }
 
