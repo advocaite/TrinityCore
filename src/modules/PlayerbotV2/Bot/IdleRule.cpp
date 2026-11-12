@@ -84,6 +84,7 @@ void IdleRuleRegistry::finalize()
     for (IdleRule& rule : rules_)
     {
         rule.world_errand = IsWorldErrand(rule.name);
+        rule.owner_gather = rule.name == "idle:gather" || rule.name == "idle:gather_detour";
         rule.quest_seek = rule.name == "idle:walk_to_known_hub" || rule.name == "idle:wander_to_quest_hub";
         rule.fight_exempt = rule.name.starts_with("idle:autoact_dispatch");
     }
@@ -125,8 +126,10 @@ std::string_view IdleRuleRegistry::tick(BotSnapshotView const& s, BotAI& ai,
         if (r.priority < min_priority) break;   // rules_ sorted desc — bail early
         if (!r.enabled) continue;
         if (!r.gate)    continue;
-        // A bot in a group with a player (its owner, or the player who invited it) never runs world errands.
-        if (r.world_errand && (s.is_led_by_player() || follows_bot_leader)) continue;
+        // A bot in a group with a player (its owner, or the player who invited it) never runs world errands, but picks the herbs
+        // and ore near it once the owner said "gather on".
+        if (r.world_errand && (s.is_led_by_player() || follows_bot_leader) && !(r.owner_gather && s.is_led_by_player() && ai.gather_ordered()))
+            continue;
         // No errand (bag run, vendor, walk to a hub) while fighting or with a victim (auto-attack target): a full-bag bot used to walk off mid-fight.
         if (r.world_errand && !r.fight_exempt && (s.in_combat() || !s.victim().IsEmpty())) continue;
         if (r.quest_seek && !Services::Config().world_questing() && s.is_free_world_bot()) continue;

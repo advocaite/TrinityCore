@@ -75,6 +75,10 @@ struct IdleRule
     // Set by finalize() from the rule name.
     bool world_errand = false;
 
+    // A gathering errand (idle:gather, idle:gather_detour): a companion runs it too while its owner has said "gather on".
+    // Set by finalize() from the rule name.
+    bool owner_gather = false;
+
     // Rule that sends a questless bot to a quest giver or hub. Skipped for a bot of the world while Playerbot.World.Questing is 0.
     // Set by finalize() from the rule name.
     bool quest_seek = false;

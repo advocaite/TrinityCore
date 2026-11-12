@@ -8175,6 +8175,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                   [](auto const& a, auto const& b) { return a.first < b.first; });
         if (by_dist.size() > MAX_OBJECTS) by_dist.resize(MAX_OBJECTS);
 
+        // An object's loot the bot has open (an herb or vein its gathering spell opened): the gather rule takes it.
+        snap->world_objects.loot_open = p->GetLootGUID().IsGameObject() ? p->GetLootGUID() : ObjectGuid::Empty;
         snap->world_objects.nearby_objects.reserve(by_dist.size());
         for (auto const& [_, go] : by_dist)
         {
@@ -8207,6 +8209,21 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             if (n.go_type == GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING)
                 n.is_destroyed =
                     go->GetDestructibleState() == GO_DESTRUCTIBLE_DESTROYED;
+            // Herb / ore vein: a chest whose lock asks for Herbalism or Mining (the gathering rules, GatheringRules.cpp).
+            if (n.go_type == GAMEOBJECT_TYPE_CHEST)
+                if (LockEntry const* lock = sLockStore.LookupEntry(go->GetGOInfo()->GetLockId()))
+                    for (uint8 li = 0; li < MAX_LOCK_CASE; ++li)
+                    {
+                        if (lock->Type[li] != LOCK_KEY_SKILL)
+                            continue;
+                        SkillType const sk = SkillByLockType(LockType(lock->Index[li]));
+                        if (sk != SKILL_HERBALISM && sk != SKILL_MINING)
+                            continue;
+                        n.gather_skill = uint16(sk);
+                        n.gather_req   = lock->Skill[li];
+                        n.gather_ready = go->isSpawned() && go->getLootState() == GO_READY;
+                        break;
+                    }
             // Pre-resolve teleport destination for SPELLCASTER GOs.
             // Type 22 stores its triggered spell in spellCaster.spell.
             // The spell's destination is in the spell_target_position

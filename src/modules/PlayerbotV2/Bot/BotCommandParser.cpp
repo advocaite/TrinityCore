@@ -5405,8 +5405,9 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         ai->set_verbose_logging(false);
         ai->set_aoe_preference(false);
         ai->set_aoe_denied(false);
+        ai->set_gather_ordered(false);
         Push(bot, WhisperIntent{sender->GetName(),
-            "Clearprefs: focus, role, follow_distance, verbose, aoe reset."});
+            "Clearprefs: focus, role, follow_distance, verbose, aoe, gather reset."});
         return true;
     }
     if (cmd == "clearprefs_all" || cmd == "clearprefsall" || cmd == "clear_prefs_all")
@@ -5423,6 +5424,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
             ai->set_verbose_logging(false);
             ai->set_aoe_preference(false);
             ai->set_aoe_denied(false);
+            ai->set_gather_ordered(false);
         });
         Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("Clearprefs_all: reset on {} bot(s).", changed)});
@@ -5512,6 +5514,49 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         ai->set_aoe_denied(!desired);
         Push(bot, WhisperIntent{sender->GetName(),
             desired ? "Aoe: ON (area spells allowed)" : "Aoe: OFF (no spells that hit more than one enemy)"});
+        return true;
+    }
+    if (cmd == "gather" || cmd == "gather_all" || cmd == "gatherall")
+    {
+        // gather on   — picks the herbs and ore veins near it as it follows you, with the gathering skills it has (GatheringRules.cpp)
+        // gather off  — leaves them alone again (the default)
+        // gather      — toggle. gather_all sets every bot of the group. Memory only; clearprefs turns it off.
+        bool const all = cmd != "gather";
+        BotAI* self_ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!self_ai)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Gather: bot not registered."});
+            return true;
+        }
+        bool desired;
+        if (parsed.tail == "on" || parsed.tail == "1")       desired = true;
+        else if (parsed.tail == "off" || parsed.tail == "0") desired = false;
+        else                                                 desired = !self_ai->gather_ordered();
+        if (all)
+        {
+            const uint32 changed = ForEachGroupBot(bot, [&](Player const* p)
+            {
+                if (BotAI* ai = Services::Registry().ai(p->GetGUID().GetCounter()))
+                    ai->set_gather_ordered(desired);
+            });
+            Push(bot, WhisperIntent{sender->GetName(),
+                desired ? fmt::format("Gather: ON for {} bot(s).", changed) : fmt::format("Gather: OFF for {} bot(s).", changed)});
+            return true;
+        }
+        self_ai->set_gather_ordered(desired);
+        bool const herb = bot->HasSkill(SKILL_HERBALISM), mine = bot->HasSkill(SKILL_MINING);
+        std::string reply;
+        if (!desired)
+            reply = "Gather: OFF";
+        else if (herb && mine)
+            reply = "Gather: ON (herbs and ore)";
+        else if (herb)
+            reply = "Gather: ON (herbs)";
+        else if (mine)
+            reply = "Gather: ON (ore)";
+        else
+            reply = "Gather: ON, but I have no Herbalism or Mining";
+        Push(bot, WhisperIntent{sender->GetName(), reply});
         return true;
     }
     if (cmd == "setrole")

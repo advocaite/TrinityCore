@@ -549,6 +549,11 @@ public:
     // Owner "aoe off" (AoeDeny.h): no spell that hits more than one enemy until "aoe on". Mirrored into the snapshot.
     bool       aoe_denied() const { return aoe_denied_; }
     void       set_aoe_denied(bool b) { aoe_denied_ = b; }
+    // Owner "gather on" (GatheringRules.cpp): a bot in its owner's group picks the herbs and ore veins near it as it follows,
+    // with the gathering skills it has, until "gather off". Memory only. Written by the whisper handler (world thread), read by
+    // the idle rules on the bot's worker.
+    bool       gather_ordered() const { return gather_ordered_.load(std::memory_order_relaxed); }
+    void       set_gather_ordered(bool b) { gather_ordered_.store(b, std::memory_order_relaxed); }
     // Owner "focus heal <name>, <name>": a healer heals only these players (and itself) until "focus heal off". Empty = everyone.
     // Memory only. Written by the whisper handler (world thread), copied into the snapshot by the builder.
     std::vector<ObjectGuid> heal_only() const { std::lock_guard<std::mutex> lk(heal_only_mtx_); return heal_only_; }
@@ -3581,6 +3586,7 @@ private:
     uint8          last_train_level_ = 0;
     bool           aoe_preference_   = false;
     bool           aoe_denied_       = false;
+    std::atomic<bool> gather_ordered_{false};
     mutable std::mutex      heal_only_mtx_;
     std::vector<ObjectGuid> heal_only_;
     OwnerPicks::Picks owner_picks_;

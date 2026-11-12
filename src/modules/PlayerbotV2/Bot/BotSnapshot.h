@@ -1583,12 +1583,21 @@ struct NearbyObject
     // GO_DESTRUCTIBLE_DESTROYED state. Lets the BG siege-vehicle fire rule
     // skip already-breached IoC/SoTA gates instead of casting at rubble.
     bool       is_destroyed  = false;
+    // An herb or ore vein on Classic is a chest locked by a skill (Lock.db2 LOCKTYPE_HERBALISM / LOCKTYPE_MINING), not a type-50
+    // gathering node: the skill (182 / 186) and the level the lock asks for, 0 for any other object. gather_ready: spawned and
+    // closed (GO_READY), so not picked and not being picked.
+    uint16     gather_skill  = 0;
+    uint16     gather_req    = 0;
+    bool       gather_ready  = false;
 };
 struct NearbyObjectsState
 {
     std::vector<NearbyObject> nearby_objects;
+    // The object whose loot window the bot has open (Player::GetLootGUID), empty when none or a corpse: an herb or vein the
+    // gathering spell just opened waits here for the bot to take its loot.
+    ObjectGuid loot_open;
 
-    void reset() { nearby_objects.clear(); }
+    void reset() { nearby_objects.clear(); loot_open = ObjectGuid::Empty; }
 };
 
 // Instance context. is_in_instance covers everything except open-world.

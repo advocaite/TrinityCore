@@ -26,7 +26,57 @@ constexpr uint16 kSkinning  = 393;
 // model that the current primitives don't support.
 constexpr uint8  GO_GATHERING_NODE_LOCAL = 50;
 
-bool GatherGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&,uint32)
+// A node this bot can pick now. A modern GATHERING_NODE (type 50) as before; on Classic an herb or vein is a chest locked by
+// Herbalism or Mining (NearbyObject::gather_skill): only a closed one, and only with the skill level its lock asks for, as the
+// player's own right-click would fail below it. API::gather_node casts the gathering spell on it.
+bool Gatherable(BotSnapshotView const& s, BotSnapshot::NearbyObject const& o)
+{
+    if (o.go_type == GO_GATHERING_NODE_LOCAL)
+        return true;
+    return o.gather_skill != 0 && o.gather_ready && s.skill_value(o.gather_skill) >= o.gather_req;
+}
+
+// The herb or vein whose loot the bot's gathering spell opened: it waits for the bot to take it (API::gather_node).
+BotSnapshot::NearbyObject const* OpenGatherLoot(BotSnapshotView const& s)
+{
+    ObjectGuid const open = s.raw().world_objects.loot_open;
+    if (open.IsEmpty())
+        return nullptr;
+    for (auto const& obj : s.raw().world_objects.nearby_objects)
+        if (obj.guid == open && obj.gather_skill != 0)
+            return &obj;
+    return nullptr;
+}
+
+// The player a companion follows: its owner, else the player leading its group. Null when not with one on this map.
+GroupMemberSummary const* PlayerAnchor(BotSnapshotView const& s, GroupSnapshotView const& g)
+{
+    auto const* members = g.members();
+    if (!members)
+        return nullptr;
+    ObjectGuid const want = !s.raw().owner_guid.IsEmpty() ? s.raw().owner_guid : g.leader();
+    for (GroupMemberSummary const& m : *members)
+        if (m.guid == want && !m.is_bot && m.online && m.map_id == s.map_id())
+            return &m;
+    return nullptr;
+}
+
+// A companion told "gather on" (BotAI::gather_ordered) picks nodes only out of a fight - its own and its group's - and only
+// while its player is near, so the follow keeps it at his side.
+constexpr float kCompanionGatherReach = 25.0f;   // from the bot to the node
+constexpr float kCompanionGatherLeash = 30.0f;   // from the player to the node
+bool CompanionMayGather(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g)
+{
+    if (!ai.gather_ordered())
+        return false;
+    if (auto const* members = g.members())
+        for (GroupMemberSummary const& m : *members)
+            if (m.online && m.in_combat && m.map_id == s.map_id())
+                return false;
+    return PlayerAnchor(s, g) != nullptr;
+}
+
+bool GatherGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32)
 {
     // PROF-P2a: Fishing (356) is intentionally NOT a trigger for idle:gather.
     // This rule actions GAMEOBJECT_TYPE_GATHERING_NODE (50) via a single
@@ -62,6 +112,8 @@ bool GatherGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&,uint3
     (void)kSkinning;
     const bool can_gather = s.has_skill(kHerbalism) || s.has_skill(kMining);
     if (!can_gather) return false;
+    // A bot with a player picks nodes only when told to ("gather on"); IdleRuleRegistry::tick lets these rules through then.
+    if (s.is_led_by_player() && !CompanionMayGather(s, ai, g)) return false;
     if (s.in_combat() || s.is_casting()) return false;
     // The is_moving check was previously here — removed 2026-05-22 so
     // gather can fire opportunistically during travel. Real players
@@ -84,9 +136,10 @@ bool GatherGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&,uint3
     if (s.raw().quest_log.objective_is_relocation) return false;
     if (s.raw().movement.is_mounted &&
         s.raw().movement.is_flying) return false;
-    // Cheap precheck: any gathering node nearby?
+    // Cheap precheck: any node to pick nearby, or the loot of one the bot just opened?
+    if (OpenGatherLoot(s)) return true;
     for (auto const& obj : s.raw().world_objects.nearby_objects)
-        if (obj.go_type == GO_GATHERING_NODE_LOCAL) return true;
+        if (Gatherable(s, obj)) return true;
     return false;
 }
 
@@ -95,9 +148,18 @@ bool GatherFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,Bo
     float bx, by, bz; s.position(bx, by, bz);
     constexpr float kInteract = 5.0f;
     constexpr float kInt2 = kInteract * kInteract;
+    // The gathering spell finished and opened the node's loot: take it (the same use, API::gather_node).
+    if (auto const* open = OpenGatherLoot(s))
+    {
+        emit.emit(UseObjectIntent{open->guid});
+        if (s.is_led_by_player())
+            ai.grant_detour(now_ms);
+        ai.set_last_rule_fired("idle:gather");
+        return true;
+    }
     for (auto const& obj : s.raw().world_objects.nearby_objects)
     {
-        if (obj.go_type != GO_GATHERING_NODE_LOCAL) continue;
+        if (!Gatherable(s, obj)) continue;
         const float dx = obj.x - bx, dy = obj.y - by, dz = obj.z - bz;
         if (dx*dx + dy*dy + dz*dz > kInt2) continue;
         const uint64 node_low = obj.guid.GetCounter();
@@ -105,6 +167,9 @@ bool GatherFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,Bo
             continue;
         emit.emit(UseObjectIntent{obj.guid});
         ai.note_action_retry(BotAI::ActionKind::Gather, node_low, now_ms);
+        // A companion stands still for the 3 s cast and the loot: the follow waits (ingroup:follow_recall honours the lease).
+        if (s.is_led_by_player())
+            ai.grant_detour(now_ms);
         ai.set_last_rule_fired("idle:gather");
         TC_LOG_INFO("playerbot.v2",
             "[gather] {} use_object entry={} at ({:.1f},{:.1f},{:.1f})",
@@ -121,8 +186,8 @@ bool GatherFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,Bo
 // left untouched.
 bool GatherFullGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
-    // Quest-first (2026-06-16): yield to a reachable quest action.
-    if (s.has_actionable_quest()) return false;
+    // Quest-first (2026-06-16): yield to a reachable quest action. Not a companion: its quests are its player's to lead.
+    if (!s.is_led_by_player() && s.has_actionable_quest()) return false;
     return GatherGate(s, ai, g, now_ms);
 }
 
@@ -130,37 +195,49 @@ bool GatherFullGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
 // move_to so the bot diverts briefly. Next tick the gather rule above
 // fires when in interact range. Lower priority than quest_turnin /
 // quest_accept so detouring doesn't preempt quest hand-ins.
-bool GatherDetourGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32 now_ms)
+bool GatherDetourGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
-    if (!GatherGate(s, ai, {}, now_ms)) return false;
+    if (!GatherGate(s, ai, g, now_ms)) return false;
     // GatherGate already checks: skill, !combat, !casting, !recently
     // combat, !dungeon/BG, !flying. Detour adds nothing extra here —
     // the node-in-12y precheck happens in Fire.
     return true;
 }
 
-bool GatherDetourFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32 now_ms)
+bool GatherDetourFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, BotIntentEmitter& emit, uint32 now_ms)
 {
     float bx, by, bz; s.position(bx, by, bz);
     constexpr float kInteract = 5.0f;
     constexpr float kInt2 = kInteract * kInteract;
-    constexpr float kDetour = 12.0f;
-    constexpr float kDet2 = kDetour * kDetour;
+    // A world bot detours ~12 y for a node it walks past; a companion told "gather on" goes a little further, but never to a node
+    // far from its player (the follow would only fetch it back).
+    bool const companion = s.is_led_by_player();
+    GroupMemberSummary const* anchor = companion ? PlayerAnchor(s, g) : nullptr;
+    if (companion && !anchor) return false;
+    const float kDetour = companion ? kCompanionGatherReach : 12.0f;
+    const float kDet2 = kDetour * kDetour;
     NearbyObject const* best = nullptr;
     float best_dsq = kDet2;
     for (auto const& obj : s.raw().world_objects.nearby_objects)
     {
-        if (obj.go_type != GO_GATHERING_NODE_LOCAL) continue;
+        if (!Gatherable(s, obj)) continue;
         const float dx = obj.x - bx, dy = obj.y - by, dz = obj.z - bz;
         const float dsq = dx*dx + dy*dy + dz*dz;
         if (dsq <= kInt2 || dsq > best_dsq) continue;
+        if (anchor)
+        {
+            const float ax = obj.x - anchor->x, ay = obj.y - anchor->y;
+            if (ax*ax + ay*ay > kCompanionGatherLeash * kCompanionGatherLeash) continue;
+        }
         const uint64 node_low = obj.guid.GetCounter();
         if (ai.action_recently_tried(BotAI::ActionKind::Gather, node_low, now_ms))
             continue;
         best = &obj; best_dsq = dsq;
     }
     if (!best) return false;
-    emit.move_to(best->x, best->y, best->z, /*run*/ false);
+    emit.move_to(best->x, best->y, best->z, /*run*/ companion);
+    if (companion)
+        ai.grant_detour(now_ms);
     ai.set_last_rule_fired("idle:gather_detour");
     return true;
 }

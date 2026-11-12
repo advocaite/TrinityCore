@@ -7147,6 +7147,71 @@ Result API::gossip_select_by_index(ObjectGuid npc, uint32 order_index)
     return Result::Ok;
 }
 
+namespace
+{
+// Takes everything the bot may take from an object's open loot (a chest, a quest object, a gathered herb or ore vein) and
+// releases it as the client's loot release does. A headless bot has no client to send CMSG_LOOT_ITEM, so without this the
+// object stays open with its items inside (quest 28715, 2026-05-20).
+void TakeGameObjectLoot(Player* p, GameObject* obj, ObjectGuid go_guid)
+{
+    Loot* loot = obj->GetLootForPlayer(p);
+    if (!loot)
+        return;
+    if (!loot->isLooted() || !loot->items.empty() || loot->gold != 0)
+    {
+        ObjectGuid lootOwnerGuid = loot->GetOwnerGUID();
+        for (uint8 slot = 0; slot < loot->items.size(); ++slot)
+        {
+            // Same FFA fix as API::loot_corpse: chests are FFA, so a looted item's state lives in the per-player ffaItem, not the
+            // shared it->is_looted; without checking it the bot re-loots the chest every tick and the GO never reaches
+            // GO_JUST_DEACTIVATED.
+            NotNormalLootItem* ffaItem = nullptr;
+            LootItem* it = loot->LootItemInSlot(slot, p, &ffaItem);
+            if (!it || it->is_looted || it->is_blocked) continue;
+            if (ffaItem && ffaItem->is_looted) continue;
+            p->StoreLootItem(lootOwnerGuid, slot, loot);
+        }
+        if (loot->gold > 0)
+        {
+            p->ModifyMoney(loot->gold);
+            loot->gold = 0;
+        }
+    }
+    // The real release, as API::loot_corpse does: SendLootRelease alone is only a packet, so a looted chest or quest object
+    // stayed opened (GO_ACTIVATED) and never despawned or respawned; every player who clicked it later got an empty window
+    // (Discord 2026-10-27).
+    WorldSession* sess = p->GetSession();
+    if (sess && p->GetLootGUID() == go_guid)
+        sess->DoLootRelease(loot);
+    else
+        p->SendLootRelease(go_guid);
+}
+
+// The bot's spell that opens a lock of this kind (Herbalism 2366 for LOCKTYPE_HERBALISM, Mining 2575 for LOCKTYPE_MINING): the
+// spell a player's right-click on an herb or vein casts. Of several ranks the one with the largest bonus to the lock skill
+// (Spell::CanOpenLock adds the effect's value to the skill), 0 when the bot knows none.
+uint32 OpenLockSpellFor(Player const* p, int32 lockIndex)
+{
+    uint32 best = 0;
+    float bestBonus = -1.0f;
+    for (auto const& [sid, ps] : p->GetSpellMap())
+    {
+        if (ps.state == PLAYERSPELL_REMOVED || ps.disabled || !ps.active)
+            continue;
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(sid, DIFFICULTY_NONE);
+        if (!si || si->IsPassive())
+            continue;
+        for (SpellEffectInfo const& eff : si->GetEffects())
+            if (eff.IsEffect(SPELL_EFFECT_OPEN_LOCK) && eff.MiscValue == lockIndex && eff.BasePoints > bestBonus)
+            {
+                best = sid;
+                bestBonus = eff.BasePoints;
+            }
+    }
+    return best;
+}
+}
+
 Result API::use_game_object(ObjectGuid go_guid)
 {
     if (!p_) return Result::Other;
@@ -7411,7 +7476,7 @@ Result API::use_game_object(ObjectGuid go_guid)
     // and Use() skips that lock. Bots walking past emptied every herb and ore node in the open world with no skill at all, so players
     // found none (Discord 2026-11-09). A bot never opens one of these by a plain click.
     if (obj->GetGoType() == GAMEOBJECT_TYPE_CHEST && Playerbot::ChestNeedsSkill(obj->GetGOInfo()))
-        return Result::InvalidTarget;
+        return gather_node(obj);
     // Mounted-restriction check from HandleGameObjectUseOpcode: most GOs
     // refuse interaction while mounted unless flagged UsableMounted.
     if (p_->IsMounted() && !obj->GetGOInfo()->IsUsableMounted())
@@ -7524,54 +7589,54 @@ Result API::use_game_object(ObjectGuid go_guid)
 
     obj->Use(p_);
 
-    // Auto-loot for lootable GO types (CHEST, GOOBER with loot, etc.).
-    // GameObject::Use opens the loot window server-side (m_loot is
-    // populated, GO state transitions to ACTIVATED) but for headless
-    // bots Ã¢Â€Â” and for self-bot logic bots without auto-loot enabled Ã¢Â€Â” there's
-    // no client to send CMSG_LOOT_ITEM. The chest stays open with the
-    // items inside untaken, the quest objective never progresses, and
-    // the bot moves on or hearths after stuck-detection.
-    // Verified 2026-05-20 on "Demonic Thieves" (quest 28715): Uraimus
-    // opened the orc bonfire GO but never took the demonic ID stub
-    // off it, got stuck on the objective.
-    //
-    // Mirrors API::loot_corpse: walk loot.items, store each. Skip the
-    // group / master-loot path (chests are FFA by default Ã¢Â€Â” TC's
-    // ROLL_NEED_BEFORE_GREED and master-loot apply only to creature
-    // corpses).
-    if (Loot* loot = obj->GetLootForPlayer(p_))
-    {
-        if (!loot->isLooted() || !loot->items.empty() || loot->gold != 0)
-        {
-            ObjectGuid lootOwnerGuid = loot->GetOwnerGUID();
-            for (uint8 slot = 0; slot < loot->items.size(); ++slot)
-            {
-                // Same FFA fix as API::loot_corpse: chests are FFA, so a looted
-                // item's state lives in the per-player ffaItem, not the shared
-                // it->is_looted Ã¢Â€Â” without checking it the bot re-loots the chest
-                // every tick and the GO never reaches GO_JUST_DEACTIVATED.
-                NotNormalLootItem* ffaItem = nullptr;
-                LootItem* it = loot->LootItemInSlot(slot, p_, &ffaItem);
-                if (!it || it->is_looted || it->is_blocked) continue;
-                if (ffaItem && ffaItem->is_looted) continue;
-                p_->StoreLootItem(lootOwnerGuid, slot, loot);
-            }
-            if (loot->gold > 0)
-            {
-                p_->ModifyMoney(loot->gold);
-                loot->gold = 0;
-            }
-        }
-        // The real release, as API::loot_corpse does: SendLootRelease alone is only a packet, so a looted chest or quest object
-        // stayed opened (GO_ACTIVATED) and never despawned or respawned; every player who clicked it later got an empty window
-        // (Discord 2026-10-27).
-        WorldSession* sess = p_->GetSession();
-        if (sess && p_->GetLootGUID() == go_guid)
-            sess->DoLootRelease(loot);
-        else
-            p_->SendLootRelease(go_guid);
-    }
+    // Auto-loot for lootable GO types (CHEST, GOOBER with loot, etc.): GameObject::Use opens the loot window server-side, and a
+    // headless bot has no client to take the items (TakeGameObjectLoot).
+    TakeGameObjectLoot(p_, obj, go_guid);
     return Result::Ok;
+}
+
+// An herb or ore vein (a chest whose lock needs Herbalism or Mining): what a player's right-click does. The first call casts the
+// gathering spell on it (Spell::EffectOpenLock checks the skill, the Mining Pick and the node, then opens its loot for the bot and
+// gives the skill-up); a call while that loot is open takes it. Never a plain Use(), which skips the lock: bots without the skill
+// emptied every node in the open world that way (Discord 2026-11-09). Locks the bot has no skill or spell for stay closed.
+Result API::gather_node(GameObject* obj)
+{
+    ObjectGuid const go_guid = obj->GetGUID();
+    if (p_->GetLootGUID() == go_guid)
+    {
+        TakeGameObjectLoot(p_, obj, go_guid);
+        TC_LOG_INFO("playerbot.v2", "[gather] {} looted entry={}", p_->GetName(), obj->GetEntry());
+        return Result::Ok;
+    }
+    if (obj->getLootState() != GO_READY)
+        return Result::InvalidTarget;   // being gathered by someone, or already picked
+    LockEntry const* lock = sLockStore.LookupEntry(obj->GetGOInfo()->GetLockId());
+    if (!lock)
+        return Result::InvalidTarget;
+    for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+    {
+        if (lock->Type[i] != LOCK_KEY_SKILL)
+            continue;
+        SkillType const skill = SkillByLockType(LockType(lock->Index[i]));
+        if (skill != SKILL_HERBALISM && skill != SKILL_MINING)
+            continue;
+        if (p_->GetSkillValue(skill) < lock->Skill[i])
+            continue;
+        uint32 const spell = OpenLockSpellFor(p_, lock->Index[i]);
+        if (!spell)
+            continue;
+        if (p_->IsNonMeleeSpellCast(false))
+            return Result::Locked;
+        if (p_->IsMounted())
+            p_->RemoveAurasByType(SPELL_AURA_MOUNTED);
+        if (!p_->HasInArc(static_cast<float>(M_PI), obj))
+            p_->SetFacingToObject(obj, true);
+        SpellCastResult const r = p_->CastSpell(obj, spell, false);
+        TC_LOG_INFO("playerbot.v2", "[gather] {} cast {} on entry={} skill {} {}/{} result={}", p_->GetName(), spell, obj->GetEntry(),
+            uint32(skill), uint32(p_->GetSkillValue(skill)), uint32(lock->Skill[i]), uint32(r));
+        return r == SPELL_CAST_OK ? Result::Ok : Result::ServerRefused;
+    }
+    return Result::InvalidTarget;
 }
 
 // ---- Quest ---------------------------------------------------------------

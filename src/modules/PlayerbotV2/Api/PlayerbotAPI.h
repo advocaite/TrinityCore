@@ -21,6 +21,7 @@ class Player;
 class Unit;
 class Aura;
 class Group;
+class GameObject;
 
 namespace Playerbot {
 
@@ -762,6 +763,10 @@ public:
     // the GO's UsableMounted flag. Returns InvalidTarget when the GO isn't
     // in interact range.
     Result use_game_object(ObjectGuid go);
+    // An herb or ore vein (a chest locked by Herbalism or Mining), reached through use_game_object: casts the bot's gathering spell
+    // on it as a player's right-click does, or takes its loot once the spell has opened it. InvalidTarget when the bot lacks the
+    // skill, the skill level or the spell.
+    Result gather_node(GameObject* node);
 
     // ---- Quest --------------------------------------------------------
     // Accept the given quest from the named quest-giver (Creature, GameObject,
