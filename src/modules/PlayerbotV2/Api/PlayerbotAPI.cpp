@@ -16,6 +16,7 @@
 #include "ClassicBotSkills.h"
 #include "Travel/ReachMemory.h"
 #include "ClassicSpec.h"
+#include "TalentCode.h"
 #include "ClassicTalentBuilds.h"
 #include "ClassicSupplies.h"
 #include "Bot/ClassicUpkeep.h"
@@ -8819,6 +8820,120 @@ static std::vector<TraitEdgeEntry const*> const& TraitEdgesInto(int32 nodeId)
     return itr != byRight.end() ? itr->second : none;
 }
 
+// The owner's own build, a Wowhead Forever talent calculator code ("change talents <link>", Classic::SetTalentCode): learned as
+// written in place of ours. The ranks are bought in TalentCode::LevellingOrder (the tab with most points first, row by row), so a
+// bot below 60 fills its main tab first and each new level's point goes on down the build. Like the build walk below, a bot whose
+// level, code and ranks are what its last walk left is not walked again.
+static Result ApplyTalentCode(Player* p, UF::TraitConfig const& active, std::string const& code)
+{
+    namespace TCode = ::Playerbot::Classic::TalentCode;
+    std::vector<std::vector<::Playerbot::Classic::TalentSlot>> const* tabs = ::Playerbot::Classic::GetTalentTabs(p);
+    TCode::Parsed const parsed = TCode::Parse(code);
+    if (!tabs || !parsed.ok())
+        return Result::NotKnown;
+    TCode::Layout layout;
+    for (auto const& tab : *tabs)
+    {
+        std::vector<TCode::Slot>& slots = layout.emplace_back();
+        for (::Playerbot::Classic::TalentSlot const& slot : tab)
+            slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
+    }
+    TCode::Check const check = TCode::Validate(parsed, layout);
+    if (!check.ok())
+        return Result::InvalidTarget;
+
+    auto const heldRanks = [](auto const& entries)
+    {
+        std::map<std::pair<int32, int32>, int32> ranks;
+        for (auto const& e : entries)
+            if (e.Rank > 0)
+                ranks[{ e.TraitNodeID, e.TraitNodeEntryID }] = e.Rank;
+        return ranks;
+    };
+    auto const countRanks = [](std::map<std::pair<int32, int32>, int32> const& ranks)
+    {
+        uint32 n = 0;
+        for (auto const& [node, rank] : ranks)
+            n += uint32(rank);
+        return n;
+    };
+    struct CodeWalk { uint8 level; size_t code; uint32 ranks; };
+    static std::mutex s_lock;
+    static std::unordered_map<uint64, CodeWalk> s_walked;
+    uint64 const key = p->GetGUID().GetCounter();
+    size_t const codeHash = std::hash<std::string>{}(code);
+    uint32 const heldNow = countRanks(heldRanks(active.Entries));
+    {
+        std::lock_guard lock(s_lock);
+        if (auto itr = s_walked.find(key); itr != s_walked.end() && itr->second.level == uint8(p->GetLevel()) && itr->second.code == codeHash
+            && itr->second.ranks == heldNow)
+            return Result::Ok;
+    }
+
+    // From the free (granted) ranks only: the old talents go, as a respec would take them.
+    WorldPackets::Traits::TraitConfig cfg(active);
+    std::erase_if(cfg.Entries, [](WorldPackets::Traits::TraitEntry const& e) { return e.GrantedRanks == 0; });
+    for (WorldPackets::Traits::TraitEntry& e : cfg.Entries)
+        e.Rank = 0;
+
+    static uint32 const walkBudgetMs = sConfigMgr->GetIntDefault("Playerbot.ClassicTalents.WalkBudgetMs", 250, true);
+    uint32 const startMs = getMSTime();
+    uint32 validations = 0;
+    std::vector<TCode::Step> const steps = TCode::LevellingOrder(parsed);
+    // Walk the steps again until a pass buys nothing: a talent whose prerequisite sits to its right in the same row opens on the next pass.
+    for (bool progress = true; progress && getMSTimeDiff(startMs, getMSTime()) <= walkBudgetMs; )
+    {
+        progress = false;
+        for (TCode::Step const& step : steps)
+        {
+            ::Playerbot::Classic::TalentSlot const& slot = (*tabs)[step.tab][step.slot];
+            auto itr = std::ranges::find_if(cfg.Entries, [&](WorldPackets::Traits::TraitEntry const& e)
+            {
+                return e.TraitNodeID == slot.TraitNodeID && e.TraitNodeEntryID == slot.TraitNodeEntryID;
+            });
+            if (itr == cfg.Entries.end())
+            {
+                WorldPackets::Traits::TraitEntry& added = cfg.Entries.emplace_back();
+                added.TraitNodeID = slot.TraitNodeID;
+                added.TraitNodeEntryID = slot.TraitNodeEntryID;
+                itr = std::prev(cfg.Entries.end());
+            }
+            int32 const target = std::min<int32>(step.ranks, slot.MaxRanks - itr->GrantedRanks);
+            while (itr->Rank < target)
+            {
+                ++itr->Rank;
+                ++validations;
+                if (TraitMgr::ValidateConfig(cfg, p) != TraitMgr::LearnResult::Ok)
+                {
+                    --itr->Rank;
+                    break;
+                }
+                progress = true;
+            }
+            if (!itr->Rank && !itr->GrantedRanks)
+                cfg.Entries.erase(itr);
+        }
+    }
+    TraitMgr::ValidateConfig(cfg, p);   // leave the config in its validated state (subtree caches)
+
+    auto const want = heldRanks(cfg.Entries);
+    uint32 const placed = countRanks(want);
+    bool const already = want == heldRanks(active.Entries);
+    TC_LOG_INFO("playerbot.api", "[API::talents] {} L{} talent code {} ({}/{}/{}): {} of {} points {} ({} validations, {} ms)", p->GetName(),
+        uint32(p->GetLevel()), code, check.perTab.size() > 0 ? check.perTab[0] : 0, check.perTab.size() > 1 ? check.perTab[1] : 0,
+        check.perTab.size() > 2 ? check.perTab[2] : 0, placed, check.total, already ? "already in place" : "committed", validations,
+        getMSTimeDiff(startMs, getMSTime()));
+    if (!already)
+        p->UpdateTraitConfig(std::move(cfg), 0, /*withCastTime*/ false);
+    {
+        std::lock_guard lock(s_lock);
+        if (s_walked.size() > 8192)
+            s_walked.clear();
+        s_walked[key] = { uint8(p->GetLevel()), codeHash, placed };
+    }
+    return placed > 0 ? Result::Ok : Result::Locked;
+}
+
 Result API::apply_classic_talents()
 {
     if (!p_) return Result::Other;
@@ -8826,6 +8941,10 @@ Result API::apply_classic_talents()
 
     UF::TraitConfig const* active = p_->GetTraitConfig(p_->m_activePlayerData->ActiveCombatTraitConfigID);
     if (!active) return Result::NotKnown;
+
+    // The owner gave it a build of its own: that one, not ours.
+    if (std::string const code = ::Playerbot::Classic::GetTalentCode(p_->GetGUID()); !code.empty())
+        return ApplyTalentCode(p_, *active, code);
 
     uint32 const spec = ::Playerbot::Classic::EffectiveSpecId(p_);
     auto const build = ::Playerbot::Classic::GetTalentBuild(p_->GetClass(), spec);

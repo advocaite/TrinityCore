@@ -17,7 +17,7 @@ auto& Db() { return CharacterDatabase; }
 size_t OwnerRegistry::LoadFromDb()
 {
     auto result = Db().Query(
-        "SELECT character_guid_low, owner_account_id, owner_player_guid, companion_saved, starter_pet_granted, gear_varied, companion_role, companion_subgroup, companion_spec, companion_order, companion_saved_by "
+        "SELECT character_guid_low, owner_account_id, owner_player_guid, companion_saved, starter_pet_granted, gear_varied, companion_role, companion_subgroup, companion_spec, companion_order, companion_saved_by, companion_talents "
         "FROM playerbot_v2_character "
         "WHERE owner_account_id != 0 OR companion_role != 0");
     auto gear_modes = Db().Query("SELECT owner_account_id, gear_mode FROM playerbot_v2_owner_gear");
@@ -42,6 +42,7 @@ size_t OwnerRegistry::LoadFromDb()
     subgroup_.clear();
     spec_.clear();
     order_.clear();
+    talent_code_.clear();
     if (!result)
     {
         TC_LOG_INFO("playerbot.v2", "[PlayerbotV2 Owners] No owner bindings yet.");
@@ -71,6 +72,8 @@ size_t OwnerRegistry::LoadFromDb()
             spec_[bot] = sp;
         if (uint32 const ord = f[9].GetUInt8(); ord != 0)
             order_[bot] = uint16(ord - 1);
+        if (std::string code = f[11].GetString(); !code.empty())
+            talent_code_[bot] = std::move(code);
     } while (result->NextRow());
     uint32 tanks = 0, healers = 0, dps = 0;
     for (auto const& [bot, role] : declared_role_)
@@ -562,6 +565,37 @@ void OwnerRegistry::SetStoredSpec(BotId bot, uint32 spec)
         }
     }
     Db().DirectPExecute("UPDATE playerbot_v2_character SET companion_spec = {} WHERE character_guid_low = {}", spec, bot);
+}
+
+std::string OwnerRegistry::StoredTalentCode(BotId bot) const
+{
+    std::shared_lock lk(mtx_);
+    auto const it = talent_code_.find(bot);
+    return it == talent_code_.end() ? std::string() : it->second;
+}
+
+void OwnerRegistry::SetStoredTalentCode(BotId bot, std::string const& code)
+{
+    // Only digits and dashes reach here (TalentCode::Encode), and the column holds 64.
+    if (code.size() > 64 || code.find_first_not_of("0123456789-") != std::string::npos)
+        return;
+    {
+        std::unique_lock lk(mtx_);
+        auto const it = talent_code_.find(bot);
+        if (code.empty())
+        {
+            if (it == talent_code_.end())
+                return;
+            talent_code_.erase(it);
+        }
+        else
+        {
+            if (it != talent_code_.end() && it->second == code)
+                return;
+            talent_code_[bot] = code;
+        }
+    }
+    Db().DirectPExecute("UPDATE playerbot_v2_character SET companion_talents = '{}' WHERE character_guid_low = {}", code, bot);
 }
 
 bool OwnerRegistry::IsOwner(BotId bot, uint32 sender_account, uint64 sender_guid) const

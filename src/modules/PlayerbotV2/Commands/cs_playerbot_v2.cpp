@@ -38,6 +38,7 @@
 #include "TypeContainerVisitor.h"
 #include "PlayerbotAPI.h"
 #include "ClassicSpec.h"      // .playerbot questrun: spec override
+#include "TalentCode.h"       // .playerbot talentcode
 #include "DB2Stores.h"        // .playerbot questrun: sMapStore
 #include "PlayerbotV2.h"
 #include "LfgBotFill.h"
@@ -659,6 +660,7 @@ public:
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "talentwalk",    HandleTalentWalk,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "talentcode",    HandleTalentCode,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "graveyardscan", HandleGraveyardScan, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "wipefleet",     HandleWipeFleet,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "roadstats",     HandleRoadStats,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -4539,6 +4541,87 @@ public:
         }
         handler->PSendSysMessage("talentwalk: %u walked, %u ms in all, worst %u ms", walked, total_ms, worst_ms);
         return walked > 0;
+    }
+
+    // .playerbot talentcode <Name> [<wowhead link or code> | clear]
+    // The owner's talent build ("change talents <link>", Api/TalentCode.h) without a player in game: prints the bot's class tabs as the
+    // talent calculator lays them out (each talent's name, ranks and row), sets the code when
+    // one is given (checked as the whisper checks it), runs the talent walk at once and prints the code the bot then holds, so the two
+    // can be compared. "clear" gives it our builds back. Memory only: a companion's stored code is not touched.
+    static bool HandleTalentCode(ChatHandler* handler, Tail args)
+    {
+        namespace TCode = ::Playerbot::Classic::TalentCode;
+        std::string_view const all(args);
+        size_t const sp = all.find(' ');
+        std::string const name(all.substr(0, sp));
+        std::string code = sp == std::string_view::npos ? std::string() : std::string(all.substr(sp + 1));
+        Player* p = name.empty() ? nullptr : ObjectAccessor::FindPlayerByName(name);
+        if (!p || !p->IsInWorld())
+        {
+            handler->PSendSysMessage("talentcode: %s is not in the world", name.c_str());
+            return false;
+        }
+        auto const* tabs = ::Playerbot::Classic::GetTalentTabs(p);
+        if (!tabs)
+        {
+            handler->PSendSysMessage("talentcode: %s: no talent tabs (no talent config, or the data is not three tabs)", p->GetName().c_str());
+            return false;
+        }
+        for (size_t t = 0; t < tabs->size(); ++t)
+        {
+            std::string line;
+            for (::Playerbot::Classic::TalentSlot const& slot : (*tabs)[t])
+                line += fmt::format("{}{}:{}/r{}", line.empty() ? "" : ", ", slot.name.empty() ? std::to_string(slot.TraitNodeID) : slot.name,
+                                    slot.MaxRanks, uint32(slot.row));
+            handler->PSendSysMessage("talentcode: tab %u (%u talents): %s", uint32(t + 1), uint32((*tabs)[t].size()), line.c_str());
+        }
+        if (code == "clear")
+            ::Playerbot::Classic::SetTalentCode(p->GetGUID(), std::string());
+        else if (!code.empty())
+        {
+            TCode::Parsed const parsed = TCode::Parse(code);
+            TCode::Layout layout;
+            for (auto const& tab : *tabs)
+            {
+                std::vector<TCode::Slot>& slots = layout.emplace_back();
+                for (::Playerbot::Classic::TalentSlot const& slot : tab)
+                    slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
+            }
+            TCode::Error const error = !parsed.ok() ? parsed.error : TCode::Validate(parsed, layout).error;
+            if (error != TCode::Error::None || (parsed.cls && parsed.cls != p->GetClass()))
+            {
+                handler->PSendSysMessage("talentcode: refused (error %u, link class %u, bot class %u): %s", uint32(error), uint32(parsed.cls),
+                    uint32(p->GetClass()), std::string(TCode::ErrorText(error)).c_str());
+                return false;
+            }
+            ::Playerbot::Classic::SetTalentCode(p->GetGUID(), TCode::Encode(parsed.tabs));
+        }
+        uint32 const start = getMSTime();
+        Playerbot::Result const r = Playerbot::API(p).apply_classic_talents();
+        uint32 const ms = getMSTimeDiff(start, getMSTime());
+
+        UF::TraitConfig const* active = p->GetTraitConfig(p->m_activePlayerData->ActiveCombatTraitConfigID);
+        std::vector<std::vector<uint8_t>> held;
+        for (auto const& tab : *tabs)
+        {
+            std::vector<uint8_t>& row = held.emplace_back();
+            for (::Playerbot::Classic::TalentSlot const& slot : tab)
+            {
+                int32 rank = 0;
+                if (active)
+                    for (UF::TraitEntry const& e : active->Entries)
+                        if (e.TraitNodeID == slot.TraitNodeID && e.TraitNodeEntryID == slot.TraitNodeEntryID)
+                            rank = e.Rank;
+                row.push_back(uint8_t(std::clamp<int32>(rank, 0, 9)));
+            }
+        }
+        std::string const now = TCode::Encode(held);
+        std::string const wanted = ::Playerbot::Classic::GetTalentCode(p->GetGUID());
+        handler->PSendSysMessage("talentcode: %s L%u code set \"%s\", walk result %u in %u ms, holds \"%s\" %s", p->GetName().c_str(),
+            uint32(p->GetLevel()), wanted.c_str(), uint32(r), ms, now.c_str(),
+            wanted.empty() ? "(our build)" : now == wanted ? "(MATCH)" : "(partial or different: compare)");
+        handler->PSendSysMessage("talentcode: link %s", TCode::Link(p->GetClass(), now).c_str());
+        return true;
     }
 
     // .playerbot auracheck [@Player] [class id]

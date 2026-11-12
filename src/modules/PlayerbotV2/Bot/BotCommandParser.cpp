@@ -7,6 +7,7 @@
 #include "BotRegistry.h"
 #include "ClassTables.h"
 #include "ClassicSpec.h"
+#include "TalentCode.h"
 #include "SpecWords.h"
 #include "RecipeDifficulty.h"
 #include "../Threading/IntentQueue.h"
@@ -2671,6 +2672,187 @@ static bool OrderGearMode(Player* sender, Player* bot, std::string const& n)
     return true;
 }
 
+// "change talents <wowhead link or code>" (Dumpins, #bot-feedback 11-12, as ike3 bots' "talents" order): the bot learns the build
+// made in the Wowhead Forever talent calculator, in place of ours, and keeps putting each new level's point down it (Api/TalentCode.h,
+// PlayerbotAPI ApplyTalentCode). "talents link" says the bot's talents as a calculator link; "talents default" gives it our builds
+// back. Also "set talents ...", "talents <link>". False for anything else after "talents" ("talents apply" reaches the verb table).
+static std::string TalentErrorLine(::Playerbot::Classic::TalentCode::Error e)
+{
+    std::string line = "Talents: " + std::string(::Playerbot::Classic::TalentCode::ErrorText(e));
+    if (line.back() != '?')
+        line += '.';
+    return line;
+}
+
+static bool OrderTalentCode(Player* sender, Player* bot, std::string const& n)
+{
+    namespace TCode = ::Playerbot::Classic::TalentCode;
+    std::string rest;
+    bool matched = false;
+    for (std::string_view prefix : { std::string_view("change talents"), std::string_view("change talent"), std::string_view("set talents"),
+                                     std::string_view("set talent"), std::string_view("talents"), std::string_view("talent") })
+        if (n.rfind(prefix, 0) == 0 && (n.size() == prefix.size() || n[prefix.size()] == ' '))
+        {
+            rest = n.substr(prefix.size());
+            size_t const b = rest.find_first_not_of(' ');
+            rest = b == std::string::npos ? std::string() : rest.substr(b);
+            matched = prefix.rfind("talent", 0) != 0 || !rest.empty();   // bare "talents" stays the older report
+            break;
+        }
+    if (!matched)
+        return false;
+
+    BotId const id = bot->GetGUID().GetCounter();
+    bool const owned = Services::Owners().GetOwner(id).account_id != 0;
+    auto say = [&](std::string const& text) { Push(bot, WhisperIntent{sender->GetName(), text}); };
+    auto const* tabs = ::Playerbot::Classic::IsSingleSpecClass(bot->GetClass()) ? ::Playerbot::Classic::GetTalentTabs(bot) : nullptr;
+
+    if (rest == "link" || rest == "code" || rest == "wowhead" || rest == "build")
+    {
+        if (!tabs)
+        {
+            say("Talents: I can't read my class's talent trees.");
+            return true;
+        }
+        UF::TraitConfig const* active = bot->GetTraitConfig(bot->m_activePlayerData->ActiveCombatTraitConfigID);
+        std::vector<std::vector<uint8_t>> points;
+        for (auto const& tab : *tabs)
+        {
+            std::vector<uint8_t>& row = points.emplace_back();
+            for (::Playerbot::Classic::TalentSlot const& slot : tab)
+            {
+                int32 rank = 0;
+                if (active)
+                    for (UF::TraitEntry const& e : active->Entries)
+                        if (e.TraitNodeID == slot.TraitNodeID && e.TraitNodeEntryID == slot.TraitNodeEntryID)
+                            rank = e.Rank;
+                row.push_back(uint8_t(std::clamp<int32>(rank, 0, 9)));
+            }
+        }
+        std::string const code = TCode::Encode(points);
+        if (code.empty())
+        {
+            say("Talents: none learned yet.");
+            return true;
+        }
+        int spent[3] = { 0, 0, 0 };
+        for (size_t t = 0; t < points.size() && t < 3; ++t)
+            for (uint8_t p : points[t])
+                spent[t] += p;
+        say(fmt::format("Talents: my build {}/{}/{}: {}", spent[0], spent[1], spent[2], TCode::Link(bot->GetClass(), code)));
+        return true;
+    }
+
+    if (rest == "default" || rest == "reset" || rest == "clear" || rest == "off")
+    {
+        bool const had = !::Playerbot::Classic::GetTalentCode(bot->GetGUID()).empty();
+        ::Playerbot::Classic::SetTalentCode(bot->GetGUID(), std::string());
+        if (owned)
+            Services::Owners().SetStoredTalentCode(id, std::string());
+        if (!had)
+        {
+            say("Talents: I'm on my own builds already.");
+            return true;
+        }
+        if (bot->IsInCombat())
+        {
+            say("Talents: back to my own builds. In combat: whisper \"talents apply\" after the fight for the talents.");
+            return true;
+        }
+        Push(bot, ApplyStarterTalentsIntent{});
+        say("Talents: back to my own builds, talents re-learned.");
+        TC_LOG_INFO("playerbot.v2", "[owner_order] [talent_code] {} <- {}: cleared", bot->GetName(), sender->GetName());
+        return true;
+    }
+
+    if (rest.empty())
+    {
+        say("Talents: make the build in the Wowhead Forever talent calculator and whisper me \"change talents <link>\" with its link.");
+        return true;
+    }
+    // Only a link or something shaped like a code is taken here; other words after "talents" belong to the older verb.
+    bool const looksLikeCode = rest.find("talent-calc/") != std::string::npos ||
+        (rest.find_first_of("0123456789") != std::string::npos && rest.find_first_not_of("v0123456789-_/abcdefghijklmnopqrstuvwxyz") == std::string::npos
+         && (std::isdigit(static_cast<unsigned char>(rest[0])) || rest[0] == '-' || (rest[0] == 'v' && rest.size() > 1 && std::isdigit(static_cast<unsigned char>(rest[1])))));
+    if (!looksLikeCode)
+        return false;
+
+    if (!tabs)
+    {
+        say("Talents: I can't read my class's talent trees.");
+        return true;
+    }
+    TCode::Parsed const parsed = TCode::Parse(rest);
+    if (!parsed.ok())
+    {
+        say(TalentErrorLine(parsed.error));
+        TC_LOG_INFO("playerbot.v2", "[owner_order] [talent_code] {} <- {}: \"{}\" refused ({})", bot->GetName(), sender->GetName(), rest,
+            uint32(parsed.error));
+        return true;
+    }
+    if (parsed.cls && parsed.cls != bot->GetClass())
+    {
+        say(fmt::format("Talents: that link is for a {}, I'm a {}.", TCode::SlugOfClass(parsed.cls), TCode::SlugOfClass(bot->GetClass())));
+        return true;
+    }
+    TCode::Layout layout;
+    for (auto const& tab : *tabs)
+    {
+        std::vector<TCode::Slot>& slots = layout.emplace_back();
+        for (::Playerbot::Classic::TalentSlot const& slot : tab)
+            slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
+    }
+    TCode::Check const check = TCode::Validate(parsed, layout);
+    if (!check.ok())
+    {
+        say(TalentErrorLine(check.error));
+        TC_LOG_INFO("playerbot.v2", "[owner_order] [talent_code] {} <- {}: \"{}\" does not fit (error {}, tab {}, talent {})", bot->GetName(),
+            sender->GetName(), rest, uint32(check.error), check.tab, check.slot);
+        return true;
+    }
+
+    std::string const code = TCode::Encode(parsed.tabs);
+    ::Playerbot::Classic::SetTalentCode(bot->GetGUID(), code);
+    if (owned)
+        Services::Owners().SetStoredTalentCode(id, code);
+
+    // The rotation follows the build: the spec of ours it is closest to (a deep Protection build plays as a tank), and so does the role,
+    // as a setspec would set them.
+    std::vector<std::tuple<int32, int32, int32>> ranks;
+    for (size_t t = 0; t < parsed.tabs.size(); ++t)
+        for (size_t i = 0; i < parsed.tabs[t].size(); ++i)
+            if (parsed.tabs[t][i])
+                ranks.emplace_back((*tabs)[t][i].TraitNodeID, (*tabs)[t][i].TraitNodeEntryID, int32(parsed.tabs[t][i]));
+    uint8 const cls = bot->GetClass();
+    if (uint32 const spec = ::Playerbot::Classic::InferSpecFromRanks(bot, ranks); spec && ::Playerbot::Classic::SetSpecOverride(bot, spec))
+    {
+        Role const r = IsTankSpec(cls, uint16(spec)) ? Role::Tank : IsHealerSpec(cls, uint16(spec)) ? Role::Healer : Role::Dps;
+        if (BotAI* ai = Services::Registry().ai(id))
+            if (ai->role_override() != Role::Unknown)
+                ai->set_role_override(r);
+        PersistDeclaredRole(bot, r);
+        if (owned)
+            Services::Owners().SetStoredSpec(id, spec);
+    }
+
+    int const pointsNow = std::max<int>(0, int(bot->GetLevel()) - 9);
+    std::string const split = fmt::format("{}/{}/{}", check.perTab.size() > 0 ? check.perTab[0] : 0, check.perTab.size() > 1 ? check.perTab[1] : 0,
+                                          check.perTab.size() > 2 ? check.perTab[2] : 0);
+    TC_LOG_INFO("playerbot.v2", "[owner_order] [talent_code] {} <- {}: code {} ({}, {} points, level {})", bot->GetName(), sender->GetName(),
+        code, split, check.total, uint32(bot->GetLevel()));
+    if (bot->IsInCombat())
+    {
+        say(fmt::format("Talents: your build {} is saved. In combat: whisper \"talents apply\" after the fight for the talents.", split));
+        return true;
+    }
+    Push(bot, ApplyStarterTalentsIntent{});
+    if (pointsNow >= check.total)
+        say(fmt::format("Talents: learning your build {}.", split));
+    else
+        say(fmt::format("Talents: learning your build {}: {} points now, the rest as I level.", split, pointsNow));
+    return true;
+}
+
 bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::string const& msg)
 {
     if (!IsAuthorized(sender, bot)) return false;
@@ -2683,6 +2865,11 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
 
     // Gear mode: gear match | best | t1 | t2 | t3.
     if (normalized.rfind("gear ", 0) == 0 && OrderGearMode(sender, bot, normalized))
+        return true;
+
+    // The owner's own talent build: change talents <wowhead link or code>, talents link, talents default.
+    if ((normalized.rfind("talent", 0) == 0 || normalized.rfind("change talent", 0) == 0 || normalized.rfind("set talent", 0) == 0)
+        && OrderTalentCode(sender, bot, normalized))
         return true;
 
     // Gear orders: equip <item|upgrades|best>, use your best gear.
@@ -4262,6 +4449,10 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // Classic 1.60: there is nothing to activate; pin the virtual spec.
         if (::Playerbot::Classic::SetSpecOverride(bot, spec))
         {
+            // A spec of ours replaces the owner's own talent build ("change talents <link>").
+            ::Playerbot::Classic::SetTalentCode(bot->GetGUID(), std::string());
+            if (Services::Owners().GetOwner(bot->GetGUID().GetCounter()).account_id != 0)
+                Services::Owners().SetStoredTalentCode(bot->GetGUID().GetCounter(), std::string());
             // The spec chosen is the role: a role pin from before (a healer pin on a now tank spec) would disagree with it.
             BotId const id = bot->GetGUID().GetCounter();
             Role const r = IsTankSpec(cls, uint16(spec)) ? Role::Tank : IsHealerSpec(cls, uint16(spec)) ? Role::Healer : Role::Dps;

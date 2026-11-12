@@ -111,6 +111,12 @@ public:
     uint16 StoredOrder(BotId bot) const;
     void   SetStoredOrder(BotId bot, uint16 order);
 
+    // The owner's own talent build for the companion, a Wowhead Forever talent calculator code ("change talents <link>",
+    // Api/TalentCode.h), empty = none: the bot learns it instead of our builds and is given it again at login. Writes immediately.
+    // Migration 0040.
+    std::string StoredTalentCode(BotId bot) const;
+    void        SetStoredTalentCode(BotId bot, std::string const& code);
+
     // The gear mode an owner account chose for its companions (Gear::Owned::GearMode value; 0 = match when never set). Writes
     // immediately. Migration 0025.
     uint8 OwnerGearMode(uint32 account_id) const;
@@ -250,6 +256,7 @@ private:
     std::unordered_set<BotId>                gear_varied_raid_;
     std::unordered_map<BotId, Role>          declared_role_;
     std::unordered_map<BotId, uint32>        spec_;
+    std::unordered_map<BotId, std::string>   talent_code_;   // owner's talent codes, StoredTalentCode
     std::unordered_map<BotId, uint16>        order_;
     std::unordered_map<BotId, uint8>         subgroup_;   // 0-based raid sub-group
     std::unordered_map<uint32, uint8>        owner_gear_mode_;

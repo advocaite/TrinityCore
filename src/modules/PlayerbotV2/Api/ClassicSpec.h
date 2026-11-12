@@ -20,6 +20,7 @@
 #include "Define.h"
 #include "ObjectGuid.h"
 #include <string>
+#include <tuple>
 #include <vector>
 
 class Player;
@@ -55,5 +56,30 @@ TC_GAME_API TalentNode const* FindTalent(Player const* player, std::string const
 // Every talent name (lower-cased key) the player's class trees answer to: for a build pick FindTalent does not find, this shows
 // what the client data calls it.
 TC_GAME_API std::vector<std::string> ListTalentNames(Player const* player);
+
+// One talent of a class tab, where the game shows it: tabs left to right, each tab's talents row by row, left to right, the same
+// order as the Wowhead Forever talent calculator's code (TalentCode.h). Nodes off the tab's grid (hidden ones the client data keeps)
+// are not talents.
+struct TalentSlot
+{
+    int32 TraitNodeID = 0;
+    int32 TraitNodeEntryID = 0;
+    int32 MaxRanks = 0;
+    uint8 row = 0;
+    std::string name;   // lower-cased name key, empty when the class index has none
+};
+// The class's three tabs, built once per class from the trait data; nullptr when the player has no talent config or the data does
+// not lay out as three tabs.
+TC_GAME_API std::vector<std::vector<TalentSlot>> const* GetTalentTabs(Player const* player);
+
+// The spec of our builds that ranks on these nodes fit best, the way InferClassicSpec reads bought talents: (node, entry, ranks).
+// 0 when none fits.
+TC_GAME_API uint32 InferSpecFromRanks(Player const* player, std::vector<std::tuple<int32, int32, int32>> const& ranks);
+
+// A talent build the owner gave the bot as a Wowhead talent calculator code ("change talents <link>"): while one is set, the bot
+// learns that build instead of ours, and the points of each new level go down it. Empty clears. Kept in memory; owned companions
+// store it as well (OwnerRegistry::SetStoredTalentCode).
+TC_GAME_API void SetTalentCode(ObjectGuid guid, std::string code);
+TC_GAME_API std::string GetTalentCode(ObjectGuid guid);
 
 } // namespace Playerbot::Classic

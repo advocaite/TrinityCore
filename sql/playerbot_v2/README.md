@@ -21,6 +21,7 @@ Applied in ascending numeric order; each file records itself in
 - `0024_companion_role.sql` — `playerbot_v2_character.companion_role`: a companion's declared role (tank/healer/dps), kept across relog, `.bot call` and restart
 - `0025_owner_gear_mode.sql` — `playerbot_v2_owner_gear`: the gear mode (match / best / t1 / t2 / t3) an owner chose for their companions, per owner account
 - `0038_owner_language.sql` — `playerbot_v2_owner_language`: the language (en / ru) a player chose for the bots' replies with `.bot language`, per account
+- `0040_companion_talent_code.sql` — `playerbot_v2_character.companion_talents`: a companion's own talent build, given as a Wowhead Forever talent calculator code (`change talents <link>`), kept across relog and restart
 
 ## Discipline
 - Never edit a numbered migration after it ships. Add a new one to amend.

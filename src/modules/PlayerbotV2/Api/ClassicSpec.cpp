@@ -12,6 +12,8 @@
 #include "Log.h"
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <set>
 #include <map>
 #include <algorithm>
 #include <mutex>
@@ -168,6 +170,12 @@ auto FirstTalentAlternative(std::string_view name, Fn&& lookup) -> decltype(look
 
 std::mutex g_indexLock;
 std::unordered_map<uint8, ClassTalentIndex> g_indexes;
+
+// Talent tabs per class (GetTalentTabs) and the owners' talent codes per bot (SetTalentCode).
+std::mutex g_tabsLock;
+std::unordered_map<uint8, std::vector<std::vector<TalentSlot>>> g_tabs;
+std::shared_mutex g_codeLock;
+std::unordered_map<ObjectGuid, std::string> g_codes;
 
 
 // English names of the class talents (spell id, 1.60 name, 1.12 name where it differs): the talent builds use them, the
@@ -654,6 +662,8 @@ ClassTalentIndex const* GetClassTalentIndex(Player const* player)
     return &index;
 }
 
+uint32 BestBuildFor(uint8 cls, std::unordered_map<std::string, int32> const& owned);
+
 // Which build do the player's purchased talents fit best? Each rank counts
 // for a spec whose build lists that talent (up to the build's ranks). 0 when
 // the player has no purchased talents; ties go to the earlier build.
@@ -671,6 +681,12 @@ uint32 InferFromTalents(Player const* player)
         if (e.Rank > 0)
             if (auto itr = index->nameByEntry.find({ e.TraitNodeID, e.TraitNodeEntryID }); itr != index->nameByEntry.end())
                 owned[itr->second] += e.Rank;
+    return BestBuildFor(player->GetClass(), owned);
+}
+
+// The spec whose build lists most of these ranks (by talent name key, up to the build's ranks); ties go to the earlier build.
+uint32 BestBuildFor(uint8 cls, std::unordered_map<std::string, int32> const& owned)
+{
     if (owned.empty())
         return 0;
 
@@ -678,7 +694,7 @@ uint32 InferFromTalents(Player const* player)
     int32 bestScore = 0;
     for (TalentBuild const& build : GetTalentBuilds())
     {
-        if (build.cls != player->GetClass())
+        if (build.cls != cls)
             continue;
         int32 score = 0;
         for (TalentPick const& pick : build.picks)
@@ -719,6 +735,125 @@ std::vector<std::string> ListTalentNames(Player const* player)
         names.push_back(name);
     std::ranges::sort(names);
     return names;
+}
+
+std::vector<std::vector<TalentSlot>> const* GetTalentTabs(Player const* player)
+{
+    if (!player)
+        return nullptr;
+    uint8 const cls = player->GetClass();
+    {
+        std::lock_guard lock(g_tabsLock);
+        if (auto itr = g_tabs.find(cls); itr != g_tabs.end())
+            return itr->second.empty() ? nullptr : &itr->second;
+    }
+    UF::TraitConfig const* active = player->GetTraitConfig(player->m_activePlayerData->ActiveCombatTraitConfigID);
+    if (!active)
+        return nullptr;   // not cached: a bot without a config yet says nothing about its class
+    ClassTalentIndex const* index = GetClassTalentIndex(player);
+
+    // The client data draws a class's three tabs side by side in one trait tree: rows 600 apart from the top row (a row's nodes
+    // differ by a few units), talents 600 apart in a row, and a wide gap between tabs. Nodes far below the seventh row or off on
+    // their own are hidden ones the data keeps (a hunter and a priest node on 70862); they are not in the calculator.
+    struct Placed { TraitMgr::NodeEntryInfo info; int32 x; int32 row; };
+    std::vector<Placed> placed;
+    std::vector<TraitMgr::NodeEntryInfo> const entries = TraitMgr::GetNodeEntriesForConfig(WorldPackets::Traits::TraitConfig(*active));
+    // The top row: the highest y that at least three nodes share (one hidden node above the tabs must not shift the rows).
+    std::vector<int32> ys;
+    for (TraitMgr::NodeEntryInfo const& e : entries)
+        if (TraitNodeEntry const* node = sTraitNodeStore.LookupEntry(e.TraitNodeID))
+            ys.push_back(node->PosY);
+    std::ranges::sort(ys);
+    int32 topY = ys.empty() ? 0 : ys.front();
+    for (size_t i = 0; i < ys.size(); ++i)
+        if (std::ranges::count_if(ys, [&](int32 y) { return std::abs(y - ys[i]) <= 100; }) >= 3)
+        {
+            topY = ys[i];
+            break;
+        }
+    std::set<int32> seenNodes;
+    for (TraitMgr::NodeEntryInfo const& e : entries)
+    {
+        TraitNodeEntry const* node = sTraitNodeStore.LookupEntry(e.TraitNodeID);
+        if (!node || !seenNodes.insert(e.TraitNodeID).second)   // a choice node lists two entries: the calculator has one talent there
+            continue;
+        int32 const row = int32(std::lround(double(node->PosY - topY) / 600.0));
+        if (row < 0 || row > 6)
+            continue;
+        placed.push_back({ e, node->PosX, row });
+    }
+    std::vector<std::vector<TalentSlot>> tabs;
+    if (!placed.empty())
+    {
+        std::ranges::sort(placed, [](Placed const& a, Placed const& b) { return a.x < b.x; });
+        std::vector<std::vector<Placed>> columns(1);
+        for (size_t i = 0; i < placed.size(); ++i)
+        {
+            if (i && placed[i].x - placed[i - 1].x >= 1500)
+                columns.emplace_back();
+            columns.back().push_back(placed[i]);
+        }
+        for (std::vector<Placed>& tab : columns)
+        {
+            if (tab.size() < 8)   // a stray node, not a tab
+                continue;
+            std::ranges::sort(tab, [](Placed const& a, Placed const& b) { return a.row != b.row ? a.row < b.row : a.x < b.x; });
+            std::vector<TalentSlot>& slots = tabs.emplace_back();
+            for (Placed const& p : tab)
+            {
+                TalentSlot& slot = slots.emplace_back();
+                slot.TraitNodeID = p.info.TraitNodeID;
+                slot.TraitNodeEntryID = p.info.TraitNodeEntryID;
+                slot.MaxRanks = p.info.MaxRanks;
+                slot.row = uint8(p.row);
+                if (index)
+                    if (auto itr = index->nameByEntry.find({ p.info.TraitNodeID, p.info.TraitNodeEntryID }); itr != index->nameByEntry.end())
+                        slot.name = itr->second;
+            }
+        }
+    }
+    if (tabs.size() != 3)
+    {
+        TC_LOG_ERROR("playerbot.v2", "[talent_code] class {}: the talent data lays out as {} tabs, not 3: talent codes are refused for it",
+            uint32(cls), tabs.size());
+        tabs.clear();
+    }
+    else
+        TC_LOG_INFO("playerbot.v2", "[talent_code] class {}: tabs of {}/{}/{} talents", uint32(cls), tabs[0].size(), tabs[1].size(), tabs[2].size());
+    std::lock_guard lock(g_tabsLock);
+    auto const itr = g_tabs.try_emplace(cls, std::move(tabs)).first;
+    return itr->second.empty() ? nullptr : &itr->second;
+}
+
+uint32 InferSpecFromRanks(Player const* player, std::vector<std::tuple<int32, int32, int32>> const& ranks)
+{
+    if (!player)
+        return 0;
+    ClassTalentIndex const* index = GetClassTalentIndex(player);
+    if (!index)
+        return 0;
+    std::unordered_map<std::string, int32> owned;
+    for (auto const& [nodeId, entryId, rank] : ranks)
+        if (rank > 0)
+            if (auto itr = index->nameByEntry.find({ nodeId, entryId }); itr != index->nameByEntry.end())
+                owned[itr->second] += rank;
+    return BestBuildFor(player->GetClass(), owned);
+}
+
+void SetTalentCode(ObjectGuid guid, std::string code)
+{
+    std::unique_lock lock(g_codeLock);
+    if (code.empty())
+        g_codes.erase(guid);
+    else
+        g_codes[guid] = std::move(code);
+}
+
+std::string GetTalentCode(ObjectGuid guid)
+{
+    std::shared_lock lock(g_codeLock);
+    auto itr = g_codes.find(guid);
+    return itr != g_codes.end() ? itr->second : std::string();
 }
 
 bool IsRetailClassSpec(uint8 cls, uint32 spec)

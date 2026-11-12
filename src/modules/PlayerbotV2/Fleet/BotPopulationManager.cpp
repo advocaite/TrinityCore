@@ -1548,6 +1548,13 @@ Role BotPopulationManager::ApplyCompanionRole(Player* bot, Role requested, char 
         }
     }
 
+    // The owner's own talent build ("change talents <link>"), given back after a restart: the bot keeps learning it, not ours.
+    if (std::string const code = owners.StoredTalentCode(id); !code.empty() && ::Playerbot::Classic::GetTalentCode(bot->GetGUID()) != code)
+    {
+        ::Playerbot::Classic::SetTalentCode(bot->GetGUID(), code);
+        TC_LOG_INFO("playerbot.v2", "[roster_restore] {} talent code {} (saved)", bot->GetName(), code);
+    }
+
     // The spec the owner saved the bot in, when it still fits the role it plays (a role changed since goes by the class default).
     if (uint32 const saved = owners.StoredSpec(id); saved)
     {
