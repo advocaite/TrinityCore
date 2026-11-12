@@ -692,6 +692,8 @@ public:
             { "call",          HandleBotCall,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             // Every player: brings the caller's own bots only (`.bot summon all|saved|<bot name>`).
             { "summon",        HandleBotSummon,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
+            // Every player: takes the caller to one of their own bots (`.bot goto <bot name>`).
+            { "goto",          HandleBotGoto,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
             { "dismiss",       HandleBotDismiss,    rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "regear",        HandleBotRegear,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "gear",          HandleBotGear,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
@@ -1323,6 +1325,56 @@ public:
         handler->SendSysMessage("You can only summon your own bots: `.bot summon all` (your group), `.bot summon saved` or `.bot summon <bot name>`.");
         handler->SetSentErrorMessage(true);
         return false;
+    }
+
+    // .bot goto <bot name>: takes the caller to one of their own bots (a companion or a summoned alt), the other way round from
+    // `.bot summon`. Every player has it; `.appear` is a GM command (Discord 12 Nov). Only the caller's own bots, and only from
+    // where a hearthstone could be used: not in combat, not dead, not on a flight path, not in or into a battleground or arena.
+    // Into a dungeon or raid only when the caller is in the bot's group, and the map's own entry checks (lock, level, attunement)
+    // still decide, as for any other teleport.
+    static bool HandleBotGoto(ChatHandler* handler, Tail args)
+    {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
+        WorldSession* sess = handler ? handler->GetSession() : nullptr;
+        Player* me = sess ? sess->GetPlayer() : nullptr;
+        if (!me)
+            return false;
+        if (!Playerbot::Services::Initialized())
+        { handler->SendSysMessage("PlayerbotV2 not initialized."); return Refuse(handler); }
+        std::string who(args);
+        while (!who.empty() && (who.back() == ' ' || who.back() == '\t')) who.pop_back();
+        while (!who.empty() && (who.front() == ' ' || who.front() == '\t')) who.erase(who.begin());
+        if (who.empty() || ToLowerAscii(who) == "all")
+        { handler->SendSysMessage(".bot goto <bot name>: takes you to one of your bots."); return Refuse(handler); }
+        auto const ids = CompanionsMatching(sess, who);
+        if (ids.empty())
+        { handler->PSendSysMessage("No bot or summoned alt of yours called '%s'. `.bot list` shows your bots.", who.c_str()); return Refuse(handler); }
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ids.front()));
+        if (!bot || !bot->IsInWorld() || bot->IsBeingTeleported())
+        {
+            std::string const name = CompanionName(ids.front());
+            handler->PSendSysMessage("%s is offline: `.bot call %s` first.", name.c_str(), name.c_str());
+            return Refuse(handler);
+        }
+        if (me->IsInCombat() || !me->IsAlive())
+        { handler->SendSysMessage("Not while you are in combat or dead."); return Refuse(handler); }
+        if (me->IsInFlight())
+        { handler->SendSysMessage("Not while you are on a flight path."); return Refuse(handler); }
+        if (me->GetMap()->IsBattlegroundOrArena() || bot->GetMap()->IsBattlegroundOrArena())
+        { handler->SendSysMessage("Not into or out of a battleground or arena."); return Refuse(handler); }
+        if (bot->GetMap()->IsDungeon())
+        {
+            Group const* group = me->GetGroup();
+            if (!group || !group->IsMember(bot->GetGUID()))
+            {
+                handler->PSendSysMessage("%s is in a dungeon or raid: invite it to your group first.", bot->GetName().c_str());
+                return Refuse(handler);
+            }
+        }
+        if (!me->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation()))
+        { handler->PSendSysMessage("Could not take you to %s.", bot->GetName().c_str()); return Refuse(handler); }
+        handler->PSendSysMessage("Going to %s.", bot->GetName().c_str());
+        return true;
     }
 
     // .learn all mylevel [player]: what a visit to the class trainers, the class quests and the weapon masters would have
