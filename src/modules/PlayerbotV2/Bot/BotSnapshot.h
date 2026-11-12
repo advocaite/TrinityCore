@@ -1861,6 +1861,10 @@ struct DeathState
     // 0 = none resolved (not a ghost, same map, or no trigger on this map).
     uint32 ghost_portal_at_id       = 0;
     float  ghost_portal_x = 0.f, ghost_portal_y = 0.f, ghost_portal_z = 0.f;
+    // Ghost outside the dungeon or raid that holds its corpse, and crossing the entrance would not bring it to that corpse: the
+    // instance the server would put it in is none (it would create a new one: the run ended, the group is gone) or is loaded and
+    // has no corpse of this bot. State_Dead takes the spirit healer then instead of making a new instance for one ghost.
+    bool   corpse_instance_gone     = false;
 
     void reset() { *this = DeathState{}; }
 };

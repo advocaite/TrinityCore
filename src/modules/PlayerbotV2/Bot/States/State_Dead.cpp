@@ -744,6 +744,24 @@ void DispatchDead(BotAI& ai,
                            (cmap != 0 && cmap == snapshot.map_id() && cinst != binst);
     if (cross_map)
     {
+        // The dungeon or raid holding the corpse is not the one the ghost would enter any more (the run ended, the group left or
+        // was disbanded): crossing the entrance would make a new instance, a whole dungeon map loaded for one ghost (a finished
+        // Zul'Gurub run's 20 ghosts at once is a world-thread stall), and the corpse is not in it. Take the spirit healer, as a
+        // player whose group is gone does; alive outside, the bot carries on from there. Once per 2 s while it lands.
+        if (snapshot.raw().death.corpse_instance_gone)
+        {
+            const uint32 gnow = GameTime::GetGameTimeMS();
+            if (ai.portal_enter_ms() == 0 || gnow - ai.portal_enter_ms() >= 2000u)
+            {
+                TC_LOG_INFO("playerbot.v2",
+                    "[death-recovery] {} ghost: the instance of map {} holding its corpse is gone (entering would make a new one): spirit healer",
+                    snapshot.name(), cmap);
+                emit.emit(SpiritResurrectIntent{});
+                ai.set_portal_enter_ms(gnow ? gnow : 1u);
+            }
+            ai.set_last_rule_fired("dead:corpse_instance_gone_spirit_resurrect");
+            return;
+        }
         // Preferred: the instance's entrance area trigger on this map (resolved
         // by the snapshot builder). Walk into it and cross it — what a client's
         // CMSG_AREA_TRIGGER does — so the server ports the ghost inside, where

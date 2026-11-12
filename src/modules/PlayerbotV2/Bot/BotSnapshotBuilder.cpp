@@ -52,6 +52,7 @@
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Map.h"
+#include "MapManager.h"
 #include "InstanceScript.h"
 #include "PhaseShift.h"
 #include "InstanceScenario.h"
@@ -2182,6 +2183,16 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             if (Map* cmap = corpse->FindMap())
                 snap->death.corpse_instance_id = cmap->GetInstanceId();
         }
+        // A ghost outside the instance holding its corpse: is that instance still the one it would enter? MapManager answers with
+        // the instance a player of this group (or alone) is put in, 0 when it would get a new one.
+        if (snap->death.is_ghost && snap->death.corpse_map_id != p->GetMapId())
+            if (MapEntry const* cme = sMapStore.LookupEntry(snap->death.corpse_map_id); cme && cme->IsDungeon())
+            {
+                uint32 const enter_id = sMapMgr->FindInstanceIdForPlayer(snap->death.corpse_map_id, p);
+                Map const* enter_map = enter_id ? sMapMgr->FindMap(snap->death.corpse_map_id, enter_id) : nullptr;
+                // An instance that is not loaded is read back from the database with its corpses when entered: that is fine.
+                snap->death.corpse_instance_gone = enter_id == 0 || (enter_map && !enter_map->GetCorpseByPlayer(p->GetGUID()));
+            }
         // Corpse → graveyard distance. Cache key is the corpse position;
         // it doesn't change while the corpse is in the world, so we reuse
         // the cached distance until either (a) the bot moves the corpse
