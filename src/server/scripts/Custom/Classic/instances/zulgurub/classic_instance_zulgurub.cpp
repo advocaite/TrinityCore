@@ -26,10 +26,12 @@
 #include "GameEventMgr.h"
 #include "GameTime.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Random.h"
+#include "SmartEnum.h"
 #include "ScriptedCreature.h"
 #include "Spell.h"
 #include "SpellAuras.h"
@@ -688,6 +690,7 @@ struct classic_zg_zealot_base : public ScriptedAI
     {
         m_phase = THEKAL_PHASE_FALLEN;
         m_allFallenCheckTimer = kThekalAllFallenCheckMs;
+        m_fallenWaitMs = 0;
         m_rezLandTimer = 0;
         me->SetCanMelee(false);
         SetCombatMovement(false);
@@ -743,6 +746,40 @@ struct classic_zg_zealot_base : public ScriptedAI
         m_rezLandTimer = kThekalRezLandMs;
     }
 
+    // What each of the three is doing, for the logs below.
+    std::string TrioState() const
+    {
+        std::string s;
+        if (!m_pInstance)
+            return s;
+        for (uint32 data : { CLASSIC_ZG_DATA_LORKHAN, CLASSIC_ZG_DATA_ZATH, CLASSIC_ZG_DATA_THEKAL })
+        {
+            Creature* c = me->GetMap()->GetCreature(m_pInstance->GetGuidData(data));
+            if (!s.empty())
+                s += ", ";
+            if (!c)
+            {
+                s += "gone";
+                continue;
+            }
+            Unit* victim = c->GetVictim();
+            s += Trinity::StringFormat("{} {} {:.0f}% {} combat {} threat {} victim {}", c->GetName(), c->IsAlive() ? "alive" : "dead", c->GetHealthPct(),
+                c->GetStandState() == UNIT_STAND_STATE_DEAD ? "lying" : "standing", c->IsInCombat(), c->GetThreatManager().GetThreatListSize(),
+                victim ? victim->GetName() : "none");
+        }
+        return s;
+    }
+
+    // zg_thekal 0136-1: the three fell within 3 s at 48 s, Thekal never rose, and the raid stood 25 min at their bodies with nothing to
+    // say why. An evade of one of them, and a fallen one that finds a partner still standing for 10 s, now write the three's states.
+    void EnterEvadeMode(EvadeReason why) override
+    {
+        TC_LOG_INFO("scripts.classic", "ZG Thekal trio: {} evades ({}) in phase {}; {}", me->GetName(), EnumUtils::ToConstant(why), m_phase, TrioState());
+        ScriptedAI::EnterEvadeMode(why);
+    }
+
+    uint32 m_fallenWaitMs = 0;
+
     void UpdateAI(uint32 diff) override
     {
         if (!UpdateVictim())
@@ -754,7 +791,13 @@ struct classic_zg_zealot_base : public ScriptedAI
             {
                 m_allFallenCheckTimer = kThekalAllFallenCheckMs;
                 if (m_pInstance && !m_pInstance->GetData(CLASSIC_ZG_DATA_THEKAL_COND_CAN_REZ))
+                {
+                    m_fallenWaitMs = 0;
                     OnAllFallen();
+                }
+                else if ((m_fallenWaitMs += kThekalAllFallenCheckMs) % 10000 == 0)
+                    TC_LOG_INFO("scripts.classic", "ZG Thekal trio: {} has lain {} s with a partner still standing; {}", me->GetName(),
+                        m_fallenWaitMs / 1000, TrioState());
             }
             else
                 m_allFallenCheckTimer -= diff;
