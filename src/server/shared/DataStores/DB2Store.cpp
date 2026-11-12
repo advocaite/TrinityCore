@@ -20,6 +20,7 @@
 #include "DB2DatabaseLoader.h"
 #include "DB2FileSystemSource.h"
 #include "DB2Meta.h"
+#include "Log.h"
 #include "StringFormat.h"
 
 DB2StorageBase::DB2StorageBase(char const* fileName, DB2LoadInfo const* loadInfo)
@@ -105,6 +106,29 @@ void DB2StorageBase::Load(std::string const& path, LocaleConstant locale)
     _tableHash = db2.GetTableHash();
     _layoutHash = db2.GetLayoutHash();
     _minId = db2.GetMinId();
+
+    // Sections locked by a TACT key the extractor did not have are skipped (DB2FileLoader IsKnownTactId): their records are
+    // missing on the server while the client, which gets the key as a TactKey hotfix, reads them. Spell visuals were one case:
+    // Holy Strike (679) had no SpellXSpellVisual row, so SMSG_SPELL_GO carried visual 0 and the client played no animation or
+    // sound (Discord, dumpins, 10 Nov). The extractor decrypts a section when the key is known at extraction time (it loads
+    // wowdev/TACTKeys), so the fix is a fresh dbc extraction; this line says which tables need it.
+    {
+        uint32 lockedSections = 0, lockedRecords = 0;
+        std::string keys;
+        for (uint32 i = 0; i < db2.GetHeader().SectionCount; ++i)
+        {
+            DB2SectionHeader const& section = db2.GetSectionHeader(i);
+            if (section.TactId == 0 || section.TactId == DUMMY_KNOWN_TACT_ID)
+                continue;
+            ++lockedSections;
+            lockedRecords += section.RecordCount;
+            if (keys.size() < 200)
+                keys += Trinity::StringFormat("{}{:016X}", keys.empty() ? "" : " ", section.TactId);
+        }
+        if (lockedSections)
+            TC_LOG_WARN("server.loading", "{}: {} records in {} sections are locked by TACT keys the extractor did not have ({}); the server "
+                "cannot read them. Extract the dbc folder again with the current mapextractor (-e 2).", _fileName, lockedRecords, lockedSections, keys);
+    }
 
     // load raw non-string data
     _dataTable = db2.AutoProduceData(_indexTableSize, _indexTable);
