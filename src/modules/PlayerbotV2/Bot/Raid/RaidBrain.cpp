@@ -1966,6 +1966,27 @@ bool BreathDue(HideBeforeBreath const& rule, uint32_t t)
     return t <= at + rule.afterMs || (k > 0 && t <= at - rule.periodMs + rule.afterMs);
 }
 
+// Whether a hideBeforeBreath rule wants <self> out of <enemy>'s sight now: the same tests as HideBeforeBreathMove (a matching bot that
+// is neither its victim nor the main tank, the breath due on the enemy's clock or being cast). The frontal cone step (2b) asks it, so
+// that a sidestep in a breath window never leads into the enemy's sight.
+bool HidingFromBreath(Plan const& plan, Member const& self, Unit* enemy, uint32_t now)
+{
+    Player* bot = self.p;
+    if (!enemy->IsInCombat() || enemy->GetVictim() == bot || bot == plan.mainTank)
+        return false;
+    for (HideBeforeBreath const& rule : plan.rules->hideBeforeBreath)
+    {
+        if (rule.enemy != enemy->GetEntry() || !Matches(rule.who, self, plan.mainTank))
+            continue;
+        auto const start = g_breathClockStart.find(enemy->GetGUID().GetCounter());
+        if (start == g_breathClockStart.end() || !start->second)
+            continue;
+        if (BreathDue(rule, now - start->second) || CastingBreath(enemy, rule.spells))
+            return true;
+    }
+    return false;
+}
+
 // Step 2b1 of DecideMove. True when the bot was given its order (walk to a hidden spot, or wait at it).
 bool HideBeforeBreathMove(Plan const& plan, Member const& self, uint32_t now, std::vector<Circle> const& circles, RaidOrder& out)
 {
@@ -2488,6 +2509,11 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
             while (toBot < -float(M_PI)) toBot += 2.0f * float(M_PI);
             if (std::fabs(toBot) >= half)
                 continue; // already outside the cone
+            // In a breath window (Chromaggus) the way out of the cone has to stay out of his sight too: his breaths hit everyone he can
+            // see, the cone only keeps the raid off his face between them. With no such point the bot stays hidden in the cone (2b1).
+            // bwl_chromaggus 0136-1: when the main tank died at 20% he turned to his next victim and the cone swept the hidden healers;
+            // 73 "leave cone" steps took them out of hiding (147-149 s) into the open, and Corrosive Acid at 150 s killed four of them.
+            bool const stayHidden = HidingFromBreath(plan, self, enemy, now);
             // Leave through the nearer edge, a few degrees past it, keeping roughly the same distance from the boss (never closer than 6 yards).
             float const side = toBot >= 0.0f ? 1.0f : -1.0f;
             float const ring = std::max(distance, 6.0f);
@@ -2504,6 +2530,8 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                         break;
                     float pz = 0.0f;
                     if (!Usable(bot, px, py, bot->GetPositionZ(), pz, /*urgent*/ true, /*hazard*/ true))
+                        continue;
+                    if (stayHidden && EnemySees(enemy, bot, px, py, pz))
                         continue;
                     SetMove(out, px, py, pz, "leave cone");
                     return;
