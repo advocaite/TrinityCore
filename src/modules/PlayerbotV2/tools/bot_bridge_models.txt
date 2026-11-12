@@ -12,21 +12,23 @@
 # beside the name (the Russian one in the Russian launcher), keep it short. This file is UTF-8. A model bigger than the PC's graphics card is still listed, marked as too big.
 # Change a line, then press "Apply the change" in the tab. Launchers older than 0.1.36 read only the tier lines.
 #
-# 0.1.36: newer defaults, Qwen 3.5 (2026, 201 languages, Russian included, Apache 2.0). Thinking models: the program and the
-# server ask them to answer straight away. Checked on the test PC with the speed test and the chat test set
-# (bot_bridge_eval.py) before release; a tier that did worse than its old model keeps the old one.
-cpu  = qwen3.5:0.8b | 1.0 | 0  | 1
-low  = qwen3.5:2b   | 2.7 | 4  | 2
-med  = qwen3.5:4b   | 3.4 | 8  | 2
-high = qwen3.5:9b   | 6.6 | 16 | 4
-# The models before 0.1.36 (from the speed tests of 2026-11-08), still in the list:
-extra = llama3.2:1b  | 1.3 | 0  | 1 | older, English best | старая, лучше на английском
-extra = lfm3:1.7b    | 1.1 | 4  | 2 | very fast         | очень быстрая
-extra = llama3.2:3b  | 2.0 | 4  | 2 | older, English best | старая, лучше на английском
-extra = llama3.1:8b  | 4.9 | 8  | 2 | older, English best | старая, лучше на английском
+# A model takes a tier only when it scores at least the tier's model before it on the chat test set (bot_bridge_eval.py,
+# 3 runs, 138 answers) and answers in under 1.5 s (median). Thinking models: the program and the server ask them to answer
+# straight away. Test of 2026-11-12 (chris's PC): llama3.2:1b 89.5%, lfm3:1.7b 88.3%, llama3.1:8b 94.4%, qwen2.5:14b 93.9%;
+# gemma4:12b 96.5% (takes High), gemma4:e4b 94.3%, lfm2.5:8b 87.2%; Qwen 3.5 0.8b 87.9%, 2b 87.8%, 4b 93.1%, 9b 90.1%
+# (each below the tier's model, so in the list only).
+cpu  = llama3.2:1b  | 1.3 | 0  | 1
+low  = lfm3:1.7b    | 1.7 | 4  | 2
+med  = llama3.1:8b  | 4.9 | 8  | 2
+high = gemma4:12b   | 7.7 | 16 | 4
+# The High model before 0.1.36, and another small one:
 extra = qwen2.5:14b  | 9.0 | 16 | 4 | older, good Russian | старая, хороший русский
+extra = llama3.2:3b  | 2.0 | 4  | 2 | older, English best | старая, лучше на английском
 # Other free models worth a try:
+extra = qwen3.5:0.8b | 1.0 | 0  | 1 | Qwen 3.5, many languages | Qwen 3.5, много языков
+extra = qwen3.5:2b   | 2.7 | 4  | 2 | Qwen 3.5, many languages | Qwen 3.5, много языков
+extra = qwen3.5:4b   | 3.4 | 8  | 2 | Qwen 3.5, many languages | Qwen 3.5, много языков
+extra = qwen3.5:9b   | 6.6 | 16 | 4 | Qwen 3.5, many languages | Qwen 3.5, много языков
 extra = gemma4:e2b   | 4.6 | 8  | 2 | Google, many languages | Google, много языков
 extra = gemma4:e4b   | 6.6 | 12 | 2 | Google, many languages | Google, много языков
-extra = gemma4:12b   | 7.7 | 16 | 4 | Google, many languages | Google, много языков
 extra = lfm2.5:8b    | 5.2 | 8  | 2 | fast for its size | быстрая для размера
