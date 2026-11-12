@@ -20833,7 +20833,30 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                                     ^ (uint64_t(epoch) * 0xBF58476D1CE4E5B9ULL)
                                     ^ (uint64_t(ai.path_blocked_count()) * 0x94D049BB133111EBULL);
             // Map [0, 2^16) → [0, 2π) for an angle without floating-point modulo.
-            const float angle = (float(mixed & 0xFFFFu) / 65536.0f) * 6.2831853f;
+            float angle = (float(mixed & 0xFFFFu) / 65536.0f) * 6.2831853f;
+            // Not into deep water: the bearing nearest the hashed one with dry ground out to the step (BotSnapshotBuilder
+            // DeepWaterBearings). A step into a lake was walked back out by idle:water_escape and the next step went in again (r10
+            // 12 Nov, 10 wander <> water_escape flips). Water on every side (an island, a bot already swimming): the hashed bearing,
+            // and the water rules take the bot out.
+            if (uint8 const wet = s.deep_water_bearings(); wet != 0 && wet != 0xFF)
+            {
+                constexpr float kSector = 6.2831853f / 8.0f;
+                int const sector = int(angle / kSector + 0.5f) & 7;
+                if (wet & (1u << sector))
+                {
+                    for (int off = 1; off <= 4; ++off)
+                    {
+                        int const side = ((mixed >> 16) & 1u) != 0 ? off : -off;   // which way round first: from the same hash
+                        int const a1 = (sector + side + 8) & 7, a2 = (sector - side + 8) & 7;
+                        int const dry = !(wet & (1u << a1)) ? a1 : !(wet & (1u << a2)) ? a2 : -1;
+                        if (dry >= 0)
+                        {
+                            angle = float(dry) * kSector;
+                            break;
+                        }
+                    }
+                }
+            }
             float tx = bx + std::cos(angle) * kWanderStep;
             float ty = by + std::sin(angle) * kWanderStep;
             // Stay anchored to the current quest POI when one exists.

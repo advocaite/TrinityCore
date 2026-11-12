@@ -188,6 +188,7 @@ public:
     // Open-world water-escape focus (FIX #12): nearest DRY footing the builder
     // resolved while the bot is in swim-water; idle:water_escape drives to it.
     bool   water_escape_valid() const { return s_->environment.water_escape_valid; }
+    uint8  deep_water_bearings() const { return s_->environment.deep_water_bearings; }
     float  water_escape_x() const { return s_->environment.water_escape_x; }
     float  water_escape_y() const { return s_->environment.water_escape_y; }
     float  water_escape_z() const { return s_->environment.water_escape_z; }

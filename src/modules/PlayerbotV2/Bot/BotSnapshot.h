@@ -1669,6 +1669,9 @@ struct EnvironmentState
     float water_escape_x       = 0.0f;
     float water_escape_y       = 0.0f;
     float water_escape_z       = 0.0f;
+    // Swim-deep water around the bot (BotSnapshotBuilder DeepWaterBearings): bit i set = deep water 10 or 25 y out on the bearing
+    // i * 45 degrees (0 = +x, counter-clockwise, as std::atan2). idle:wander steps on a dry bearing.
+    uint8 deep_water_bearings  = 0;
 
     void reset() { *this = EnvironmentState{}; }
 };
