@@ -3455,6 +3455,8 @@ private:
     bool           corpse_recovery_emitted_ = false;
     uint32         ghost_since_ms_   = 0;
     uint32         swimming_since_ms_ = 0;
+    uint32         underwater_since_ms_ = 0;
+    uint32         underwater_seen_ms_ = 0;
     ObjectGuid     stuck_chase_victim_;
     uint16         stuck_chase_ticks_ = 0;
     ObjectGuid     last_taxi_discover_fm_;
@@ -5199,6 +5201,20 @@ public:
     {
         return swimming_since_ms_ != 0
             && (now_ms - swimming_since_ms_) > kSwimStuckTimeoutMs;
+    }
+    // How long the bot's head has been under water (idle:surface_to_breathe), on the snapshot clock (published_at_ms) as
+    // update_swim_state is. A sighting more than 5 s after the last one starts a new dive. Returns the time under so far, 0 when not.
+    uint32 note_underwater(bool under, uint32 now_ms)
+    {
+        if (!under)
+        {
+            underwater_since_ms_ = 0;
+            return 0;
+        }
+        if (underwater_since_ms_ == 0 || now_ms - underwater_seen_ms_ > 5000u)
+            underwater_since_ms_ = now_ms ? now_ms : 1u;
+        underwater_seen_ms_ = now_ms;
+        return now_ms - underwater_since_ms_;
     }
 
     // Per-target start_attack lockout. When idle:quest_batch:kill (or any

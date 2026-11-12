@@ -80,11 +80,20 @@ bool FleeDamagingLiquidFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotVi
 }
 
 // ---------- idle:surface_to_breathe ----------
-bool SurfaceToBreatheGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&,uint32)
+// Breath lasts 60 s (Player::getMaxTimer BREATH_TIMER). A player swimming under water to the shore keeps going and comes up only when
+// the breath runs short; the rule used to lift every submerged bot to the surface at once, and the swim to dry land (idle:water_escape,
+// idle:leave_water), whose path runs along the bottom, took it under again the next tick: r10 12 Nov, 23 leave_water and 14 water_escape
+// flips, bots bobbing in place instead of reaching the bank. Up after 35 s under water, with 25 s of breath to spare.
+constexpr uint32 kSurfaceAfterUnderwaterMs = 35000u;
+
+bool SurfaceToBreatheGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32)
 {
-    if (!s.is_underwater() || s.water_surface_z() == 0.0f) return false;
+    bool const under = s.is_underwater() && s.water_surface_z() != 0.0f;
+    uint32 const under_ms = ai.note_underwater(under, s.published_at_ms());
+    if (!under) return false;
     float bx, by, bz; s.position(bx, by, bz);
-    return bz < s.water_surface_z() - 0.5f;
+    if (bz >= s.water_surface_z() - 0.5f) return false;
+    return under_ms >= kSurfaceAfterUnderwaterMs;
 }
 
 bool SurfaceToBreatheFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,BotIntentEmitter& emit, uint32)
