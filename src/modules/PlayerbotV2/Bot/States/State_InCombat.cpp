@@ -1850,6 +1850,8 @@ struct SoloFleeClock
     uint32 start_ms = 0, calm_since_ms = 0, last_end_ms = 0, last_tool_ms = 0, last_seen_ms = 0;
     uint8  tools = 0;
     float  dx = 0.f, dy = 0.f, dz = 0.f;
+    float  px = 0.f, py = 0.f;          // where the bot stood when it last made ground on the run
+    uint32 progress_ms = 0;             // when that was
 };
 std::mutex g_solo_flee_mu;
 std::unordered_map<uint64, SoloFleeClock> g_solo_flee;
@@ -1946,6 +1948,17 @@ bool SoloFleeTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& 
         else if (snap.calm_since_ms == 0) snap.calm_since_ms = now ? now : 1u;
         calm_done = ran >= 3000u && snap.calm_since_ms != 0 && now - snap.calm_since_ms >= 4000u;
         if (ran >= 30'000u) calm_done = true;
+        // Cornered: the run has made no ground for 2.5 s (a dead end in a cave, a wall, no path to the heading) while the mobs are
+        // still on the bot. Standing there with the attack stopped only lets them kill it (Discord 2026-11-08, splachgg, Jade Mine:
+        // a bot low on health ran to the next bot and stood until it died), so it turns and fights; the 20 s cooldown below keeps
+        // it from trying again at once.
+        bool cornered = false;
+        if ((bx - snap.px) * (bx - snap.px) + (by - snap.py) * (by - snap.py) >= 2.f * 2.f)
+        {
+            snap.px = bx; snap.py = by; snap.progress_ms = now;
+        }
+        else if (any_near25 && now - snap.progress_ms >= 2500u && !(s.cls() == CLASS_HUNTER && s.has_aura(5384)))   // Feign Death lies still on purpose
+            cornered = calm_done = true;
         if (calm_done)
         {
             {
@@ -1953,8 +1966,8 @@ bool SoloFleeTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& 
                 SoloFleeClock& c = g_solo_flee[key];
                 c.active = false; c.last_end_ms = now;
             }
-            TC_LOG_INFO("playerbot.v2", "[solo_flee] {} ends after {:.1f}s hp={}% attackers_near={}",
-                s.name(), ran / 1000.f, s.hp_pct(), int(any_near25));
+            TC_LOG_INFO("playerbot.v2", "[solo_flee] {} ends after {:.1f}s hp={}% attackers_near={}{}",
+                s.name(), ran / 1000.f, s.hp_pct(), int(any_near25), cornered ? " (cornered: no ground made, fights back)" : "");
             return false;
         }
     }
@@ -1962,6 +1975,7 @@ bool SoloFleeTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& 
     {
         snap.active = true; snap.start_ms = now ? now : 1u; snap.calm_since_ms = 0;
         snap.tools = 0; snap.last_tool_ms = 0; snap.has_dest = false;
+        snap.px = bx; snap.py = by; snap.progress_ms = snap.start_ms;
         TC_LOG_INFO("playerbot.v2", "[solo_flee] {} runs: hp={}% attackers={} (melee {}) victim_hp<={}%",
             s.name(), s.hp_pct(), n, n_melee, max_hp_pct);
         if (!s.victim().IsEmpty()) ai.note_engage(s.victim(), now, 60'000u);
