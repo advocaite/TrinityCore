@@ -31,6 +31,7 @@
 #include <algorithm>
 
 void AddSC_playerbot_v2_commandscript();
+void AddSC_playerbot_v2_selftest_commandscript();
 
 namespace
 {
@@ -440,6 +441,7 @@ void AddSC_playerbot_v2()
     new playerbot_v2_group();
     new playerbot_v2_guild();
     AddSC_playerbot_v2_commandscript();
+    AddSC_playerbot_v2_selftest_commandscript();
 
     PathGenerator::SetLiquidRouteCheck(&BotPathTouchesAvoidedLiquid);
 }

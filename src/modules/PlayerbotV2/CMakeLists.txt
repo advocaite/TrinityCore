@@ -182,6 +182,7 @@ add_library(playerbot-v2-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/DungeonFinder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Services.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Commands/cs_playerbot_v2.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Commands/cs_selftest.cpp
 )
 target_sources(playerbot-v2-core
   PUBLIC
