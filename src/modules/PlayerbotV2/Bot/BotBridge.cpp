@@ -10,7 +10,10 @@
 #include "BotSnapshot.h"
 #include "ChannelTalk.h"
 #include "ClassicUpkeep.h"
+#include "Quest/CompanionQuest.h"
 #include "Quest/QuestOrders.h"
+#include "Quest/QuestRefusal.h"
+#include "../Api/PlayerbotAPI.h"
 #include "../Api/BotTradeShop.h"
 #include "../Diagnostics/ScenarioHuman.h"
 #include "../Fleet/BotGuildCharter.h"
@@ -1364,7 +1367,12 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
                 for (auto const& off : snap->quest_discovery.quest_offers)
                     offered = offered || off.quest_id == a.quest;
             if (!offered)
+            {
+                QuestRefusal const why = API(bot).why_cant_take_quest(a.quest);
+                if (why != QuestRefusal::None && why != QuestRefusal::Other)
+                    return QuestRefusalLine(why, CompanionQuest::QuestLabel(a.quest));
                 return "nobody close offers me that quest";
+            }
             detail = JoinLines(QuestOrders::AcceptAll(speaker, bot, std::to_string(a.quest)));
             return {};
         }

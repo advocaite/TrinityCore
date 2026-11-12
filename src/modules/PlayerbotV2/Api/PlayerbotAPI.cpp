@@ -7418,8 +7418,39 @@ Result API::use_game_object(ObjectGuid go_guid)
 
 // ---- Quest ---------------------------------------------------------------
 
+QuestRefusal API::why_cant_take_quest(uint32 quest_id) const
+{
+    if (!p_) return QuestRefusal::Other;
+    Quest const* q = sObjectMgr->GetQuestTemplate(quest_id);
+    if (!q) return QuestRefusal::Other;
+    // CanTakeQuest's own gates, in its order, each asked without a message to the bot's client.
+    if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, quest_id, p_))  return QuestRefusal::Disabled;
+    if (!p_->SatisfyQuestStatus(q, false))
+        return p_->GetQuestStatus(quest_id) == QUEST_STATUS_REWARDED ? QuestRefusal::Done : QuestRefusal::OnIt;
+    if (!p_->SatisfyQuestExclusiveGroup(q, false))  return QuestRefusal::OtherChoice;
+    if (!p_->SatisfyQuestClass(q, false))           return QuestRefusal::Class;
+    if (!p_->SatisfyQuestRace(q, false))            return QuestRefusal::Race;
+    if (!p_->SatisfyQuestMinLevel(q, false))        return QuestRefusal::LowLevel;
+    if (!p_->SatisfyQuestMaxLevel(q, false))        return QuestRefusal::HighLevel;
+    if (!p_->SatisfyQuestSkill(q, false))           return QuestRefusal::Skill;
+    if (!p_->SatisfyQuestReputation(q, false))      return QuestRefusal::Reputation;
+    if (!p_->SatisfyQuestDependentQuests(q, false)) return QuestRefusal::Prerequisite;
+    if (!p_->SatisfyQuestTimed(q, false))           return QuestRefusal::Timed;
+    if (!p_->SatisfyQuestDay(q, false) || !p_->SatisfyQuestWeek(q, false) ||
+        !p_->SatisfyQuestMonth(q, false) || !p_->SatisfyQuestSeasonal(q, false))
+        return QuestRefusal::NotAgainYet;
+    if (!p_->SatisfyQuestConditions(q, false))      return QuestRefusal::Conditions;
+    if (!p_->SatisfyQuestExpansion(q, false))       return QuestRefusal::Expansion;
+    if (!p_->CanTakeQuest(q, false))                return QuestRefusal::Other;   // a gate added to CanTakeQuest later
+    if (!p_->SatisfyQuestLog(false))                return QuestRefusal::LogFull;
+    if (!p_->CanAddQuest(q, false))                 return QuestRefusal::BagsFull;
+    return QuestRefusal::None;
+}
+
 Result API::accept_quest(ObjectGuid quest_giver, uint32 quest_id)
 {
+    last_quest_refusal_ = QuestRefusal::None;
+    last_quest_refusal_quest_ = quest_id;
     if (!p_) return Result::Other;
     Quest const* quest = sObjectMgr->GetQuestTemplate(quest_id);
     if (!quest)
@@ -7427,11 +7458,13 @@ Result API::accept_quest(ObjectGuid quest_giver, uint32 quest_id)
         TC_LOG_INFO("playerbot.v2",
             "[accept_quest] {} reject quest={} reason=template_missing",
             "?", quest_id);
+        last_quest_refusal_ = QuestRefusal::Other;
         return Result::NotKnown;
     }
 
-    auto log_reject = [&](char const* why)
+    auto log_reject = [&](char const* why, QuestRefusal refusal)
     {
+        last_quest_refusal_ = refusal;
         TC_LOG_INFO("playerbot.v2",
             "[accept_quest] {} reject quest={} lvl={} reason={}",
             p_->GetName(), quest_id, uint32(p_->GetLevel()), why);
@@ -7447,10 +7480,10 @@ Result API::accept_quest(ObjectGuid quest_giver, uint32 quest_id)
         object = ObjectAccessor::GetObjectByTypeMask(*p_, quest_giver,
                     TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT | TYPEMASK_ITEM);
     }
-    if (!object)                                        { log_reject("giver_not_found");      return Result::InvalidTarget; }
-    if (quest_giver.IsPlayer())                         { log_reject("player_giver_unsupp");  return Result::Other; }
-    if (!object->hasQuest(quest_id))                    { log_reject("giver_lost_relation");  return Result::InvalidTarget; }
-    if (!p_->CanInteractWithQuestGiver(object))         { log_reject("out_of_range");         return Result::OutOfRange; }
+    if (!object)                                        { log_reject("giver_not_found", QuestRefusal::NoGiver);     return Result::InvalidTarget; }
+    if (quest_giver.IsPlayer())                         { log_reject("player_giver_unsupp", QuestRefusal::Other);   return Result::Other; }
+    if (!object->hasQuest(quest_id))                    { log_reject("giver_lost_relation", QuestRefusal::NoGiver); return Result::InvalidTarget; }
+    if (!p_->CanInteractWithQuestGiver(object))         { log_reject("out_of_range", QuestRefusal::OutOfRange);     return Result::OutOfRange; }
     // Junk-quest accept-gate (R2, defense-in-depth). A quest with ZERO
     // objectives AND no creature/GO turn-in NPC is structurally unfinishable
     // and unturnable Ã¢Â€Â” accepting it parks the bot forever (current_quest_id=0
@@ -7463,11 +7496,11 @@ Result API::accept_quest(ObjectGuid quest_giver, uint32 quest_id)
         auto ce = sObjectMgr->GetCreatureQuestInvolvedRelationReverseBounds(quest_id);
         auto ge = sObjectMgr->GetGOQuestInvolvedRelationReverseBounds(quest_id);
         if (ce.begin() == ce.end() && ge.begin() == ge.end())
-        { log_reject("no_ender_or_objectives");  return Result::Locked; }
+        { log_reject("no_ender_or_objectives", QuestRefusal::Unfinishable);  return Result::Locked; }
     }
-    if (!p_->CanTakeQuest(quest, true))                 { log_reject("cant_take_quest");      return Result::Locked; }
-    if (!p_->SatisfyQuestLog(false))                    { log_reject("quest_log_full");       return Result::InventoryFull; }
-    if (!p_->CanAddQuest(quest, true))                  { log_reject("src_item_no_bag_space"); return Result::InventoryFull; }
+    if (!p_->CanTakeQuest(quest, true))                 { log_reject("cant_take_quest", why_cant_take_quest(quest_id)); return Result::Locked; }
+    if (!p_->SatisfyQuestLog(false))                    { log_reject("quest_log_full", QuestRefusal::LogFull);          return Result::InventoryFull; }
+    if (!p_->CanAddQuest(quest, true))                  { log_reject("src_item_no_bag_space", QuestRefusal::BagsFull);  return Result::InventoryFull; }
 
     p_->AddQuestAndCheckCompletion(quest, object);
     p_->PlayerTalkClass->SendCloseGossip();
@@ -8043,15 +8076,20 @@ Result API::equip_item(uint8 from_bag, uint8 from_slot, uint8 to_slot)
 
 Result API::accept_shared_quest()
 {
+    last_quest_refusal_ = QuestRefusal::None;
+    last_quest_refusal_quest_ = 0;
     if (!p_) return Result::Other;
     const ObjectGuid sender_guid = p_->GetPlayerSharingQuest();
     const uint32 quest_id = p_->GetSharedQuestID();
-    if (sender_guid.IsEmpty() || quest_id == 0) return Result::Locked;
+    // The share ran out (or was answered already) between the order and this tick.
+    if (sender_guid.IsEmpty() || quest_id == 0) { last_quest_refusal_ = QuestRefusal::NoGiver; return Result::Locked; }
+    last_quest_refusal_quest_ = quest_id;
     Quest const* quest = sObjectMgr->GetQuestTemplate(quest_id);
-    if (!quest) { p_->ClearQuestSharingInfo(); return Result::NotKnown; }
+    if (!quest) { p_->ClearQuestSharingInfo(); last_quest_refusal_ = QuestRefusal::Other; return Result::NotKnown; }
     Player* sender = ObjectAccessor::FindConnectedPlayer(sender_guid);
     if (!p_->CanTakeQuest(quest, false) || !p_->CanAddQuest(quest, false))
     {
+        last_quest_refusal_ = why_cant_take_quest(quest_id);
         TC_LOG_INFO("playerbot.v2", "[quest_share] {} cannot take shared quest {} from {} (CanTake={} CanAdd={})",
             p_->GetName(), quest_id, sender ? sender->GetName() : std::string("?"),
             p_->CanTakeQuest(quest, false), p_->CanAddQuest(quest, false));

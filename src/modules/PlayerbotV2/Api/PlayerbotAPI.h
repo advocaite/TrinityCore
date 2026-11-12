@@ -11,6 +11,7 @@
 
 #include "Define.h"
 #include "ObjectGuid.h"
+#include "Bot/Quest/QuestRefusal.h"
 #include <chrono>
 #include <string>
 #include <vector>
@@ -169,6 +170,13 @@ public:
     // rejoin rule waits for a slot instead of walking a full instance's entrance.
     uint32 last_instance_full_map() const { return last_instance_full_map_; }
     void   clear_instance_full_map() { last_instance_full_map_ = 0; }
+    // Why the last accept_quest / accept_shared_quest was refused (None after an accept that went through), and the quest it was
+    // for, so the executor can tell the player who ordered it (Bot/Quest/QuestRefusal.h).
+    QuestRefusal last_quest_refusal() const { return last_quest_refusal_; }
+    uint32 last_quest_refusal_quest() const { return last_quest_refusal_quest_; }
+    // The first of the server's own accept gates `quest_id` fails for this bot right now (CanTakeQuest, then the quest log and
+    // the bag room CanAddQuest checks), None when it could take it. No message reaches the bot's client. World thread.
+    QuestRefusal why_cant_take_quest(uint32 quest_id) const;
     static char const* CastFailName(uint32 code);
 
     // Why a mount spell would draw nothing on the client, nullptr when its model resolves: the display the aura picks (Mount
@@ -1167,6 +1175,8 @@ private:
     Player* p_;
     uint32  last_cast_fail_ = 0;   // see last_cast_fail()
     uint32  last_instance_full_map_ = 0;   // see last_instance_full_map()
+    QuestRefusal last_quest_refusal_ = QuestRefusal::None;   // see last_quest_refusal()
+    uint32  last_quest_refusal_quest_ = 0;
 };
 
 } // namespace Playerbot

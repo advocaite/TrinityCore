@@ -21,6 +21,7 @@
 
 #include "../../src/modules/PlayerbotV2/Util/BotLocaleText.h"
 #include "../../src/modules/PlayerbotV2/Bot/Raid/RaidBanter.h"
+#include "../../src/modules/PlayerbotV2/Bot/Quest/QuestRefusal.h"
 #include <cctype>
 #include <set>
 #include <string>
@@ -229,6 +230,28 @@ TEST_CASE("BotLocale: boss tactics answers", "[BotLocale]")
     CHECK(Translate(Lang::Ru, "Tactics for Baron Geddon: boss first.") == "Тактика на Baron Geddon: сначала босс.");
     CHECK(Translate(Lang::Ru, "Tactics for Lucifron cleared.") == "Тактика на Lucifron удалена.");
     CHECK(Translate(Lang::Ru, "Bosses here: Lucifron, Magmadar.") == "Боссы здесь: Lucifron, Magmadar.");
+}
+
+TEST_CASE("BotLocale: why a quest accept was refused", "[BotLocale]")
+{
+    using Playerbot::QuestRefusal;
+    using Playerbot::QuestRefusalLine;
+    CHECK(QuestRefusalLine(QuestRefusal::None, "Wolves") == "");
+    CHECK(QuestRefusalLine(QuestRefusal::LowLevel, "Wolves Across the Border") == "I can't take Wolves Across the Border: my level is too low.");
+    CHECK(QuestRefusalLine(QuestRefusal::Done, "") == "I already did that quest.");
+    CHECK(Translate(Lang::Ru, QuestRefusalLine(QuestRefusal::LogFull, "Wolves")) == "Я не могу взять задание Wolves: мой журнал заданий полон.");
+    CHECK(Translate(Lang::Ru, QuestRefusalLine(QuestRefusal::NotAgainYet, "Wolves")) == "Задание Wolves пока нельзя взять снова.");
+
+    // Every reason has a line with the quest in it, and every line has its Russian form.
+    Catalog const& ru = Russian();
+    for (uint8_t r = uint8_t(QuestRefusal::Other); r <= uint8_t(QuestRefusal::Unfinishable); ++r)
+    {
+        std::string const s = QuestRefusalLine(QuestRefusal(r), "Wolves");
+        INFO(s);
+        CHECK(s.find("Wolves") != std::string::npos);
+        CHECK(ru.Knows(s));
+    }
+    CHECK(ru.Knows("The quest share ran out before I could take it."));
 }
 
 TEST_CASE("BotLocale: unknown lines come back in English", "[BotLocale]")

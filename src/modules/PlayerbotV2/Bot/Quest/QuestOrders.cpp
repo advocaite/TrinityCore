@@ -2,6 +2,8 @@
 
 #include "Bot/Quest/QuestOrders.h"
 #include "Bot/Quest/CompanionQuest.h"
+#include "Bot/Quest/QuestRefusal.h"
+#include "Api/PlayerbotAPI.h"
 #include "Bot/BotSnapshot.h"
 #include "Bot/BotIntentEmitter.h"
 #include "Bot/BotRegistry.h"
@@ -193,7 +195,7 @@ std::vector<std::string> List(Player* /*sender*/, Player* bot, std::string_view 
     return out;
 }
 
-std::vector<std::string> AcceptAll(Player* /*sender*/, Player* bot, std::string_view arg)
+std::vector<std::string> AcceptAll(Player* sender, Player* bot, std::string_view arg)
 {
     std::vector<std::string> out;
     auto snap = SnapOf(bot);
@@ -209,7 +211,7 @@ std::vector<std::string> AcceptAll(Player* /*sender*/, Player* bot, std::string_
     // A quest the group just shared with me.
     if (snap->social_events.shared_quest_id != 0)
     {
-        emit.accept_shared_quest();
+        emit.accept_shared_quest(sender ? sender->GetGUID() : ObjectGuid::Empty);
         LogOrder(bot, "accept shared", snap->social_events.shared_quest_id);
         out.push_back(fmt::format("Taking the shared quest: {}", CompanionQuest::QuestLabel(snap->social_events.shared_quest_id)));
         ++taken;
@@ -224,7 +226,7 @@ std::vector<std::string> AcceptAll(Player* /*sender*/, Player* bot, std::string_
         if (taken >= kMaxAcceptPerOrder) break;
         if (want && off.quest_id != want) continue;
         if (!needle.empty() && Lower(CompanionQuest::QuestLabel(off.quest_id)).find(needle) == std::string::npos) continue;
-        emit.accept_quest(off.giver, off.quest_id);
+        emit.accept_quest(off.giver, off.quest_id, sender ? sender->GetGUID() : ObjectGuid::Empty);
         LogOrder(bot, "accept", off.quest_id);
         out.push_back(fmt::format("Accepting: {}", CompanionQuest::QuestLabel(off.quest_id)));
         ++taken;
@@ -238,7 +240,15 @@ std::vector<std::string> AcceptAll(Player* /*sender*/, Player* bot, std::string_
             out.push_back("Nothing on offer right here; I'll pick up what the quest givers near us have for the next 45 seconds.");
     }
     else if (taken == 0)
-        out.push_back("That quest isn't on offer from anyone next to me.");
+    {
+        // A quest named by id or link that the offers left out: the offers only hold what the bot can take, so say which gate
+        // keeps it out (level, class, done, log full ...) before saying nobody here has it.
+        QuestRefusal const why = want ? API(bot).why_cant_take_quest(want) : QuestRefusal::None;
+        if (why != QuestRefusal::None && why != QuestRefusal::Other)
+            out.push_back(QuestRefusalLine(why, CompanionQuest::QuestLabel(want)));
+        else
+            out.push_back("That quest isn't on offer from anyone next to me.");
+    }
     return out;
 }
 

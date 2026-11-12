@@ -144,7 +144,9 @@ struct RepairAllIntent       { ObjectGuid npc; bool from_guild_bank; };
 struct VendorBuyByCategoryIntent { ObjectGuid npc; uint8 item_class, item_subclass; uint8 total_count; };
 
 // ---- Quest ----
-struct QuestAcceptIntent     { ObjectGuid npc; uint32 quest_id; };
+// tell: the player who ordered the accept; when the server refuses it, the bot whispers them why (Bot/Quest/QuestRefusal.h).
+// Empty for the bot's own questing, which retries quietly.
+struct QuestAcceptIntent     { ObjectGuid npc; uint32 quest_id; ObjectGuid tell; };
 // `reward_choice` selects from the quest's choice-item list (0 = first).
 // Pass 0xFF to let PlayerbotAPI auto-pick (ScoreQuestReward weighs equippable
 // upgrades > vendor value). Quests with only fixed rewards ignore the field.
@@ -154,8 +156,8 @@ struct QuestAbandonIntent    { uint32 quest_id; };
 // Accept a quest just shared by a group member. The receiver-side popup is
 // driven by `Player::SetQuestSharingInfo`; the API uses GetSharedQuestID for
 // the actual accept. No fields needed on the intent — the bot side already
-// knows what's pending via the snapshot.
-struct QuestSharedAcceptIntent {};
+// knows what's pending via the snapshot. `tell` as in QuestAcceptIntent.
+struct QuestSharedAcceptIntent { ObjectGuid tell; };
 // Run JunkQuestResolver on the bot: force-complete auto-granted feature quests
 // (55660 "Time Trials" etc. — abandon doesn't stick, they re-push at login) and
 // resolve profession-spec choice quests. No fields — the resolver processes the

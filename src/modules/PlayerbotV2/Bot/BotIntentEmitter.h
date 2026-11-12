@@ -323,12 +323,12 @@ public:
     { return emit(VehicleSpellIntent{spell_id, target}); }
     bool cast_vehicle_at(uint32 spell_id, float x, float y, float z)
     { return emit(VehicleGroundSpellIntent{spell_id, x, y, z}); }
-    bool accept_quest(ObjectGuid giver, uint32 quest_id)
-    { return emit(QuestAcceptIntent{giver, quest_id}); }
+    bool accept_quest(ObjectGuid giver, uint32 quest_id, ObjectGuid tell = ObjectGuid::Empty)
+    { return emit(QuestAcceptIntent{giver, quest_id, tell}); }
     bool complete_quest(ObjectGuid giver, uint32 quest_id, uint8 reward_choice = 0, bool copy_leader = false)
     { return emit(QuestCompleteIntent{giver, quest_id, reward_choice, copy_leader}); }
     bool abandon_quest(uint32 quest_id) { return emit(QuestAbandonIntent{quest_id}); }
-    bool accept_shared_quest() { return emit(QuestSharedAcceptIntent{}); }
+    bool accept_shared_quest(ObjectGuid tell = ObjectGuid::Empty) { return emit(QuestSharedAcceptIntent{tell}); }
     bool resolve_junk_quests() { return emit(ResolveJunkQuestsIntent{}); }
 
     // Mail. Mailbox guid is a GameObject (mailbox) or Creature (mailbox NPC);

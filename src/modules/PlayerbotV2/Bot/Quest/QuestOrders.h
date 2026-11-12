@@ -2,8 +2,10 @@
 //
 // Every function runs on the WORLD thread (the whisper / party-chat hook, where BotCommandParser::Dispatch
 // runs): it reads the bot's latest published snapshot and static data (ObjectMgr) and QUEUES intents on the
-// bot's own intent queue; it never touches the bot's Player. The sender's Player is only read (quest status,
-// CanTakeQuest) to filter what is worth sharing. It returns the reply lines for the owner; the caller whispers
+// bot's own intent queue; it never changes the bot's Player (it reads it only through API::why_cant_take_quest, to say
+// why a named quest is not on offer). The sender's Player is only read (quest status, CanTakeQuest) to filter what is
+// worth sharing. An accept it queues carries the sender, so a refusal on the world thread is whispered back with its
+// reason (Bot/Quest/QuestRefusal.h). It returns the reply lines for the owner; the caller whispers
 // them (WhisperIntent{sender->GetName(), line} through Push, or Chat). Nothing is whispered here.
 //
 // `arg` is the text after the verb, trimmed: a quest id, a quest link ("|Hquest:123:45|h[Title]|h|r"), a title

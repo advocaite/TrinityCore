@@ -39,6 +39,8 @@
 #include "GameTime.h"
 #include "Log.h"
 #include "Bot/DrainOrder.h"
+#include "Bot/Quest/CompanionQuest.h"
+#include "Bot/Quest/QuestRefusal.h"
 #include "Bot/ReactionTiming.h"
 #include "Combat/Apl/ApInterrupt.h"
 #include <chrono>
@@ -96,6 +98,27 @@ Result SayInZoneChannel(Player* bot, uint8 channel_id, std::string const& text)
     // Each member reads the line in their own language (a Russian client reads the bots' chatter in Russian).
     BotLanguage::ChannelSay(bot, ch, text);
     return Result::Ok;
+}
+
+// A quest accept a player ordered (QuestAcceptIntent / QuestSharedAcceptIntent with `tell`) and the server refused: the bot
+// whispers that player the gate that failed, in their language, instead of going quiet. The bot's own questing has no `tell`.
+static void TellQuestRefusal(API& api, IntentBody const& body)
+{
+    ObjectGuid tell;
+    if (auto const* a = std::get_if<QuestAcceptIntent>(&body))
+        tell = a->tell;
+    else if (auto const* s = std::get_if<QuestSharedAcceptIntent>(&body))
+        tell = s->tell;
+    if (tell.IsEmpty() || api.last_quest_refusal() == QuestRefusal::None)
+        return;
+    Player* const who = ObjectAccessor::FindConnectedPlayer(tell);
+    if (!who)
+        return;
+    uint32 const quest = api.last_quest_refusal_quest();
+    if (quest == 0)   // a share that ran out before this tick: there is no quest id left to name
+        api.whisper(who->GetName(), "The quest share ran out before I could take it.");
+    else
+        api.whisper(who->GetName(), QuestRefusalLine(api.last_quest_refusal(), CompanionQuest::QuestLabel(quest)));
 }
 
 // [bot_cc_onset]: the tick a bot goes from free to feared / confused / stunned, name the aura, its caster and how far the
@@ -784,6 +807,8 @@ size_t V2::Module::DrainIntents()
                 if (r == Result::ServerRefused && api.last_instance_full_map() != 0 && entry.ai)
                     entry.ai->note_instance_full(api.last_instance_full_map(), GameTime::GetGameTimeMS());
                 api.clear_instance_full_map();
+                if (r != Result::Ok)
+                    TellQuestRefusal(api, intent.body);
                 Services::Perf().record_intent_executed();
                 Services::Perf().record_intent_result(static_cast<size_t>(r));
                 if (r != Result::Ok)
