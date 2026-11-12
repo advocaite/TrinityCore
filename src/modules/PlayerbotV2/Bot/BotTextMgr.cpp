@@ -1,6 +1,7 @@
 // BotTextMgr / BotChatter - see header.
 
 #include "BotTextMgr.h"
+#include "BossCheck.h"
 #include "ChannelTalk.h"
 
 #include "BotAI.h"
@@ -1575,7 +1576,7 @@ std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s, bool* t
 
 void OnBossKilled(Player* killer, Creature* boss)
 {
-    if (!killer || !boss || !(boss->IsDungeonBoss() || boss->isWorldBoss()))
+    if (!killer || !boss || !IsBossCreature(boss))
         return;
     Group* group = killer->GetGroup();
     if (!group || group->GetMembersCount() > 15)

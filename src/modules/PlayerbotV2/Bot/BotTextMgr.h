@@ -196,8 +196,8 @@ enum class Banter : uint8 { Ready, Wipe, Thanks, Ouch, BossKill };
 // bot worker: the line to say now for `kind`, or empty (gates / roll / cooldown said no). The caller emits it.
 // Handed to the bot bridge's program like GreetLine (empty, *to_program set).
 std::string BanterLine(Banter kind, BotAI& ai, BotSnapshotView const& s, bool* to_program = nullptr);
-// A boss (dungeon boss or world boss) died to `killer` or a group member. Called by the kill listener for any
-// killer. One nearby companion of the killer's group may say "gg" and one may bow (the killer is a real player,
+// A boss (IsBossCreature, Bot/BossCheck.h) died to `killer`: the player who gets the credit, also when a pet, totem or
+// charmed unit of theirs landed the last hit. Called from Module::OnDeath, the boss-kill moment. One nearby companion of the killer's group may say "gg" and one may bow (the killer is a real player,
 // "the owner finished the boss") or cheer.
 void OnBossKilled(Player* killer, Creature* boss);
 

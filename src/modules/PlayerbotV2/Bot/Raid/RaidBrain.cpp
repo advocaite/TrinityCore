@@ -23,6 +23,7 @@
 #include "ShieldRules.h"
 #include "../../Fleet/BotPopulationManager.h"
 #include "../../Fleet/OwnerRegistry.h"
+#include "../BossCheck.h"
 #include "../BotRegistry.h"
 #include "../ClassTables.h"
 #include "../ThreatLimits.h"
@@ -75,14 +76,13 @@ namespace Playerbot::Raid {
 
 namespace detail {
 
-// A boss for the raid layer. This core strips CREATURE_FLAG_EXTRA_DUNGEON_BOSS from the templates at load (ObjectMgr
-// flags_extra check), so Creature::IsDungeonBoss() is always false: use the world-boss flag, the vanilla "boss" rank
-// (classification Obsolete) and the map's own boss list instead.
+// A boss for the raid layer: IsBossCreature (Bot/BossCheck.h: the world-boss flag, the vanilla "boss" rank, a scripted
+// boss's BossAI; this core never sets the dungeon-boss flag) and the map's own boss list.
 bool IsBoss(Creature const* c, RaidRules const* rules)
 {
     if (!c)
         return false;
-    if (c->isWorldBoss() || c->GetCreatureClassification() == CreatureClassifications::Obsolete)
+    if (IsBossCreature(c))
         return true;
     return rules && std::find(rules->bosses.begin(), rules->bosses.end(), c->GetEntry()) != rules->bosses.end();
 }

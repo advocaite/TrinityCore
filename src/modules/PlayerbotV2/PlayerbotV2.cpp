@@ -10,6 +10,7 @@
 #include "LfgBotFill.h"
 #include "Services.h"
 #include "Fleet/RaidSubgroupPlan.h"
+#include "Bot/BossCheck.h"
 #include "Bot/BotBridge.h"
 #include "Bot/BotRegistry.h"
 #include "Bot/BotSnapshot.h"
@@ -3752,8 +3753,15 @@ void Module::OnDeath(Unit* victim, Unit* killer)
     Creature* c = victim->ToCreature();
     if (c)
         Diagnostics::Scenario::NoteCreatureKilled(c->GetMapId(), c->GetEntry(), c->hasLootRecipient());
+    // The boss-kill moment (IsBossCreature: a scripted boss's BossAI, the world-boss flag or the vanilla boss rank; the core's
+    // dungeon-boss flag is never set, so 5-man bosses had no moment at all). The player with the credit is the killer itself or
+    // the owner of the pet, totem or charmed unit that landed the last hit. Companions near it may say "gg" (BotChatter).
+    bool const boss_kill = c && IsBossCreature(c);
+    if (boss_kill && killer)
+        if (Player* credited = killer->GetCharmerOrOwnerPlayerOrPlayerItself())
+            BotChatter::OnBossKilled(credited, c);
     // Boss kill line for tools/Fight-Report.ps1: dungeon and raid bosses, with how many of the tapping group survived.
-    if (c && c->GetMap() && c->GetMap()->IsDungeon() && (c->IsDungeonBoss() || c->isWorldBoss()))
+    if (boss_kill && c->GetMap() && c->GetMap()->IsDungeon())
     {
         Group const* tap_group = nullptr;
         Player const* tap_player = nullptr;

@@ -6940,8 +6940,7 @@ public:
     {
         if (Playerbot::Services::Initialized())
         {
-            Playerbot::BotChatter::OnCreatureKilled(killer, killed);
-            Playerbot::BotChatter::OnBossKilled(killer, killed);   // "gg" / bow / cheer from a nearby companion
+            Playerbot::BotChatter::OnCreatureKilled(killer, killed);   // a boss's "gg" comes from Module::OnDeath (any killer)
         }
     }
 
