@@ -8885,6 +8885,41 @@ static std::vector<TraitEdgeEntry const*> const& TraitEdgesInto(int32 nodeId)
     return itr != byRight.end() ? itr->second : none;
 }
 
+// Every talent with points in a row its tab has opened (5 points per row above it in the same tab), as Wowhead's calculator and a
+// player's talent frame require. TraitMgr::ValidateConfig lets Forever talents through on fewer (T4, 11-12: an Arms bot held Anger
+// Management on 9 points above it, a mage Arcane Subtlety with no point in the top row), and Wowhead dropped those from the bots'
+// links. True when the class has no tab layout (nothing to check against).
+// Playerbot.ClassicTalents.RowsPerTab = 0 turns the check off for our builds: the Forever trees of 70790-70862 have one trait currency
+// for all three tabs, so the game opens a row by the points spent in any tab, and the builds were made for that (ClassicTalentBuilds.cpp).
+// A code the owner gives always keeps the rule (Wowhead does).
+template <typename Entries>
+static bool TalentRowsOpen(Player const* p, Entries const& entries, bool ownerCode = false)
+{
+    static bool const rowsPerTab = sConfigMgr->GetBoolDefault("Playerbot.ClassicTalents.RowsPerTab", true, true);
+    if (!rowsPerTab && !ownerCode)
+        return true;
+    std::vector<std::vector<::Playerbot::Classic::TalentSlot>> const* tabs = ::Playerbot::Classic::GetTalentTabs(p);
+    if (!tabs)
+        return true;
+    std::vector<std::vector<uint8_t>> points;
+    ::Playerbot::Classic::TalentCode::Layout layout;
+    for (auto const& tab : *tabs)
+    {
+        std::vector<uint8_t>& held = points.emplace_back();
+        std::vector<::Playerbot::Classic::TalentCode::Slot>& slots = layout.emplace_back();
+        for (::Playerbot::Classic::TalentSlot const& slot : tab)
+        {
+            int32 rank = 0;
+            for (auto const& e : entries)
+                if (e.TraitNodeID == slot.TraitNodeID && e.TraitNodeEntryID == slot.TraitNodeEntryID)
+                    rank = e.Rank;
+            held.push_back(uint8_t(std::clamp<int32>(rank, 0, 9)));
+            slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
+        }
+    }
+    return ::Playerbot::Classic::TalentCode::RowsOpen(points, layout);
+}
+
 // The owner's own build, a Wowhead Forever talent calculator code ("change talents <link>", Classic::SetTalentCode): learned as
 // written in place of ours. The ranks are bought in TalentCode::LevellingOrder (the tab with most points first, row by row), so a
 // bot below 60 fills its main tab first and each new level's point goes on down the build. Like the build walk below, a bot whose
@@ -8968,7 +9003,7 @@ static Result ApplyTalentCode(Player* p, UF::TraitConfig const& active, std::str
             {
                 ++itr->Rank;
                 ++validations;
-                if (TraitMgr::ValidateConfig(cfg, p) != TraitMgr::LearnResult::Ok)
+                if (TraitMgr::ValidateConfig(cfg, p) != TraitMgr::LearnResult::Ok || !TalentRowsOpen(p, cfg.Entries, true))
                 {
                     --itr->Rank;
                     break;
@@ -9042,6 +9077,9 @@ Result API::apply_classic_talents()
         // build lists. A build definition that changed (talent names corrected to Forever's nodes) or a spec pinned by a scenario fails this
         // and the bot is walked once; a pick the class trees have no node for cannot be held and does not count against the bot.
         bool holdsBuild = held > 0 && int32(held) >= points;
+        // A bot walked before the row rule (TalentRowsOpen) may hold talents in rows its tab has not opened: walked once more.
+        if (holdsBuild && !TalentRowsOpen(p_, active->Entries))
+            holdsBuild = false;
         if (holdsBuild)
         {
             UF::TraitConfig const* activeCfg = p_->GetTraitConfig(p_->m_activePlayerData->ActiveCombatTraitConfigID);
@@ -9134,7 +9172,11 @@ Result API::apply_classic_talents()
     auto const validate = [&]
     {
         ++validations;
-        return TraitMgr::ValidateConfig(cfg, p_);
+        TraitMgr::LearnResult const result = TraitMgr::ValidateConfig(cfg, p_);
+        // The rows as a player's talent frame opens them, which the game's check does not hold Forever talents to.
+        if (result == TraitMgr::LearnResult::Ok && !TalentRowsOpen(p_, cfg.Entries))
+            return TraitMgr::LearnResult::NotEnoughTalentsInPrimaryTree;
+        return result;
     };
 
     // A talent below another is refused until a parent node is filled to its maximum (ValidateConfig), and a build that takes a

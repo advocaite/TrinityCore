@@ -111,9 +111,19 @@ inline Parsed Parse(std::string_view text)
         code = s.substr(b, e == std::string::npos ? std::string::npos : e - b);
     }
 
-    // "v2" in front: the calculator's format version.
-    if (code.size() >= 2 && code[0] == 'v' && std::isdigit(static_cast<unsigned char>(code[1])))
-        code.erase(0, 2);
+    // The tree version in front: "v" and a word ("vkndmh", the current Forever trees on 11-12) or one digit (the older "v2").
+    if (code.size() >= 2 && code[0] == 'v')
+    {
+        if (std::isalpha(static_cast<unsigned char>(code[1])))
+        {
+            size_t end = 1;
+            while (end < code.size() && std::isalpha(static_cast<unsigned char>(code[end])))
+                ++end;
+            code.erase(0, end);
+        }
+        else if (std::isdigit(static_cast<unsigned char>(code[1])))
+            code.erase(0, 2);
+    }
     // "_t0..." behind: the levelling order and other extras, not points.
     if (size_t const u = code.find('_'); u != std::string::npos)
         code.erase(u);
@@ -221,6 +231,25 @@ inline Check Validate(Parsed const& parsed, Layout const& layout, int maxPoints 
     return out;
 }
 
+// True when every talent with points sits in a row its tab has opened: 5 points per row in the rows above it, in the same tab.
+// The game's own check (TraitMgr::ValidateConfig) lets a Forever talent through on fewer, and Wowhead then drops such a talent
+// from the build (T4 on 11-12: an Arms bot with Anger Management on 9 points above it).
+inline bool RowsOpen(std::vector<std::vector<uint8_t>> const& tabs, Layout const& layout)
+{
+    for (size_t t = 0; t < tabs.size() && t < layout.size(); ++t)
+    {
+        int above[8] = {};
+        for (size_t i = 0; i < tabs[t].size() && i < layout[t].size(); ++i)
+            if (layout[t][i].row < 7)
+                for (int r = layout[t][i].row + 1; r < 8; ++r)
+                    above[r] += tabs[t][i];
+        for (size_t i = 0; i < tabs[t].size() && i < layout[t].size(); ++i)
+            if (tabs[t][i] && layout[t][i].row < 8 && above[layout[t][i].row] < 5 * int(layout[t][i].row))
+                return false;
+    }
+    return true;
+}
+
 // The code of points per tab, as the calculator writes it: trailing zeroes of each tab and trailing dashes left out.
 inline std::string Encode(std::vector<std::vector<uint8_t>> const& tabs)
 {
@@ -241,12 +270,16 @@ inline std::string Encode(std::vector<std::vector<uint8_t>> const& tabs)
     return out;
 }
 
+// The tree version Wowhead's Forever calculator writes now (11-12). An older version opens too, but Wowhead then moves the build to the
+// current trees and says so; with this one the link opens as it is.
+inline constexpr std::string_view kTreeVersion = "kndmh";
+
 inline std::string Link(uint8_t cls, std::string const& code)
 {
     std::string_view const slug = SlugOfClass(cls);
     if (slug.empty())
         return {};
-    return "https://www.wowhead.com/forever/talent-calc/" + std::string(slug) + "/v2" + code;
+    return "https://www.wowhead.com/forever/talent-calc/" + std::string(slug) + "/v" + std::string(kTreeVersion) + code + "_t0";
 }
 
 // The order a bot buys a build's ranks in as it levels: the tab with the most points first (the earlier tab on a tie), each tab's

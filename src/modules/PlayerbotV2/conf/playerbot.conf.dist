@@ -1742,3 +1742,15 @@ Playerbot.ClassicTalents.ApplyOnLogin = 0
 #        Default:     250
 
 Playerbot.ClassicTalents.WalkBudgetMs = 250
+
+#
+#    Playerbot.ClassicTalents.RowsPerTab
+#        Description: The bots' own talent builds keep the talent frame's row rule: a row opens with 5 points per row above it in the
+#                     same tab, as Wowhead's Forever calculator and a player's talent frame require. The Forever trait data opens a row
+#                     by the points spent in any of the three tabs, and without this the bots held talents a player cannot pick
+#                     (an Arms warrior's Anger Management on 9 Arms points) and Wowhead dropped them from the bots' "talents link".
+#                     0 = rows open by the points in any tab, as before. A build the owner gives ("change talents <link>") always
+#                     keeps the rule.
+#        Default:     1
+
+Playerbot.ClassicTalents.RowsPerTab = 1
