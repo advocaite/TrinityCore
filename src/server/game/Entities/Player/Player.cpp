@@ -5968,15 +5968,20 @@ bool Player::UpdateGatherSkill(uint32 skillId, uint32 skillValue, uint32 redLeve
     uint32 greenLevel = redLevel + 50;
     uint32 grayLevel = redLevel + 100;
 
+    // The object's own trivial skill range (gameobject_template Data23 / Data24 of a chest) is the one its tooltip is coloured with
+    // (2026_11_12_00); the green rank lies half way, as on the tooltip. Without the range the classic ranks above stay as they are.
     if (GameObject const* go = Object::ToGameObject(object))
     {
-        if (go->GetGOInfo()->GetTrivialSkillLow())
-            yellowLevel = go->GetGOInfo()->GetTrivialSkillLow();
+        if (go->GetGOInfo()->GetTrivialSkillLow() || go->GetGOInfo()->GetTrivialSkillHigh())
+        {
+            if (go->GetGOInfo()->GetTrivialSkillLow())
+                yellowLevel = go->GetGOInfo()->GetTrivialSkillLow();
 
-        if (go->GetGOInfo()->GetTrivialSkillHigh())
-            grayLevel = go->GetGOInfo()->GetTrivialSkillHigh();
+            if (go->GetGOInfo()->GetTrivialSkillHigh())
+                grayLevel = go->GetGOInfo()->GetTrivialSkillHigh();
 
-        greenLevel = (yellowLevel + grayLevel) / 2;
+            greenLevel = (yellowLevel + grayLevel) / 2;
+        }
     }
 
     // For skinning and Mining chance decrease with level. 1-74 - no decrease, 75-149 - 2 times, 225-299 - 8 times
