@@ -112,15 +112,28 @@ TEST_CASE("Every Classic judgement debuff is one per paladin on a target", "[Cla
     CHECK(ClassicSpell(25942, SPELLFAMILY_PALADIN, 0x20000000, SPELL_AURA_PROC_TRIGGER_SPELL, TARGET_UNIT_CASTER).Info->GetSpellSpecific() != SPELL_SPECIFIC_JUDGEMENT);
 }
 
-TEST_CASE("Curse of Doom and Curse of Agony rank 1 are curses", "[ClassicAuraExclusivity]")
+// The Forever client renamed Curse of Agony and Curse of Doom to Bane, and its tooltips draw the line: the 7 Bane spells say "Only one
+// Bane per Warlock can be active on any one target", the 23 Curse spells "Only one Curse per Warlock". So a Bane and a Curse of
+// one warlock stand on a target together (azeldof, Discord 2026-11-02 / 11-09: "on Forever these are different kinds of dot").
+// The 10-26 rule here followed vMaNGOS, where they were both curses; the Forever client data wins. Both still dispel as curses.
+TEST_CASE("Bane of Doom and Bane of Agony are banes, beside the warlock's curse", "[ClassicAuraExclusivity]")
 {
     ClassicSpell doom(603, SPELLFAMILY_WARLOCK, 0x80000000, SPELL_AURA_PERIODIC_DAMAGE, TARGET_UNIT_TARGET_ENEMY, DISPEL_CURSE);
     ClassicSpell agony(980, SPELLFAMILY_WARLOCK, 0x00000400, SPELL_AURA_PERIODIC_DAMAGE, TARGET_UNIT_TARGET_ENEMY, DISPEL_CURSE);
+    ClassicSpell agony6(11713, SPELLFAMILY_WARLOCK, 0x00000400, SPELL_AURA_PERIODIC_DAMAGE, TARGET_UNIT_TARGET_ENEMY, DISPEL_CURSE);
     ClassicSpell weakness(702, SPELLFAMILY_WARLOCK, 0x00008000, SPELL_AURA_MOD_DAMAGE_DONE, TARGET_UNIT_TARGET_ENEMY, DISPEL_CURSE);
-    CHECK(doom.Info->GetSpellSpecific() == SPELL_SPECIFIC_CURSE);
-    CHECK(agony.Info->GetSpellSpecific() == SPELL_SPECIFIC_CURSE);
-    CHECK(doom.Info->IsAuraExclusiveBySpecificPerCasterWith(weakness.Info.get()));
-    CHECK(agony.Info->IsAuraExclusiveBySpecificPerCasterWith(weakness.Info.get()));
+    ClassicSpell recklessness(704, SPELLFAMILY_WARLOCK, 0x80000000, SPELL_AURA_MOD_RESISTANCE, TARGET_UNIT_TARGET_ENEMY, DISPEL_CURSE);
+    CHECK(doom.Info->GetSpellSpecific() == SPELL_SPECIFIC_BANE);
+    CHECK(agony.Info->GetSpellSpecific() == SPELL_SPECIFIC_BANE);
+    CHECK(agony6.Info->GetSpellSpecific() == SPELL_SPECIFIC_BANE);
+    CHECK(weakness.Info->GetSpellSpecific() == SPELL_SPECIFIC_CURSE);
+    // a bane and a curse stay together
+    CHECK_FALSE(doom.Info->IsAuraExclusiveBySpecificPerCasterWith(weakness.Info.get()));
+    CHECK_FALSE(agony.Info->IsAuraExclusiveBySpecificPerCasterWith(weakness.Info.get()));
+    CHECK_FALSE(weakness.Info->IsAuraExclusiveBySpecificPerCasterWith(agony.Info.get()));
+    // one bane and one curse per warlock
+    CHECK(doom.Info->IsAuraExclusiveBySpecificPerCasterWith(agony.Info.get()));
+    CHECK(weakness.Info->IsAuraExclusiveBySpecificPerCasterWith(recklessness.Info.get()));
 }
 
 TEST_CASE("Only intellect buffs share Arcane Intellect's group", "[ClassicAuraExclusivity]")
