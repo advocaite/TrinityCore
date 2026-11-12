@@ -247,8 +247,10 @@ public:
     // and moves the character to the middle of the quest's area trigger (client AreaTrigger.db2 position); "run again".
     // Second call (character inside the trigger now): sends the same CMSG_AREA_TRIGGER the client sends on entering and
     // prints whether the objective was credited, then takes the quest back off. The "inside" line is the server's own
-    // shape test (sphere, box, polygon at the trigger's orientation).
-    static bool HandleExplore(ChatHandler* handler, std::string name, uint32 questId)
+    // shape test (sphere, box, polygon at the trigger's orientation). With "check" it never moves the character: when it is
+    // not inside it prints where it stands against the trigger (3D and flat distance, height of the trigger's middle above
+    // the floor), which tells a world bot that walked off from a trigger a player on foot can't reach.
+    static bool HandleExplore(ChatHandler* handler, std::string name, uint32 questId, Optional<std::string> verb)
     {
         Player* p = FindOnline(handler, name, "explore");
         Quest const* q = sObjectMgr->GetQuestTemplate(questId);
@@ -272,13 +274,30 @@ public:
             p->AddQuestAndCheckCompletion(q, nullptr);
         }
         bool const inside = p->GetMapId() == at->ContinentID && p->IsInAreaTrigger(at);
+        if (!inside && verb && *verb == "check")
+        {
+            Position const mid(at->Pos.X, at->Pos.Y, at->Pos.Z);
+            float floor = INVALID_HEIGHT;
+            if (p->GetMapId() == at->ContinentID)
+                floor = p->GetMap()->GetHeight(p->GetPhaseShift(), at->Pos.X, at->Pos.Y, at->Pos.Z + 5.0f, true, 100.0f);
+            handler->PSendSysMessage("selftest explore: %s quest %u trigger %u NOT inside: map %u vs %u, 3D %.1f / flat %.1f yd from the middle (radius %.1f), "
+                "middle z %.1f, floor under it %.1f, %s at z %.1f -> %s", p->GetName().c_str(), questId, at->ID, p->GetMapId(), uint32(at->ContinentID),
+                p->GetMapId() == at->ContinentID ? p->GetExactDist(&mid) : -1.0f, p->GetMapId() == at->ContinentID ? p->GetExactDist2d(&mid) : -1.0f,
+                at->Radius, at->Pos.Z, floor > INVALID_HEIGHT ? floor : 0.0f, p->GetName().c_str(), p->GetPositionZ(),
+                (floor > INVALID_HEIGHT && at->GetShapeType() == AreaTriggerShapeType::Sphere && at->Pos.Z - floor > at->Radius)
+                    ? "FAIL (the middle is higher above the floor than the radius: nobody on foot gets in)" : "NOT RUN (moved away; run again)");
+            p->RemoveActiveQuest(questId, true);
+            p->RemoveRewardedQuest(questId, true);
+            return true;
+        }
         if (!inside)
         {
             float x = at->Pos.X, y = at->Pos.Y, z = at->Pos.Z;
             if (p->GetMapId() == at->ContinentID)
             {
                 float const floor = p->GetMap()->GetHeight(p->GetPhaseShift(), x, y, z + 5.0f, true, 50.0f);
-                if (floor > INVALID_HEIGHT)
+                // stand on the floor when a player standing there is inside the trigger; otherwise drop in at the middle
+                if (floor > INVALID_HEIGHT && (at->GetShapeType() != AreaTriggerShapeType::Sphere || z - floor < at->Radius - 1.0f))
                     z = floor + 0.5f;
             }
             bool const ok = Playerbot::BotMovement::SafeTeleport(p, at->ContinentID, x, y, z, p->GetOrientation(), TELE_TO_GM_MODE);
@@ -516,9 +535,10 @@ public:
         return true;
     }
 
-    // .playerbot selftest cast <name> <spell>: the character casts the spell on itself, triggered (no cost, no cooldown), as
+    // .playerbot selftest cast <name> <spell> [enemy]: the character casts the spell on itself (or with "enemy" on its target or the
+    // nearest enemy within 30 yd), triggered (no cost, no cast time, no cooldown), as
     // using the item or toy would; for objects and area triggers a spell puts down (sleeping bag, campfire, bear trap).
-    static bool HandleCast(ChatHandler* handler, std::string name, uint32 spellId)
+    static bool HandleCast(ChatHandler* handler, std::string name, uint32 spellId, Optional<std::string> at)
     {
         Player* p = FindOnline(handler, name, "cast");
         if (!p)
@@ -528,8 +548,19 @@ public:
             handler->PSendSysMessage("selftest cast: spell %u does not exist -> FAIL", spellId);
             return false;
         }
-        SpellCastResult const r = p->CastSpell(p, spellId, true);
-        handler->PSendSysMessage("selftest cast: %s cast %u -> result %u%s", p->GetName().c_str(), spellId, uint32(r), r == SPELL_CAST_OK ? " (ok)" : "");
+        Unit* target = p;
+        if (at && *at == "enemy")
+        {
+            target = p->GetVictim() ? p->GetVictim() : p->SelectNearbyTarget(nullptr, 30.0f);
+            if (!target)
+            {
+                handler->PSendSysMessage("selftest cast: no enemy within 30 yd of %s (move it next to mobs first) -> NOT RUN", p->GetName().c_str());
+                return false;
+            }
+        }
+        SpellCastResult const r = p->CastSpell(target, spellId, true);
+        handler->PSendSysMessage("selftest cast: %s cast %u on %s -> result %u%s", p->GetName().c_str(), spellId, target->GetName().c_str(), uint32(r),
+            r == SPELL_CAST_OK ? " (ok)" : "");
         return r == SPELL_CAST_OK;
     }
 
@@ -542,9 +573,9 @@ public:
         bool const resting = p->HasPlayerFlag(PLAYER_FLAGS_RESTING);
         if (spellId)
         {
-            bool const has = p->HasAura(*spellId);
-            handler->PSendSysMessage("selftest auras: %s resting %s, aura %u %s -> %s", p->GetName().c_str(), resting ? "yes" : "no", *spellId,
-                has ? "on" : "off", has ? "PASS" : "FAIL");
+            Aura const* aura = p->GetAura(*spellId);
+            handler->PSendSysMessage("selftest auras: %s resting %s, aura %u %s (stacks %u) -> %s", p->GetName().c_str(), resting ? "yes" : "no", *spellId,
+                aura ? "on" : "off", aura ? uint32(aura->GetStackAmount()) : 0, aura ? "PASS" : "FAIL");
             return true;
         }
         std::ostringstream ss;
