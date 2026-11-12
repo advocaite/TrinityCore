@@ -1017,6 +1017,15 @@ uint32 GameEventMgr::Update()                               // return the next e
     std::set<uint16> activate, deactivate;
     for (uint16 itr = 1; itr < mGameEvent.size(); ++itr)
     {
+        // A holiday on defined dates (the client's Holidays list, as the Darkmoon Faire) has no fixed period: once one run is over, the
+        // next start is the next date of the list. Without this the event came back after `occurence` minutes counted from the
+        // first run, which drifts from the calendar, until the next server start read the dates again.
+        if (mGameEvent[itr].holidayStage && mGameEvent[itr].state == GAMEEVENT_NORMAL && mGameEvent[itr].length
+            && currenttime >= mGameEvent[itr].start + time_t(mGameEvent[itr].length) * MINUTE)
+            if (HolidaysEntry const* holiday = sHolidaysStore.LookupEntry(mGameEvent[itr].holiday_id))
+                if (holiday->CalendarFilterType == 1 && !holiday->Looping)
+                    SetHolidayEventTime(mGameEvent[itr]);
+
         // must do the activating first, and after that the deactivating
         // so first queue it
         //TC_LOG_ERROR("sql.sql", "Checking event {}", itr);
