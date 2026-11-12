@@ -111,7 +111,9 @@ void DB2StorageBase::Load(std::string const& path, LocaleConstant locale)
     // missing on the server while the client, which gets the key as a TactKey hotfix, reads them. Spell visuals were one case:
     // Holy Strike (679) had no SpellXSpellVisual row, so SMSG_SPELL_GO carried visual 0 and the client played no animation or
     // sound (Discord, dumpins, 10 Nov). The extractor decrypts a section when the key is known at extraction time (it loads
-    // wowdev/TACTKeys), so the fix is a fresh dbc extraction; this line says which tables need it.
+    // wowdev/TACTKeys). On 12 Nov the client 70888 data had 35 tables locked by keys 0DA4670DB36FB2A9, DA0E7785727A0A65 and
+    // 3146BA4C4ECDBFAB, which neither that list nor the live TactKey hotfixes carry yet; once one is published, a dbc extraction
+    // unlocks its records. This line says which tables are still locked, and by which keys.
     {
         uint32 lockedSections = 0, lockedRecords = 0;
         std::string keys;
@@ -126,8 +128,8 @@ void DB2StorageBase::Load(std::string const& path, LocaleConstant locale)
                 keys += Trinity::StringFormat("{}{:016X}", keys.empty() ? "" : " ", section.TactId);
         }
         if (lockedSections)
-            TC_LOG_WARN("server.loading", "{}: {} records in {} sections are locked by TACT keys the extractor did not have ({}); the server "
-                "cannot read them. Extract the dbc folder again with the current mapextractor (-e 2).", _fileName, lockedRecords, lockedSections, keys);
+            TC_LOG_INFO("server.loading", "{}: {} records in {} sections are locked by TACT keys the extractor did not have ({}); the server "
+                "cannot read them until the dbc folder is extracted with those keys known (wowdev/TACTKeys).", _fileName, lockedRecords, lockedSections, keys);
     }
 
     // load raw non-string data
