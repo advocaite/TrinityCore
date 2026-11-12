@@ -64,11 +64,22 @@ namespace {
 // Intellect gives attack power and the mana for Stormstrike and shocks, and Agility only crit and dodge (1% crit per 20 at 60).
 // The retail rule (Agility main, Strength and Intellect wasted) made the bots wear agility leather and mail over strength mail
 // (Discord 12 Nov: "shaman bots gear favor agi a bit too much").
+// Rogues: attack power is level * 2 + Strength + Agility, so Strength still gives one attack power a point (Agility stays
+// first: it adds crit and dodge on top). Feral druids: Strength gives 2 attack power in Cat and Bear Form, Agility 1 in Cat
+// Form plus crit, and armor and dodge in Bear Form; the two are worth about the same, so Strength counts as fully as the main
+// stat (IsCoPrimary).
 bool IsUsefulSecondaryPrimary(uint8 cls, uint16 spec, uint32 statType)
 {
     if (cls == CLASS_SHAMAN && spec == 263)
         return statType == ITEM_MOD_AGILITY || statType == ITEM_MOD_INTELLECT;
+    if (cls == CLASS_ROGUE)
+        return statType == ITEM_MOD_STRENGTH;
     return false;
+}
+
+bool IsCoPrimary(uint8 cls, uint16 spec, uint32 statType)
+{
+    return cls == CLASS_DRUID && (spec == 103 || spec == 104) && statType == ITEM_MOD_STRENGTH;
 }
 
 // Stat-block scorer. Modern items can carry:
@@ -99,7 +110,7 @@ int32 ScoreStatBlock(ItemTemplate const* tpl, uint8 cls, uint16 spec)
         else if (stat_type == ITEM_MOD_STR_INT)
             primary_match = (primary == ITEM_MOD_STRENGTH || primary == ITEM_MOD_INTELLECT);
 
-        if (primary_match) { total += 500; continue; }
+        if (primary_match || IsCoPrimary(cls, spec, uint32(stat_type))) { total += 500; continue; }
 
         // A second primary the spec still turns into damage (Classic 1.60 attack power, Player::UpdateAttackPowerAndDamage).
         if (IsUsefulSecondaryPrimary(cls, spec, uint32(stat_type))) { total += 250; continue; }
@@ -395,8 +406,10 @@ RaidWeights WeightsFor(RaidRole role, uint8 cls, uint16 spec)
             {
                 case CLASS_WARRIOR: w.str = 1.0f; w.agi = 0.7f; break;
                 case CLASS_PALADIN: w.str = 1.0f; w.agi = 0.4f; w.intel = 0.25f; w.mana = 0.05f; break;
-                case CLASS_ROGUE:   w.str = 0.4f; w.agi = 1.0f; break;
-                case CLASS_DRUID:   w.str = 0.8f; w.agi = 1.0f; w.intel = 0.15f; break;
+                // Classic: a rogue gets 1 attack power per Strength and per Agility (Agility also crit and dodge); a cat 2 per
+                // Strength, 1 per Agility plus crit
+                case CLASS_ROGUE:   w.str = 0.5f; w.agi = 1.0f; break;
+                case CLASS_DRUID:   w.str = 1.0f; w.agi = 1.0f; w.intel = 0.15f; break;
                 // Classic: 2 attack power per Strength, 1.5 per Intellect with Mental Dexterity (plus mana), Agility crit only
                 case CLASS_SHAMAN:  w.str = 1.0f; w.agi = 0.55f; w.intel = 0.6f; w.mana = 0.05f; break;
                 default:            w.str = 0.8f; w.agi = 0.8f; break;
@@ -408,7 +421,10 @@ RaidWeights WeightsFor(RaidRole role, uint8 cls, uint16 spec)
             w.dps = 1.0f; w.ranged_dps = 8.0f;
             break;
     }
-    (void)spec;
+    // Classic 1.60: in Cat and Bear Form the weapon's damage is ignored (level * 0.85 .. 1.25 times the form speed, Player::
+    // CalculateMinMaxDamage), so a feral druid's weapon is worth its stats only
+    if (cls == CLASS_DRUID && (spec == 103 || spec == 104))
+        w.dps = 0.0f;
     return w;
 }
 

@@ -85,10 +85,10 @@ std::unordered_map<uint32, StatPriority> const& SpecTable()
         { 255, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.70f, 0.80f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
 
         // ===== Rogue =====
-        // Assassination (259), Outlaw (260), Subtlety (261): all Agility, weapon DPS critical.
-        { 259, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.75f, 0.75f, 0.85f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
-        { 260, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.80f, 0.75f, 0.65f, 0.70f, 0.30f, 0.30f, 0.30f, 12.0f) },
-        { 261, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.85f, 0.70f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
+        // Assassination (259), Outlaw (260), Subtlety (261): Agility first, weapon DPS critical; Classic Strength still gives 1 attack power.
+        { 259, MakeRow(0.50f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.75f, 0.75f, 0.85f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
+        { 260, MakeRow(0.50f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.80f, 0.75f, 0.65f, 0.70f, 0.30f, 0.30f, 0.30f, 12.0f) },
+        { 261, MakeRow(0.50f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.85f, 0.70f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
 
         // ===== Priest =====
         // Discipline (256): Int healer; Haste primary, Crit secondary.
@@ -138,10 +138,11 @@ std::unordered_map<uint32, StatPriority> const& SpecTable()
         // ===== Druid =====
         // Balance (102): Int caster.
         { 102, MakeRow(0.0f, 0.0f, 0.80f, W_ILVL_PRIMARY, 0.0f, 0.75f, 0.85f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 4.0f) },
-        // Feral (103): Agi cat melee.
-        { 103, MakeRow(0.0f, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.85f, 0.70f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 12.0f) },
-        // Guardian (104): Agi tank, Stamina dominant.
-        { 104, MakeRow(0.0f, 0.85f, W_TANK_STAMINA, 0.0f, 0.0f, 0.55f, 0.65f, 0.75f, 0.80f, 0.55f, 0.55f, 0.35f, 10.0f) },
+        // Feral (103): Classic cat: 2 attack power per Strength, 1 per Agility plus crit, so the two weigh the same; the form ignores
+        // the weapon's damage (Player::CalculateMinMaxDamage), so weapon DPS counts for nothing.
+        { 103, MakeRow(W_ILVL_PRIMARY, W_ILVL_PRIMARY, 0.85f, 0.0f, 0.0f, 0.85f, 0.70f, 0.75f, 0.65f, 0.30f, 0.30f, 0.30f, 0.0f) },
+        // Guardian (104): bear tank, Stamina dominant; Strength (2 attack power: threat) and Agility (armor, dodge) alike, no weapon DPS.
+        { 104, MakeRow(0.85f, 0.85f, W_TANK_STAMINA, 0.0f, 0.0f, 0.55f, 0.65f, 0.75f, 0.80f, 0.55f, 0.55f, 0.35f, 0.0f) },
         // Restoration (105): Int healer, Mastery-Haste.
         { 105, MakeRow(0.0f, 0.0f, 0.85f, W_ILVL_PRIMARY, 0.55f, 0.65f, 0.85f, 0.90f, 0.65f, 0.40f, 0.30f, 0.30f, 4.0f) },
 
