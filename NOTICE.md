@@ -40,3 +40,15 @@ redistributing. Source files of the module do not carry per-file headers; this n
   Data from [Efficient Games](https://efficient.games) (https://github.com/JIVESCORP/eg-link-output-wowf), licensed under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changed: only the records we lacked or had different were picked and
   converted to our database tables.
+- Live WoW Forever quest data (quest order, givers and turn-ins) in `sql/custom/world/2026_11_12_15_*.sql`, `2026_11_13_86_*.sql` and
+  `2026_11_13_87_*.sql`: from [Questie](https://github.com/Questie/QuestieDB) (Questie team, GPL-3.0), its Forever corrections and
+  play traces. Changed: converted to our database tables, only where ours lacked it.
+- Live WoW Forever world data (quest records, object templates, vendor items, trainer levels) in
+  `sql/custom/world/2026_11_12_14_*.sql`, `2026_11_13_88_*.sql` and `2026_11_13_90_*.sql`: Data from
+  [Efficient Games](https://efficient.games) (https://github.com/JIVESCORP/eg-link-output-wowf), licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changed: only the records we lacked or had different were picked and
+  converted to our database tables.
+- Quest givers, drops and vendor items in `sql/custom/world/2026_11_13_91_world_forever_everlake_data.sql`: from Everlake's world data
+  ([buildthehomelab/wow-everlake-world-data](https://github.com/buildthehomelab/wow-everlake-world-data), GPL-3.0), which in turn
+  credits EG Link (CC BY 4.0), Polestar forever-db, QuestieDB, ForeverDB.net (GPL-3.0), NorgannonDB by zmarotrix (GPL-3.0) and Icy Veins'
+  WoW Forever database (db.icy-veins.com/wow-forever). Changed: compared with our world and only rows we lacked were written as ours.
