@@ -214,6 +214,18 @@ bool Matches(Who who, Member const& m, Player* mainTank)
     return false;
 }
 
+// A creature no taunt reaches: CREATURE_FLAG_EXTRA_NO_TAUNT (Creature.cpp makes it immune to the taunt aura and the "attack me" effect),
+// or the same immunity from a script. Nefarian carries the flag (bwl_nefarian 0136-r10: 15 of 16 Taunts refused as immune).
+bool TauntImmune(Unit const* enemy)
+{
+    Creature const* c = enemy ? enemy->ToCreature() : nullptr;
+    if (!c)
+        return false;
+    if (c->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_TAUNT)
+        return true;
+    return c->m_spellImmune[IMMUNITY_STATE].count(SPELL_AURA_MOD_TAUNT) != 0;
+}
+
 // Phase window of a rule (hpMax / hpMin in RaidEncounters.h): the enemy's health percent must lie inside it.
 bool InPhase(Unit const* enemy, float hpMax, float hpMin)
 {
@@ -2551,11 +2563,16 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
     // 2b. Frontal cones: step sideways out of the sector in front of the boss.
     for (AvoidFrontal const& rule : rules.avoidFrontal)
     {
-        if (!Matches(rule.who, self, plan.mainTank))
+        // A tank hitting a boss no taunt reaches while another tank holds him (the threat it builds for when his tank dies, PublishTargets) is
+        // no tank of his: it keeps out of his cones as the rest of the raid does.
+        bool const sideTank = self.tank && rule.who == Who::NonTank;
+        if (!sideTank && !Matches(rule.who, self, plan.mainTank))
             continue;
         for (Unit* enemy : plan.enemies)
         {
             if (enemy->GetEntry() != rule.enemy || enemy->IsFlying() || !InPhase(enemy, rule.hpMax, rule.hpMin))
+                continue;
+            if (sideTank && (bot->GetVictim() != enemy || enemy->GetVictim() == bot || !TauntImmune(enemy)))
                 continue;
             float const distance = Dist2D(bot->GetPositionX(), bot->GetPositionY(), enemy->GetPositionX(), enemy->GetPositionY());
             if (distance > rule.radius)
@@ -4093,6 +4110,24 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
             // target (the whelps, Priority) so they do not reach the healers. The main tank keeps its enemy while it is on the ground.
             Unit* victim = m.p->GetVictim();
             bool const airborne = victim && victim->IsFlying();
+            // A boss no taunt reaches (TauntImmune: Nefarian) is never taken back by a taunt when his tank dies: he goes to the next name on his
+            // threat list, a DPS held at just under his tank's threat (bwl_nefarian 0136-r10: his tank died at 13% and at 8%, the three other
+            // tanks had stood idle all of phase two with no threat on him, none could taunt him, and he killed the warriors one by one). So a tank
+            // with nothing of its own to hold hits him all fight and is that next name (the coordinator then hands him to the tank with the most
+            // threat). It fights from his side like the melee (the cone step 2b), not beside his tank in the Shadow Flame.
+            if (!victim && o.tank_fallback_target.IsEmpty())
+                for (Unit* enemy : plan.enemies)
+                {
+                    if (!IsBoss(enemy->ToCreature(), plan.rules) || !enemy->IsAlive() || enemy->IsFlying() || !TauntImmune(enemy))
+                        continue;
+                    Player* holder = enemy->GetVictim() ? enemy->GetVictim()->ToPlayer() : nullptr;
+                    Member const* hm = holder ? FindMember(plan, holder) : nullptr;
+                    if (!hm || !hm->tank || hm->p == m.p ||
+                        std::find(o.forbidden_targets.begin(), o.forbidden_targets.end(), enemy->GetGUID()) != o.forbidden_targets.end())
+                        continue;
+                    o.tank_fallback_target = enemy->GetGUID();
+                    break;
+                }
             // A target the movement pass already set (a fixed tank row's tank waiting at its slot: the add on it) stays, and a forbidden
             // one is never the fallback.
             if ((m.p != plan.mainTank || airborne || !victim) && o.tank_fallback_target.IsEmpty())

@@ -2234,9 +2234,34 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 continue;
             Member const* best = nullptr;
             size_t best_load = SIZE_MAX;
+            // A boss no taunt reaches (CREATURE_FLAG_EXTRA_NO_TAUNT: Nefarian, every Taunt and Growl refused as immune in bwl_nefarian 0136-r10)
+            // goes to the top of his threat list, not to the tank sent for him: the tank with the most threat on him is the one that can take him,
+            // whatever its health (r10: his tank died at 13% and 8%, the healthiest tank was sent, could not taunt, and he killed the warriors one
+            // by one). Read from his live threat list; the spare tanks build that threat all fight (RaidBrain PublishTargets).
+            float best_threat = -1.0f;
+            Creature* boss_c = nullptr;
+            for (Member const* t : tanks)
+                if (Player* tp = ObjectAccessor::FindConnectedPlayer(t->src->guid))
+                {
+                    boss_c = ObjectAccessor::GetCreature(*tp, m.u->guid);
+                    break;
+                }
+            bool const by_threat = boss_c && boss_c->IsAlive() && boss_c->CanHaveThreatList() &&
+                (boss_c->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_TAUNT) != 0;
             for (Member const* t : tanks)
             {
                 if (!t->is_bot || user_sym.count(t->guid_low)) continue;
+                if (by_threat)
+                {
+                    Player* tp = ObjectAccessor::FindConnectedPlayer(t->src->guid);
+                    float const threat = tp ? boss_c->GetThreatManager().GetThreat(tp) : 0.0f;
+                    if (threat > best_threat)
+                    {
+                        best = t;
+                        best_threat = threat;
+                    }
+                    continue;
+                }
                 size_t load = 0;
                 if (adds_up)
                     for (Mob const& o : mobs)
@@ -2252,6 +2277,9 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 }
             }
             if (!best) break;
+            if (by_threat)
+                TC_LOG_INFO("playerbot.v2", "[raid_tank] group={} map={} {} cannot be taunted: {} has the most threat on him ({:.0f})",
+                    group_low, map_id, m.u->entry, best->src->name, best_threat);
             if (auto sit = sticky.find(best->guid_low); sit != sticky.end())
             {
                 taken.erase(std::remove(taken.begin(), taken.end(), sit->second), taken.end());
