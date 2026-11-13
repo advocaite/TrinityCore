@@ -35,6 +35,9 @@ namespace
     std::array<uint32, 5> QualityFactor = { 1, 2, 15, 50, 150 };
     // AuctionHouseBot.Vanilla.ValueCurve.Scale: one easy knob over the whole curve (1 = as set, 2 = double, 0.5 = half)
     float _scale = 1.0f;
+    // AuctionHouseBot.Vanilla.ValueCurve.FullValueItemLevel: below this item level the curve scales down in proportion
+    // (item level / this), so low-level goods are not priced like endgame ones (0 = off)
+    uint32 _fullValueItemLevel = 0;
 }
 
 void LoadConfig()
@@ -49,6 +52,7 @@ void LoadConfig()
     QualityFactor[3] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Blue", 50);
     QualityFactor[4] = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.Epic", 150);
     _scale = std::clamp(sConfigMgr->GetFloatDefault("AuctionHouseBot.Vanilla.ValueCurve.Scale", 1.0f), 0.1f, 10.0f);
+    _fullValueItemLevel = sConfigMgr->GetIntDefault("AuctionHouseBot.Vanilla.ValueCurve.FullValueItemLevel", 0);
 }
 
 bool Enabled()
@@ -121,7 +125,11 @@ uint64 UnitValue(ItemTemplate const* proto)
 
     uint32 quality = std::min<uint32>(proto->GetQuality(), QualityFactor.size() - 1);
     uint64 itemLevel = proto->GetBaseItemLevel();
-    uint64 curve = uint64(double(itemLevel * itemLevel * QualityFactor[quality] * classPct / 100) * _scale);
-    return std::max<uint64>(vendor, curve);
+    double curve = double(itemLevel * itemLevel * QualityFactor[quality] * classPct / 100) * _scale;
+    // Squared item level alone priced a level 14 green bracer at 1g (Discord 2026-11-12, dumpins); vanilla houses sold them for
+    // a few tens of silver. Below the full value level the price falls with the item level once more.
+    if (_fullValueItemLevel && itemLevel < _fullValueItemLevel)
+        curve *= double(itemLevel) / double(_fullValueItemLevel);
+    return std::max<uint64>(vendor, uint64(curve));
 }
 }

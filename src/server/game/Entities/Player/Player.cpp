@@ -17557,16 +17557,6 @@ void Player::AdjustQuestObjectiveProgress(Quest const* quest)
                     uint32 reqItemCount = obj.Amount;
                     uint32 curItemCount = GetItemCount(obj.ObjectID, true);
                     uint32 itemProgress = std::min(curItemCount, reqItemCount);
-
-                    // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: same as Player::ItemRemovedQuestCheck, never lower
-                    // the recorded progress of such an objective (the item is meant to be consumed).
-                    if (obj.Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
-                    {
-                        uint16 slot = FindQuestSlot(quest->GetQuestId());
-                        if (slot < MAX_QUEST_LOG_SIZE && GetQuestSlotObjectiveData(slot, obj) >= int32(itemProgress))
-                            break;
-                    }
-
                     SetQuestObjectiveData(obj, itemProgress);
                 }
                 break;
@@ -17854,12 +17844,6 @@ void Player::ItemRemovedQuestCheck(uint32 entry, uint32 /*count*/)
         QuestObjective const* objective = sObjectMgr->GetQuestObjective(objectiveItr.second.ObjectiveId);
 
         if (!quest || !objective || !IsQuestObjectiveCompletable(logSlot, quest, *objective))
-            continue;
-
-        // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: these objectives are completed by using/consuming the item
-        // itself (e.g. an on-use item whose spell takes it as a reagent to fire a follow-up kill credit), so losing
-        // the item from the inventory must not roll the objective back.
-        if (objective->Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
             continue;
 
         int32 newItemCount = GetItemCount(entry, false);  // we may have more than what the status shows, so we have to iterate inventory
@@ -30174,9 +30158,40 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
         return traitConfig.Type != TraitConfigType::Combat;
     });
 
+    // spent ranks of a config, to see the ranks the check at login takes away without failing (removeInvalidEntries drops an entry
+    // whose node conditions or parent nodes are not met and carries on, with no log line at the default log level)
+    auto spentRanks = [](WorldPackets::Traits::TraitConfig const& traitConfig)
+    {
+        int32 ranks = 0;
+        for (WorldPackets::Traits::TraitEntry const& entry : traitConfig.Entries)
+            ranks += entry.Rank;
+        return ranks;
+    };
+
     for (WorldPackets::Traits::TraitConfig& traitConfig : loadedConfigs)
     {
-        if (TraitMgr::LearnResult validateResult = TraitMgr::ValidateConfig(traitConfig, this, false, true); validateResult != TraitMgr::LearnResult::Ok)
+        int32 const ranksBefore = spentRanks(traitConfig);
+        std::vector<WorldPackets::Traits::TraitEntry> const entriesBefore = traitConfig.Entries;
+        TraitMgr::LearnResult const validateResult = TraitMgr::ValidateConfig(traitConfig, this, false, true);
+        if (validateResult == TraitMgr::LearnResult::Ok && spentRanks(traitConfig) < ranksBefore)
+        {
+            std::string dropped;
+            for (WorldPackets::Traits::TraitEntry const& before : entriesBefore)
+            {
+                auto itr = std::ranges::find_if(traitConfig.Entries, [&](WorldPackets::Traits::TraitEntry const& after)
+                {
+                    return after.TraitNodeID == before.TraitNodeID && after.TraitNodeEntryID == before.TraitNodeEntryID;
+                });
+                int32 const rankAfter = itr != traitConfig.Entries.end() ? itr->Rank : 0;
+                if (before.Rank > rankAfter)
+                    dropped += Trinity::StringFormat(" node {} entry {} rank {}->{}", before.TraitNodeID, before.TraitNodeEntryID, before.Rank, rankAfter);
+            }
+            TC_LOG_WARN("entities.player.talents", "[talent_login] Player {} ({}): talent config {} (type {}, spec {}) lost {} of {} spent ranks in the check at login, level {}:{}",
+                GetName(), GetGUID().ToString(), traitConfig.ID, AsUnderlyingType(traitConfig.Type), traitConfig.ChrSpecializationID,
+                ranksBefore - spentRanks(traitConfig), ranksBefore, GetLevel(), dropped);
+        }
+
+        if (validateResult != TraitMgr::LearnResult::Ok)
         {
             // Players report talents reset after a restart or an alt login (player report, 3 Nov) and the cause is not known yet.
             // Say which config was wiped and why, so the next report can be matched to a log line.
@@ -30257,6 +30272,20 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
         else
             SetActiveTalentGroup(0);
     }
+
+    // a saved talent config that is not made the active one at login looks like a talent reset to the player
+    int32 activeRanks = 0;
+    if (activeTraitConfig)
+        for (UF::TraitEntry const& entry : activeTraitConfig->Entries)
+            activeRanks += entry.Rank;
+
+    if (!activeRanks && std::ranges::any_of(loadedConfigs, [&](WorldPackets::Traits::TraitConfig const& loaded)
+        {
+            return loaded.Type == TraitConfigType::Combat && (!activeTraitConfig || loaded.ID != *activeTraitConfig->ID) && spentRanks(loaded) > 0;
+        }))
+        TC_LOG_WARN("entities.player.talents", "[talent_login] Player {} ({}): level {}, primary spec {}, talent group {}: the active talent config at login is {} ({}), "
+            "while another saved combat config has talents spent", GetName(), GetGUID().ToString(), GetLevel(), uint32(GetPrimarySpecialization()),
+            uint32(GetActiveTalentGroup()), activeTraitConfig ? int32(*activeTraitConfig->ID) : 0, activeTraitConfig ? "no talents spent" : "none found");
 
     if (activeTraitConfig)
     {

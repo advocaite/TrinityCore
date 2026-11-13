@@ -709,6 +709,48 @@ std::pair<uint8, uint8> const* ObjectMgr::GetCreatureClassicLevel(uint32 entry) 
     return Trinity::Containers::MapGetValuePtr(_creatureClassicLevelStore, entry);
 }
 
+// Classic 1.60: Forever reused some vanilla creatures in new places at another level (Rabid Longtooth 5288: level 47-48 in Feralas,
+// level 8-9 in the Whispering Forest on the official realm). One level per entry cannot hold both, so those spawns carry their own.
+void ObjectMgr::LoadCreatureClassicSpawnLevels()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _creatureClassicSpawnLevelStore.clear();
+
+    //                                               0     1          2
+    QueryResult result = WorldDatabase.Query("SELECT guid, level_min, level_max FROM creature_classic_level_spawn");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 classic creature spawn levels. DB table `creature_classic_level_spawn` is empty.");
+        return;
+    }
+
+    do
+    {
+        Field* fields = result->Fetch();
+        ObjectGuid::LowType guid = fields[0].GetUInt64();
+        uint8 levelMin = std::max<uint8>(fields[1].GetUInt8(), 1);
+        uint8 levelMax = std::max<uint8>(fields[2].GetUInt8(), levelMin);
+        if (!GetCreatureData(guid))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `creature_classic_level_spawn` has a level for creature spawn (GUID: {}) that does not exist, skipped.", guid);
+            continue;
+        }
+
+        _creatureClassicSpawnLevelStore[guid] = { levelMin, levelMax };
+    } while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic creature spawn levels in {} ms", _creatureClassicSpawnLevelStore.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+std::pair<uint8, uint8> const* ObjectMgr::GetCreatureClassicSpawnLevel(ObjectGuid::LowType spawnId) const
+{
+    if (!spawnId)
+        return nullptr;
+
+    return Trinity::Containers::MapGetValuePtr(_creatureClassicSpawnLevelStore, spawnId);
+}
+
 ClassicCreatureStats const* ObjectMgr::GetCreatureClassicStats(uint32 entry) const
 {
     return Trinity::Containers::MapGetValuePtr(_creatureClassicStatsStore, entry);

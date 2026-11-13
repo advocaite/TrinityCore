@@ -3861,6 +3861,13 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->Attributes |= SPELL_ATTR0_ALLOW_WHILE_MOUNTED;
     });
 
+    // Classic 1.60 Hoof-Shaped Foot Pedal (item 269902): the centaur form ends on entering combat only outside Desolace, which its
+    // script (classic_spell_hoof_shaped_foot_pedal) does; the interrupt in the client data would end it in Desolace too.
+    ApplySpellFix({ 1286814 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AuraInterruptFlags &= ~SpellAuraInterruptFlags::EnteringCombat;
+    });
+
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {

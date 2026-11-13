@@ -78,6 +78,7 @@ void RealmList::Initialize(Trinity::Asio::IoContext& ioContext, uint32 updateInt
 
 void RealmList::Close()
 {
+    _updateInterval = 0;
     _updateTimer->cancel();
 }
 

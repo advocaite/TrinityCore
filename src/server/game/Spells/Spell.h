@@ -573,6 +573,7 @@ class TC_GAME_API Spell
         void SendMountResult(MountResult result);
         void SendSpellStart();
         void SendSpellGo();
+        void SendNextMeleeSwingAttackerState();
         void SendSpellCooldown();
         void SendSpellExecuteLog();
         SpellLogEffect& GetExecuteLogEffect(SpellEffects effect);
