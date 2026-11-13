@@ -28,6 +28,7 @@ CollectAndAddSourceFiles(
 if(NOT BUILD_PLAYERBOT_V2)
   set(TESTS_MODULE_ONLY_SOURCES
     ClassicAddonHint.cpp
+    ClassicTalentCode.cpp
     ClassicBotBridge.cpp
     ClassicBotConversation.cpp
     ClassicGuildAskText.cpp
