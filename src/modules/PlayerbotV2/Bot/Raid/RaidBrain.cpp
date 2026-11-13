@@ -1303,6 +1303,8 @@ struct TankSpotWalk { float fromX = 0, fromY = 0, toX = 0, toY = 0, toZ = 0; uin
 std::unordered_map<uint64_t, TankSpotWalk> g_tankSpotWalk;
 
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
+constexpr float kGuardRiseScan = 100.0f;         // GuardRise: the bones within this reach of the boss
+std::unordered_map<uint64_t, uint32_t> g_guardRiseLog;   // bot -> last [raid_guard_rise] line (ms)
 constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned within this reach, in nobody's combat yet, are off limits too
 
 // An add of a fixed row that has reached the raid: it stands in melee with a raider, wherever that raider is (another tank's pile, a melee DPS
@@ -2754,6 +2756,76 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                 SetMove(out, px, py, pz, "face boss away");
                 return;
             }
+
+    // 3b1. Guard the rise (GuardRise, Nefarian): a tank that does not hold the boss stands among the bones that are about to rise.
+    if (self.tank)
+        for (GuardRise const& rule : rules.guardRise)
+        {
+            Unit* boss = nullptr;
+            for (Unit* enemy : plan.enemies)
+                if (enemy->GetEntry() == rule.boss && enemy->IsAlive() && InPhase(enemy, rule.hpMax, rule.hpMin))
+                    boss = enemy;
+            if (!boss || boss->GetVictim() == bot)
+                continue;
+            std::list<GameObject*> found;
+            boss->GetGameObjectListWithEntryInGrid(found, rule.bones, kGuardRiseScan);
+            std::vector<GameObject*> dead(found.begin(), found.end());
+            if (dead.size() < 3)
+                continue;
+            // The guards in guid order (plan.members is sorted): each one takes the densest cluster the ones before it left uncovered.
+            uint32_t index = 0;
+            for (Member const& m : plan.members)
+            {
+                if (m.p == bot)
+                    break;
+                if (m.tank && m.p->IsAlive() && boss->GetVictim() != m.p)
+                    ++index;
+            }
+            float const r2 = rule.reach * rule.reach;
+            std::vector<char> covered(dead.size(), 0);
+            GameObject* spot = nullptr;
+            for (uint32_t pick = 0; pick <= index; ++pick)
+            {
+                spot = nullptr;
+                size_t best = 0;
+                for (GameObject* centre : dead)
+                {
+                    size_t n = 0;
+                    for (size_t i = 0; i < dead.size(); ++i)
+                        if (!covered[i] && centre->GetExactDist2dSq(dead[i]) <= r2)
+                            ++n;
+                    if (n > best)
+                    {
+                        best = n;
+                        spot = centre;
+                    }
+                }
+                if (!spot)
+                    break;
+                for (size_t i = 0; i < dead.size(); ++i)
+                    if (spot->GetExactDist2dSq(dead[i]) <= r2)
+                        covered[i] = 1;
+            }
+            if (!spot)
+                continue;   // more guards than clusters: this one fights on
+            out.forbidden_targets.push_back(boss->GetGUID());
+            float const off = Dist2D(bot->GetPositionX(), bot->GetPositionY(), spot->GetPositionX(), spot->GetPositionY());
+            if (off <= 4.0f)
+                return;
+            float sz = 0.0f;
+            if (!Usable(bot, spot->GetPositionX(), spot->GetPositionY(), spot->GetPositionZ(), sz))
+                continue;
+            uint32_t& logged = g_guardRiseLog[bot->GetGUID().GetCounter()];
+            if (now - logged >= 10000)
+            {
+                logged = now;
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_guard_rise] {} guards {} bones (gameobject {}) at ({:.0f},{:.0f}), {:.0f} y off ({} at {:.0f}%)",
+                            bot->GetName(), dead.size(), rule.bones, spot->GetPositionX(), spot->GetPositionY(), off, boss->GetName(),
+                            boss->GetHealthPct());
+            }
+            SetMove(out, spot->GetPositionX(), spot->GetPositionY(), sz, "guard rise");
+            return;
+        }
 
     // 3b2. Tank spots (Majordomo): a player that holds a ruled enemy walks to its place in the row, every 3 s at most.
     for (TankSpot const& rule : rules.tankSpot)

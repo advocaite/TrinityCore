@@ -287,6 +287,12 @@ inline bool InTankSpot(TankSpot const& rule, uint32_t entry)
 // While <enemy> is alive and fighting, matching bots stand in the sector behind it: <halfAngleDeg> either side of the line
 // straight behind where it faces, between <minDist> and <maxDist> yards. A bot outside walks to the nearest such spot on its
 // own side. Pair with FaceAway so the tank decides which way "behind" is.
+// While <boss> is alive and fighting in the hp window and at least three <bones> (a gameobject: what an add leaves where it died) lie
+// within kGuardRiseScan of him, the raid's tanks that do not hold him stand among those bones, each on its own cluster (the densest one
+// left, <reach> yards round): when the bones rise they rise next to a tank, inside its area taunt (Nefarian: the Drakonid Bones of phase
+// one rise as Bone Constructs under 20%). The boss is forbidden to those tanks while they guard. The window ends where the rise begins.
+struct GuardRise { uint32_t boss; uint32_t bones; float hpMax; float hpMin; float reach = 10.0f; };
+
 struct StandBehind { uint32_t enemy; Who who; float minDist; float maxDist; float halfAngleDeg; float hpMax = 100.0f; float hpMin = 0.0f; };
 
 // While <enemy> is alive and fighting (in the hp window), matching bots stand on its flank: <halfAngleDeg> either side of the line
@@ -354,6 +360,7 @@ struct RaidRules
     std::vector<FaceAway> faceAway;
     std::vector<TankSpot> tankSpot;
     std::vector<StandBehind> standBehind;
+    std::vector<GuardRise> guardRise;
     std::vector<StandFlank> standFlank;
     std::vector<ResistPotion> resistPotion;
     std::vector<CarrierPotion> carrierPotion;

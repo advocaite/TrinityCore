@@ -55,6 +55,12 @@ namespace Playerbot::Raid {
         // camp (bwl_nefarian 1110a run 1: Shadow Flame killed three casters standing on the camp 9 y in front of him, Cleave and his swings
         // the healers at their post).
         r.faceAway.push_back({ 11583 });
+        // Phase three (under 20%, classic_boss_nefarian.cpp: Raise Drakonid 23362): the Drakonid Bones (gameobject 179804) of phase one rise as
+        // Bone Constructs, about 40 of them, each on a random raider. The one pass of the 0136 sweeps (sweep-bwl-0136-2) had the spare tanks
+        // standing where the drakonids had died: the constructs rose next to them and the area taunts took 41 loose ones to 3 in three
+        // seconds, 34 of 40 were still up with him at 2%. In r10 and r11 the spare tanks stood elsewhere (in r11 on Nefarian, 0014) and 11-12 of 12
+        // healers died within 50 s of the rise. From 25% the spare tanks walk to the bones; the guard ends at 20%, where the rise begins.
+        r.guardRise.push_back({ 11583, 179804, 25.0f, 20.0f });
         // Corrupted Infernal (14668, warlock call): Immolation 20153 burns everything close; casters and healers stay off it (ike3).
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Ranged });
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Healer });
