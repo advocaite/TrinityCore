@@ -1338,6 +1338,45 @@ bool ReachedRaid(Plan const& plan, Unit* add)
 // alone, measured from the tank wherever it stood, kept a tank at a drakonid door: every new drakonid spawned within 15 y of it, it
 // turned on each one and never walked back (bwl_nefarian 1109y: Mctankwb fought at -7597,-1195 beside the west door, 63 y from the
 // healers' post, from 20 s into the pull until it died; Mctankda died 45 y north of the camp).
+// A tank of a fixed row that holds none of the row's adds takes one over from a tank of the row that holds kHandOffFrom or more: the adds of
+// such a tank past its kHandOffKeep most hurt ones (it finishes those), most health first, one each to the empty-handed tanks in guid order.
+// bwl_nefarian 0136-r13 run 2: one tank held five drakonids, four of them Red (Brood Power: Red, a fire DoT stacking to 5 from every Red
+// within 15 y), while the three others stood at their places with nothing, from 60 s until it died at 81 s; the next two tanks died the
+// same way at 124 s and 145 s, and the raid never reached phase three. FetchesAdd kept every add on another tank off limits, so nobody
+// relieved it.
+constexpr size_t kHandOffFrom = 3, kHandOffKeep = 2;
+bool HandedOffTo(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
+{
+    std::vector<Player*> idle;
+    std::vector<Unit*> pool;
+    for (Member const& m : plan.members)
+    {
+        if (!m.tank || !m.p->IsAlive())
+            continue;
+        std::vector<Unit*> held;
+        for (Unit* enemy : plan.enemies)
+            if (enemy->IsAlive() && InTankSpot(rule, enemy->GetEntry()) && enemy->GetVictim() == m.p)
+                held.push_back(enemy);
+        if (held.empty())
+        {
+            if (m.bot)
+                idle.push_back(m.p);
+            continue;
+        }
+        if (held.size() < kHandOffFrom)
+            continue;
+        std::sort(held.begin(), held.end(), [](Unit* a, Unit* b) { return a->GetHealth() != b->GetHealth() ? a->GetHealth() < b->GetHealth()
+                                                                                                             : a->GetGUID() < b->GetGUID(); });
+        pool.insert(pool.end(), held.begin() + kHandOffKeep, held.end());
+    }
+    std::sort(pool.begin(), pool.end(), [](Unit* a, Unit* b) { return a->GetHealth() != b->GetHealth() ? a->GetHealth() > b->GetHealth()
+                                                                                                         : a->GetGUID() < b->GetGUID(); });
+    for (size_t i = 0; i < idle.size() && i < pool.size(); ++i)
+        if (idle[i] == bot)
+            return pool[i] == add;
+    return false;
+}
+
 bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
 {
     // One another tank of the row already holds is that tank's, at its place: going after it is a taunt from melee range (Taunt reaches
@@ -1348,7 +1387,7 @@ bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
     if (Unit* const v = add->GetVictim(); v && v != bot && v->IsAlive())
         if (Player* const vp = v->ToPlayer())
             if (std::any_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p == vp && m.tank; }))
-                return false;
+                return HandedOffTo(plan, rule, bot, add);   // ... unless that tank holds too many and this one none
     if (ReachedRaid(plan, add))
         return true;
     if (rule.reach <= 0.0f)
