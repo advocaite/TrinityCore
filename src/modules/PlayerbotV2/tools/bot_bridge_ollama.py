@@ -972,7 +972,7 @@ def clean_action(data, event, why=None):
 
 def plain_order(event):
     """The action of a plain order in the player's own words, {} for anything else. A model sometimes answers an order with
-    words only: "go to the bank" -> "Heading to the bank then." and no action, and the bot stood there (chris, 2026-11-13).
+    words only: "go to the bank" -> "Heading to the bank then." and no action, and the bot stood there (Karrz, 2026-11-13).
     For an order this plain, what to do is not the model's guess: go to the place he named, mount, dismount. English only
     (the place words are)."""
     if event.get("_moment") or event.get("from_is_bot") or "?" in str(event.get("text", "")):
