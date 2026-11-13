@@ -1113,6 +1113,8 @@ bool InviteNearbyPlayerGate(BotSnapshotView const& s, BotAI&,
                             GroupSnapshotView const&, uint32)
 {
     if (s.in_group() || s.has_group_invite()) return false;
+    // Nobody to invite: neither passing players nor passing bots (Playerbot.Behavior.InvitePassing*), so no scan at all.
+    if (!Services::Config().behavior_invite_passing_players() && !Services::Config().behavior_invite_passing_bots()) return false;
     // A scenario squad member only ever groups through the run (the runner's raid group), never with a stranger.
     if (Pool::IsScenarioBot(s.bot_id())) return false;
     // An owned bot stays with its owner (idle:owner_escort) and never
@@ -1134,6 +1136,7 @@ bool InviteNearbyPlayerFire(BotSnapshotView const& s, BotAI& ai,
 {
     const uint32 inv_now_ms = GameTime::GetGameTimeMS();
     const bool invite_players = Services::Config().behavior_invite_passing_players();
+    const bool invite_bots = Services::Config().behavior_invite_passing_bots();
     for (auto const& u : s.raw().combat.nearby_friends)
     {
         if (u.guid.IsCreature()) continue;
@@ -1141,7 +1144,9 @@ bool InviteNearbyPlayerFire(BotSnapshotView const& s, BotAI& ai,
         if (u.guid == s.raw().guid) continue;
         if (u.is_in_group) continue;
         if (Pool::IsScenarioBot(u.guid.GetCounter())) continue;   // a test squad member is not a pickup-party recruit
-        if (!invite_players && !Services::Registry().has(u.guid.GetCounter())) continue;   // a real player walking past
+        bool const is_bot = Services::Registry().has(u.guid.GetCounter());
+        if (!invite_players && !is_bot) continue;   // a real player walking past
+        if (!invite_bots && is_bot) continue;       // another world bot (Playerbot.Behavior.InvitePassingBots = 0)
         if (!u.victim.IsEmpty()) continue;
         const int dlvl = int(u.level) - int(s.level());
         if (dlvl > 5 || dlvl < -5) continue;

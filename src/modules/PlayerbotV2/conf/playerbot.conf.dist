@@ -980,6 +980,9 @@ Playerbot.Behavior.PoliteWorldBots = 1
 #                     walks past within 30 yd. 0 (default) = world bots only invite other bots; a player who wants a bot in
 #                     his group invites it himself (or whispers "invite" to it).
 Playerbot.Behavior.InvitePassingPlayers = 0
+#   InvitePassingBots 1 (default) = a world bot (as above) may invite another world bot near it to a pickup group. 0 = it
+#                     does not. With both InvitePassing keys at 0 no world bot sends an invite nobody asked for.
+Playerbot.Behavior.InvitePassingBots = 1
 #   QuestAccept       a companion (a bot grouped with its owner) quests with him like a party member: it accepts a quest
 #                     its group shares with it, and when its owner takes a quest from an NPC beside it, it walks up to the
 #                     same NPC and takes the quest too. Off: shared quests are not auto-accepted, no follow-the-owner accept.
