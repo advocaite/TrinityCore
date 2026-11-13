@@ -1,0 +1,38 @@
+-- Well Fed (spell_group 1001, exclusive): every aura named Well Fed in the client data joins the group, so a second food with a
+-- different buff replaces the first instead of stacking with it (Discord, edward4488, 13 Nov). Safe to run again.
+DELETE FROM `spell_group` WHERE `id`=1001 AND `spell_id` IN (19705,19706,19708,19709,19710,19711,24799,24870,25694,25941,1225778,1225779,1225780,1225782,1248406,1248420,1248421,1248422,1248688,1249519,1249520,1249521,1249523,1249907,1249926,1249927,1283082,1294007,1302064,1319310);
+INSERT INTO `spell_group` (`id`,`spell_id`) VALUES
+(1001,19705),
+(1001,19706),
+(1001,19708),
+(1001,19709),
+(1001,19710),
+(1001,19711),
+(1001,24799),
+(1001,24870),
+(1001,25694),
+(1001,25941),
+(1001,1225778),
+(1001,1225779),
+(1001,1225780),
+(1001,1225782),
+(1001,1248406),
+(1001,1248420),
+(1001,1248421),
+(1001,1248422),
+(1001,1248688),
+(1001,1249519),
+(1001,1249520),
+(1001,1249521),
+(1001,1249523),
+(1001,1249907),
+(1001,1249926),
+(1001,1249927),
+(1001,1283082),
+(1001,1294007),
+(1001,1302064),
+(1001,1319310);
+
+DELETE FROM `spell_group_stack_rules` WHERE `group_id`=1001;
+INSERT INTO `spell_group_stack_rules` (`group_id`,`stack_rule`) VALUES
+(1001,1);
