@@ -2824,6 +2824,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
             float const r2 = rule.reach * rule.reach;
             std::vector<char> covered(dead.size(), 0);
             GameObject* spot = nullptr;
+            GameObject* densest = nullptr;
             for (uint32_t pick = 0; pick <= index; ++pick)
             {
                 spot = nullptr;
@@ -2842,12 +2843,19 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                 }
                 if (!spot)
                     break;
+                if (!densest)
+                    densest = spot;
                 for (size_t i = 0; i < dead.size(); ++i)
                     if (spot->GetExactDist2dSq(dead[i]) <= r2)
                         covered[i] = 1;
             }
+            // More guards than clusters: the spare guard joins the densest one. bwl_nefarian 0136-r15: the whole phase 1 died on one
+            // spot, all 40-42 bones lay in one cluster, only one tank guarded it while the other spare tanks stayed on Nefarian; the 40+ constructs
+            // rose round that one spot, the tanks holding them died first (432 s, 406 s), and both runs wiped. The pass had two clusters, two guards.
             if (!spot)
-                continue;   // more guards than clusters: this one fights on
+                spot = densest;
+            if (!spot)
+                continue;
             out.forbidden_targets.push_back(boss->GetGUID());
             float const off = Dist2D(bot->GetPositionX(), bot->GetPositionY(), spot->GetPositionX(), spot->GetPositionY());
             if (off <= 4.0f)
