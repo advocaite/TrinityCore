@@ -74,6 +74,9 @@ STEP_ALIASES = {"move": "", "sidestep": "", "step_aside": "", "back_up": "back",
 # 2026-11-08), so the program reads the place from his line. Longest first ("auction house" before "house").
 PLACE_WORDS = ["auction house", "flight master", "flight path", "stable master", "spirit healer", "innkeeper", "mailbox", "banker",
                "bank", "inn", "auctioneer", "vendor", "merchant", "repair", "trainer", "graveyard", "mail", "ah"]
+PLACE_ALIASES = {"mail": "mailbox", "ah": "auction house", "flight path": "flight master", "merchant": "vendor"}
+# "go to the bank", "go wait in the inn", "head over to the mailbox", "meet me at the flight master": a plain order to go somewhere.
+GO_ORDER_RE = re.compile(r" (go|goes|head|run|walk|move|get|come|wait|meet|hurry)\b.* (to|in|at|into|inside|by|near) ")
 EMOTES = ["wave", "hello", "bye", "bow", "thank", "cheer", "laugh", "dance", "salute", "point", "yes", "nod", "no", "cry",
           "roar", "flex", "kneel", "applaud", "shy", "talk", "question", "exclamation", "rude", "chicken", "beg", "shout", "eat"]
 TALK_TIMEOUT_S = 20    # bots' own talk: dropped sooner than a player's answer
@@ -909,8 +912,7 @@ def clean_action(data, event, why=None):
         elif place:
             action["place"] = place      # the server finds it in the zone (inn, mailbox, flight master, a town...)
         elif named and target != "speaker_target":
-            action["place"] = {"mail": "mailbox", "ah": "auction house", "flight path": "flight master",
-                               "merchant": "vendor"}.get(named, named)   # he named a place the model left out
+            action["place"] = PLACE_ALIASES.get(named, named)   # he named a place the model left out
         else:
             action["target"] = "speaker"
     elif act == "order":
@@ -966,6 +968,27 @@ def clean_action(data, event, why=None):
         elif spell.get("kind") not in ("self", "campfire"):
             action["target"] = "self" if target == "self" else "speaker"
     return action
+
+
+def plain_order(event):
+    """The action of a plain order in the player's own words, {} for anything else. A model sometimes answers an order with
+    words only: "go to the bank" -> "Heading to the bank then." and no action, and the bot stood there (chris, 2026-11-13).
+    For an order this plain, what to do is not the model's guess: go to the place he named, mount, dismount. English only
+    (the place words are)."""
+    if event.get("_moment") or event.get("from_is_bot") or "?" in str(event.get("text", "")):
+        return {}   # a question ("how do I get to the bank?") is not an order
+    can = event.get("can")
+    def allowed(act):
+        return can is not None and act in can
+    said = " " + " ".join(re.sub(r"[^\w ]", " ", str(event.get("text", "")).lower()).split()) + " "
+    named = next((w for w in PLACE_WORDS if " %s " % w in said), "")
+    if named and GO_ORDER_RE.search(said) and allowed("go_to"):
+        return {"do": "go_to", "place": PLACE_ALIASES.get(named, named)}
+    if said.strip() in ("mount", "mount up", "get on your mount", "mount up please") and allowed("mount"):
+        return {"do": "mount"}
+    if said.strip() in ("dismount", "get off your mount", "get down") and allowed("dismount"):
+        return {"do": "dismount"}
+    return {}
 
 
 def human_touch(say, persona, rng, keep=""):
@@ -1043,6 +1066,12 @@ def answer(event, api, actions_on, minds, opts):
                 else:
                     reply = {"say": random.choice(CANT_LINES)}
                 log("%s -> %s second answer: %s%s" % (player, bot, reply.get("say", ""), " {do: %s}" % reply["do"] if "do" in reply else ""))
+            elif not wanted and "do" not in reply:
+                order = plain_order(event)
+                if order:
+                    reply.update(order)
+                    log("%s -> %s: the answer had no action for the plain order \"%s\": %s" % (player, bot, event.get("text", ""),
+                        order["do"] + (" " + order["place"] if "place" in order else "")))
         now = time.time()
         if event.get("_moment"):
             remember_moment(minds, bot, player, event, now)
