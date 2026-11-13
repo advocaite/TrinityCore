@@ -88,7 +88,9 @@ WorldPacket const* ServerPetitionShowList::Write()
 
 void PetitionBuy::Read()
 {
-    _worldPacket >> SizedString::BitsSize<7>(Title);
+    // Classic 1.60: the title length has 8 bits, as in SMSG_QUERY_PETITION_RESPONSE. Read with 7, the last bit was dropped and
+    // the name came out half as long ("Knights of Valor", 16, became "Knights ", 8: player report 2026-11-13).
+    _worldPacket >> SizedString::BitsSize<8>(Title);
 
     _worldPacket >> Unit;
     _worldPacket >> Muid;
