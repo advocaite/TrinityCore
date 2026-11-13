@@ -2904,14 +2904,7 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                     }
             float const half = rule.halfAngleDeg * (float(M_PI) / 180.0f);
             if (geo::InRearSector(ex, ey, eo, bot->GetPositionX(), bot->GetPositionY(), half, rule.minDist, rule.maxDist))
-            {
-                if (rule.holdGround)
-                {
-                    out.at_post = true;
-                    out.hold_ground = true;
-                }
                 break;
-            }
             uint32_t& at = g_lastRearStep[bot->GetGUID().GetCounter()];
             if (now - at < 4000)
                 break;

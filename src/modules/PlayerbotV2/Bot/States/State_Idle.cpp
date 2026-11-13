@@ -6098,8 +6098,7 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
     // line at the bot's own Z could land in MC lava or a wall.
     // Raid only: a 5-man party's casters stand where they cast (no step-out from mobs, no disperse), the party keeps to four orders.
     auto const spacing_mob = [&](NearbyUnit const& u) -> bool { return RaidSpacingElite(u); };
-    // Not in a sector the encounter holds (StandBehind::holdGround, Nefarian's phase three): the adds are meant to come there.
-    if (RaidRangedOrHealer(s, ai) && !s.is_casting() && !(s.raw().raid_order.active && s.raw().raid_order.hold_ground))
+    if (RaidRangedOrHealer(s, ai) && !s.is_casting())
     {
         float bx_rs, by_rs, bz_rs; s.position(bx_rs, by_rs, bz_rs);
         float cx_rs = 0.f, cy_rs = 0.f, near_d2 = kRaidRangedTooClose * kRaidRangedTooClose;

@@ -55,16 +55,6 @@ namespace Playerbot::Raid {
         // camp (bwl_nefarian 1110a run 1: Shadow Flame killed three casters standing on the camp 9 y in front of him, Cleave and his swings
         // the healers at their post).
         r.faceAway.push_back({ 11583 });
-        // Phase three (under 20%, boss_nefarian.cpp DamageTaken): Victor raises every drakonid corpse as a Bone Construct, each one on a random
-        // name of his threat list (SetAggressiveStateAfter with the summoner: SelectTarget Random), about 40 of them on 40 raiders. Spread
-        // out, every one ran to its own target over the whole room, the tanks held one each and the healers died first (bwl_nefarian 0136-r10:
-        // all twelve healers dead 20-50 s into the phase, every run, the tanks right after). The casters and healers close up in one sector
-        // behind him, so the constructs come to one place where the tanks' area taunts and the AoE reach them: past his Tail Lash (20 y),
-        // inside the 30 yard spells.
-        // In the sector they hold their ground (no step back from the constructs the tanks hold there): the mages' Blizzard needs them
-        // standing still, and r10's casters cast one to twelve a phase while walking between spacing, cone and formation steps.
-        r.standBehind.push_back({ 11583, Who::Ranged, 22.0f, 28.0f, 30.0f, 20.0f, 0.0f, true });
-        r.standBehind.push_back({ 11583, Who::Healer, 22.0f, 28.0f, 30.0f, 20.0f, 0.0f, true });
         // Corrupted Infernal (14668, warlock call): Immolation 20153 burns everything close; casters and healers stay off it (ike3).
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Ranged });
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Healer });
