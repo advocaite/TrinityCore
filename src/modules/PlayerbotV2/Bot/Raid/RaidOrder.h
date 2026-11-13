@@ -36,6 +36,9 @@ struct RaidOrder
     // walk the bot away from it. The post already says where to stand against that enemy (Victor Nefarius' Shadow Blink lands him next to
     // a random raider every 20-25 s; bwl_nefarian 1108h: 96 steps back from him in one pull, the camp scattered).
     ObjectGuid post_enemy;
+    // The bot is inside a StandBehind sector that holds its ground (StandBehind::holdGround): the ranged spacing step does not walk it away
+    // from any elite. The sector is where the encounter wants the adds to come.
+    bool hold_ground = false;
 
     // Melee bot whose target stands inside a hazard that applies to it
     // (Inferno, Blast Wave): pause the rotation so it does not chase back in.

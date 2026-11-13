@@ -287,7 +287,10 @@ inline bool InTankSpot(TankSpot const& rule, uint32_t entry)
 // While <enemy> is alive and fighting, matching bots stand in the sector behind it: <halfAngleDeg> either side of the line
 // straight behind where it faces, between <minDist> and <maxDist> yards. A bot outside walks to the nearest such spot on its
 // own side. Pair with FaceAway so the tank decides which way "behind" is.
-struct StandBehind { uint32_t enemy; Who who; float minDist; float maxDist; float halfAngleDeg; float hpMax = 100.0f; float hpMin = 0.0f; };
+// holdGround: inside the sector the bots hold their ground: no formation walk, no clump separation and no step back from the elites the
+// tanks hold there (adds that are meant to come to them: Nefarian's Bone Constructs).
+struct StandBehind { uint32_t enemy; Who who; float minDist; float maxDist; float halfAngleDeg; float hpMax = 100.0f; float hpMin = 0.0f;
+                     bool holdGround = false; };
 
 // While <enemy> is alive and fighting (in the hp window), matching bots stand on its flank: <halfAngleDeg> either side of the line
 // <centerDeg> off where it faces, on the side they are already on, between <minDist> and <maxDist> yards. For a boss that hits the
