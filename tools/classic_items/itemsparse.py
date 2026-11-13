@@ -75,6 +75,16 @@ def read_randproppoints(path):
     return {k: {'Epic': f(v[4]), 'Superior': f(v[5]), 'Good': f(v[6])} for k, v in rows.items()}
 
 
+def read_armor_shield(path):
+    """{item level: [7 floats]} from ItemArmorShield.db2: the shield armor per quality (index 0 poor .. 6 heirloom)."""
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'vmangos_loot'))
+    import wdc5
+    rows, _ = wdc5.read(path)
+    # the reader packs the Quality float array into one integer, little endian; the second field is ItemLevel
+    return {level: list(struct.unpack('<7f', packed.to_bytes(28, 'little'))) for packed, level in rows.values()}
+
+
 def read_spell_auras(path):
     """{spell id: {aura type}} of the apply aura effects (Effect 6) in SpellEffect.db2."""
     import os, sys

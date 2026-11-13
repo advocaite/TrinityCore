@@ -19,7 +19,7 @@ same, which is the check that the conversion matches the client's own items.
 usage:
   gen_hotfix_items.py --validate <ItemSparse.db2> <RandPropPoints.db2> <vmangos db> [--effects <ItemEffect.db2> <ItemXItemEffect.db2> <SpellEffect.db2>]
   gen_hotfix_items.py <ItemSparse.db2> <RandPropPoints.db2> <vmangos db> <ids file> <out.sql> <first hotfix_data Id> <first UniqueId> [VerifiedBuild]
-      [--effects <ItemEffect.db2> <ItemXItemEffect.db2> <SpellEffect.db2>] [--first-effect-id <id>]
+      [--effects <ItemEffect.db2> <ItemXItemEffect.db2> <SpellEffect.db2>] [--first-effect-id <id>] [--shield-armor <ItemArmorShield.db2>]
 """
 import collections
 import os
@@ -40,6 +40,7 @@ EFFECT_COLUMNS = ['ID', 'LegacySlotIndex', 'TriggerType', 'Charges', 'CoolDownMS
 # vMaNGOS stat_typeN keeps the modern ITEM_MOD ids for these
 BASE_STATS = {0: 0, 1: 1, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7}
 # vMaNGOS resistance columns -> ITEM_MOD_*_RESISTANCE
+EXTRA_ARMOR = 50  # ITEM_MOD_EXTRA_ARMOR
 RESISTANCES = {'fire_res': 51, 'frost_res': 52, 'holy_res': 53, 'shadow_res': 54, 'nature_res': 55, 'arcane_res': 56}
 SCHOOL_RESIST = {2: 53, 4: 51, 8: 55, 16: 52, 32: 54, 64: 56}
 SCHOOL_DAMAGE = {2: 84, 4: 85, 8: 86, 16: 87, 32: 88, 64: 89}
@@ -117,9 +118,11 @@ def rand_prop_points(rpp, ilvl, quality, inv, subclass):
 
 
 class Converter:
-    def __init__(self, sparse_path, rpp_path, vmdb, effect_paths=None):
+    def __init__(self, sparse_path, rpp_path, vmdb, effect_paths=None, shield_armor_path=None):
         self.sparse = itemsparse.read_sparse(sparse_path)
         self.rpp = itemsparse.read_randproppoints(rpp_path)
+        # ItemArmorShield.db2 of the client: base shield armor per item level and quality, for the bonus armor (stat 50)
+        self.shield_armor = itemsparse.read_armor_shield(shield_armor_path) if shield_armor_path else None
         # effect_paths: ItemEffect.db2, ItemXItemEffect.db2, SpellEffect.db2 of the client
         self.client_effects = itemsparse.read_item_effects(*effect_paths[:2]) if effect_paths else {}
         self.spell_auras = itemsparse.read_spell_auras(effect_paths[2]) if effect_paths else {}
@@ -202,6 +205,9 @@ class Converter:
         for col, t in RESISTANCES.items():
             if v[col]:
                 st[t] = st.get(t, 0) + v[col]
+        extra = self.extra_armor(v)
+        if extra > 0:
+            st[EXTRA_ARMOR] = st.get(EXTRA_ARMOR, 0) + extra
         left = []
         auras = self.equip_auras(v)
         by_spell = collections.defaultdict(list)
@@ -231,6 +237,25 @@ class Converter:
             if sid and (trig != 1 or sid not in by_spell):
                 left.append(sid)
         return st, ([] if linked_auras is not None else left)
+
+    def extra_armor(self, v):
+        """Vanilla armor above what the client gives the item from its item level and quality, which the client stores as stat 50.
+
+        Shields get their base armor from ItemArmorShield (ItemTemplate::GetArmor), so the bonus is the rest of the vanilla armor.
+        Weapons get no base armor, so all of it is bonus (the client has it on 9 of the 11 weapons with armor both sides have, 5 at
+        the vanilla value). Not handled, 0: cloth to plate (base from ItemArmorTotal and the slot) and miscellaneous armor (the client
+        keeps the armor on 5 of 13 rings, necks and off-hand items), and everything without the table."""
+        if not v['armor'] or self.shield_armor is None:
+            return 0
+        if v['class'] == 2:
+            return v['armor']
+        if v['class'] == 4 and v['subclass'] == 6:
+            base = self.shield_armor.get(v['item_level'])
+            quality = v['quality'] if v['quality'] != 7 else 3  # heirloom reads as rare, as in GetArmor
+            if base is None or quality > 6:
+                return 0
+            return v['armor'] - int(base[quality] + 0.5)
+        return 0
 
     def linked_auras(self, id_):
         """Aura types of the equip spells the client links to the item, None when it links none."""
@@ -418,18 +443,23 @@ def main():
         k = args.index('--effects')
         effect_paths = args[k + 1:k + 4]
         del args[k:k + 4]
+    shield_armor_path = None
+    if '--shield-armor' in args:
+        k = args.index('--shield-armor')
+        shield_armor_path = args[k + 1]
+        del args[k:k + 2]
     first_effect_id = 9910001
     if '--first-effect-id' in args:
         k = args.index('--first-effect-id')
         first_effect_id = int(args[k + 1])
         del args[k:k + 2]
     if args[0] == '--validate':
-        validate(Converter(*args[1:4], effect_paths=effect_paths))
+        validate(Converter(*args[1:4], effect_paths=effect_paths, shield_armor_path=shield_armor_path))
         return
     sparse, rpp, vmdb, ids_file, out, first, first_unique = args[0:7]
     build = int(args[7]) if len(args) > 7 else 70532
     ids = [int(x) for x in open(ids_file).read().split() if x.strip()]
-    generate(Converter(sparse, rpp, vmdb, effect_paths), ids, out, int(first), int(first_unique), build, first_effect_id)
+    generate(Converter(sparse, rpp, vmdb, effect_paths, shield_armor_path), ids, out, int(first), int(first_unique), build, first_effect_id)
 
 
 if __name__ == '__main__':

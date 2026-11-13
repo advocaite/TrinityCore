@@ -25,4 +25,8 @@ Inputs: the 70532 `ItemSparse.db2` and `RandPropPoints.db2`, and a vMaNGOS world
 
 Stats: value = allocation x RandPropPoints(item level, quality, slot) / 10000, rounded, as `Item::GetItemStatValue` and the
 client tooltip compute it. Vanilla percentage bonuses are stored as rating: 14 crit, 10 hit, 12 dodge, 15 parry, 5 block per 1%.
-Weapon damage and armor are not in ItemSparse; both sides take them from the item level and quality tables.
+Weapon damage and armor are not in ItemSparse; both sides take them from the item level and quality tables. Vanilla armor
+above that is stat 50 (bonus armor) in the client. With `--shield-armor ItemArmorShield.db2` (client file) the tool writes it
+for shields (vanilla armor minus the table armor for the item level and quality) and weapons (all their vanilla armor, as the
+client does it on 9 of the 11 weapons both sides have). Cloth to plate and rings, necks and off-hand items are left out.
+Example: The Face of Death (23043), 3494 armor in vanilla, 3354 from the table at item level 90 epic, gets +140 bonus armor.
