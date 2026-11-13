@@ -159,12 +159,19 @@ namespace WorldPackets
         class TransmogOutfitUpdateSlots final : public ClientPacket
         {
         public:
+            enum
+            {
+                // Classic 1.60 sends every outfit slot and slot option: 45 (15 TransmogOutfitSlotInfo rows, 42 TransmogOutfitSlotOption
+                // rows). Retail sent at most 30, and a larger list was refused whole, so armor changes never saved.
+                MAX_TRANSMOG_OUTFIT_SLOTS = 45
+            };
+
             explicit TransmogOutfitUpdateSlots(WorldPacket&& packet) : ClientPacket(CMSG_TRANSMOG_OUTFIT_UPDATE_SLOTS, std::move(packet)) { }
 
             void Read() override;
 
             uint32 OutfitID = 0;
-            Array<TransmogOutfitSlotData, 30> Slots;
+            Array<TransmogOutfitSlotData, MAX_TRANSMOG_OUTFIT_SLOTS> Slots;
             ObjectGuid Npc;
             uint64 Cost = 0;
             bool UseAvailableDiscount = false;
