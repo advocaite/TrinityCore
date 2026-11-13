@@ -1305,6 +1305,7 @@ std::unordered_map<uint64_t, TankSpotWalk> g_tankSpotWalk;
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
 constexpr float kGuardRiseScan = 100.0f;         // GuardRise: the bones within this reach of the boss
 std::unordered_map<uint64_t, uint32_t> g_guardRiseLog;   // bot -> last [raid_guard_rise] line (ms)
+std::unordered_map<uint64_t, uint32_t> g_postHazardLog;  // bot -> last [raid_post] "the post is in a hazard" line (ms)
 constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned within this reach, in nobody's combat yet, are off limits too
 
 // An add of a fixed row that has reached the raid: it stands in melee with a raider, wherever that raider is (another tank's pile, a melee DPS
@@ -3226,6 +3227,22 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                 out.at_post = true;
                 continue;
             }
+        }
+        // A post inside a hazard for this bot (an enemy's avoid circle) is not walked back to: the hazard step (1) would walk the bot out
+        // again, and the two moves take turns while it casts nothing. bwl_nefarian 0136-r14 run 2: loose drakonids on the healers at their
+        // post put it inside the healers' 18 y Brood Power circle; in the 30 s before the first tank died the healers moved 98 times to
+        // "leave hazard" and 86 times to "role position", 0-4 of 12 were casting, and three tanks died between 112 s and 168 s. The bot
+        // holds where it is, out of the hazard, until the post is clear.
+        if (!circles.empty() && InsideAny(circles, rule.x, rule.y, 1.0f))
+        {
+            uint32_t& logged = g_postHazardLog[bot->GetGUID().GetCounter()];
+            if (now - logged >= 10000)
+            {
+                logged = now;
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_post] {} stays {:.0f} y from its post ({:.0f},{:.0f}): the post is in a hazard", bot->GetName(),
+                            offPost, rule.x, rule.y);
+            }
+            return;
         }
         SetMove(out, rule.x, rule.y, rule.z, "role position");
         return;
