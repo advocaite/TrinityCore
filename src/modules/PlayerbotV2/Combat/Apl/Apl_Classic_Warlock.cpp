@@ -63,6 +63,7 @@ constexpr uint32 SIPHON_LIFE        = 18265;   // Affliction talent
 constexpr uint32 CONFLAGRATE        = 17962;   // Destruction talent
 constexpr uint32 SHADOWBURN         = 17877;   // Destruction talent
 constexpr uint32 SHOOT_WAND         = 5019;
+constexpr uint32 RAIN_OF_FIRE       = 5740;
 constexpr float  kCurseRange        = 30.0f;
 
 constexpr uint8 POWER_MANA = 0;
@@ -342,6 +343,40 @@ bool ShouldShadowBolt(ApPredicateContext const& ctx)
 }
 void DoShadowBolt(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SHADOW_BOLT, ctx.bot.victim()); }
 
+// Rain of Fire: an 8 s ground channel of 4 ticks on every enemy within 8 yd of the point (classic_spell_ground_area_damage, rank 4: 226
+// fire plus 8.33% spell power a tick), the warlock's one area spell. The rotation had none: in bwl_nefarian 0136-r12 the five warlocks
+// cast Shadow Bolt and Corruption into Nefarian's Bone Constructs, about 40 on four tanks, and the constructs outlived the healers. Cast
+// on the victim from range like the mage's Blizzard, with its rules: three enemies in the area, standing still, mana for the channel,
+// enemies that avoid fire not counted, and never over a crowd-controlled, unpulled or not yet secured mob (AoeSafeAroundVictim).
+constexpr float kRainOfFireRadius = 8.0f;
+constexpr int kRainOfFireMinTargets = 3;
+bool ShouldRainOfFire(ApPredicateContext const& ctx)
+{
+    NearbyUnit const* v = ctx.bot.victim_info();
+    if (!v || !HasLiveTarget(ctx) || !ctx.bot.in_combat() || ctx.bot.is_moving() || ManaPct(ctx) < 40)
+        return false;
+    if (ctx.bot.raw().raid_order.no_aoe || !(Ready(ctx, RAIN_OF_FIRE) && ctx.bot.victim_in_spell_range(RAIN_OF_FIRE)))
+        return false;
+    uint8 const fire = BotIntentEmitter::SpellSchoolMaskOf(RAIN_OF_FIRE, 0);
+    PveOrder const& po = ctx.bot.raw().pve_order;
+    int n = 0;
+    float const r2 = kRainOfFireRadius * kRainOfFireRadius;
+    for (NearbyUnit const& u : ctx.bot.nearby_enemies())
+    {
+        if (u.hp <= 0 || u.untargetable || u.is_pacified || u.is_player || !u.unit_in_combat) continue;
+        float const dx = u.x - v->x, dy = u.y - v->y, dz = u.z - v->z;
+        if (dx * dx + dy * dy + dz * dz > r2) continue;
+        if (PveOrder::SchoolHint const* h = po.school_hint_for(u.guid); h && (h->avoid_mask & fire)) continue;
+        ++n;
+    }
+    return n >= kRainOfFireMinTargets && AoeSafeAroundVictim(ctx.bot, kRainOfFireRadius, "Rain of Fire", RAIN_OF_FIRE);
+}
+void DoRainOfFire(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    if (NearbyUnit const* v = ctx.bot.victim_info())
+        e.cast_at(RAIN_OF_FIRE, v->x, v->y, v->z);
+}
+
 // Raid school rule (ApSchoolHint.h): with a preferred school on the victim,
 // its spells go first among the dots and nukes - shadow: Corruption / Curse of
 // Agony / Siphon Life / Shadowburn / Shadow Bolt; fire: Immolate / Conflagrate
@@ -398,6 +433,7 @@ ApRule const kWarlockRules[] = {
     { ShouldDemonicSacrifice, DoDemonicSacrifice, "classic_warlock:demonic_sacrifice" },
     { ShouldRaidCurse,      DoRaidCurse,      "classic_warlock:raid_curse" },
     { ShouldShadowTrance,   DoShadowBolt,     "classic_warlock:shadow_trance" },
+    { ShouldRainOfFire,     DoRainOfFire,     "classic_warlock:rain_of_fire" },
     { ShouldSchoolNuke,     DoSchoolNuke,     "classic_warlock:school_nuke" },
     { ShouldCorruption,     DoCorruption,     "classic_warlock:corruption" },
     { ShouldCurseOfAgony,   DoCurseOfAgony,   "classic_warlock:curse_of_agony" },
