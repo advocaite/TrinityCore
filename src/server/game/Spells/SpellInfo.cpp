@@ -198,6 +198,33 @@ uint32 SpellImplicitTargetInfo::GetExplicitTargetMask(bool& srcSet, bool& dstSet
                                 break;
                         }
                         break;
+                    // The explicit target is a corpse (or a player who has not released yet). Resurrection spells carry
+                    // TARGET_FLAG_CORPSE_ALLY in SpellTargetRestrictions::Targets too, but not all of them: Classic 1.60
+                    // Revive (437138) has no row there. Without this its explicit mask was empty, so InitExplicitTargets
+                    // dropped the dead player as a target and the finished cast hit the ASSERT in
+                    // SelectImplicitTargetObjectTargets (player report 2026-11-12).
+                    case TARGET_OBJECT_TYPE_CORPSE_ALLY:
+                        targetMask = TARGET_FLAG_CORPSE_ALLY;
+                        break;
+                    case TARGET_OBJECT_TYPE_CORPSE_ENEMY:
+                        targetMask = TARGET_FLAG_CORPSE_ENEMY;
+                        break;
+                    case TARGET_OBJECT_TYPE_CORPSE:
+                        switch (GetCheckType())
+                        {
+                            case TARGET_CHECK_ENEMY:
+                                targetMask = TARGET_FLAG_CORPSE_ENEMY;
+                                break;
+                            case TARGET_CHECK_ALLY:
+                            case TARGET_CHECK_PARTY:
+                            case TARGET_CHECK_RAID:
+                                targetMask = TARGET_FLAG_CORPSE_ALLY;
+                                break;
+                            default:
+                                targetMask = TARGET_FLAG_CORPSE_ALLY | TARGET_FLAG_CORPSE_ENEMY;
+                                break;
+                        }
+                        break;
                     default:
                         break;
                 }
