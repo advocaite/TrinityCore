@@ -1758,7 +1758,8 @@ inline uint32 EmitInstantHealWhileMoving(BotSnapshotView const& s, GroupSnapshot
     constexpr uint32 POWER_WORD_SHIELD = 17, WEAKENED_SOUL = 6788, RENEW = 139;
     constexpr uint32 REJUVENATION = 774, REGROWTH = 8936, SWIFTMEND = 18562;
     constexpr uint32 HOLY_SHOCK = 20473;
-    constexpr uint32 NATURES_SWIFTNESS = 16188, HEALING_WAVE = 331, HEALING_STREAM_TOTEM = 5394, GHOST_WOLF = 2645;
+    constexpr uint32 NATURES_SWIFTNESS = 16188, HEALING_WAVE = 331, HEALING_STREAM_TOTEM = 5394;
+    constexpr uint32 GHOST_WOLF = 2645, GHOST_WOLF_LIVE = 1238640;   // the trainers teach 1238640 since live build 70888
     constexpr uint32 kDruidForms[] = { 768, 5487, 9634, 24858, 783, 1066 };   // Cat, Bear, Dire Bear, Moonkin, Travel, Aquatic
     if (s.is_casting() || ManaPct(s) < 5)
         return 0;
@@ -1806,7 +1807,7 @@ inline uint32 EmitInstantHealWhileMoving(BotSnapshotView const& s, GroupSnapshot
         }
         case CLASS_SHAMAN:
         {
-            if (s.has_aura(GHOST_WOLF)) return 0;   // no casting in Ghost Wolf
+            if (s.has_aura(GHOST_WOLF) || s.has_aura(GHOST_WOLF_LIVE)) return 0;   // no casting in Ghost Wolf
             Patient const p = PickPatient(s, g);
             // Nature's Swiftness up (cast on an earlier step): the next nature
             // spell under 10 s cast is instant, so Healing Wave lands on the run.
