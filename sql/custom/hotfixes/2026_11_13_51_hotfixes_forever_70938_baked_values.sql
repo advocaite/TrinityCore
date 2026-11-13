@@ -1,5 +1,5 @@
 -- WoW Forever client 1.60.1.70938: values Blizzard built into the 70938 game tables that our older live-push rows still overrode.
--- Compared row by row: 70888 tables, 70938 tables (chris's PC extract, 2026-11-13) and every row of our hotfix files. Every other
+-- Compared row by row: 70888 tables, 70938 tables (a client extract of 2026-11-13) and every row of our hotfix files. Every other
 -- changed record we hold already has the 70938 value (all class and spell changes of 70938 came as live pushes first).
 -- Mounting allowed (MountFlags 13) in Magram Front, Outcast Hideaway, Bristleback Retreat, Evenshade's Overlook, Forlorn Gardens
 -- and Valley of Bones (2026_11_10_80 had 0 or 1, which stops mounting there); holiday 161 calendar filter; player condition 168663.
