@@ -199,6 +199,8 @@ inline constexpr DungeonRow kDungeons[] = {
     { "sfk_rethilgore",       "Shadowfang Keep: level 24 party to Rethilgore",             33,   -228.191f,  2111.41f,    76.8904f,  70.f, 24,  3914, "Rethilgore",         15 },
     { "bfd_ghamoora",         "Blackfathom Deeps: level 26 party to Ghamoo-ra",            48,   -150.234f,   106.594f,  -39.779f,  255.f, 26,  4887, "Ghamoo-ra",          20 },
     { "stockade_targorr",     "Stormwind Stockade: level 27 party to Targorr the Dread",   34,     48.9849f,    0.483882f, -16.3942f, 360.f, 27,  1696, "Targorr the Dread",  15 },
+    // Excavation Site: Wetlands (Forever, map 2998): the entrance landing (world_safe_locs 1104104) to Saltspine, the nearest of its three bosses.
+    { "exc_saltspine",        "Excavation Site: Wetlands: level 28 party to Saltspine",   2998, -3698.41f, -2355.64f, 165.531f, 296.f, 28, 260322, "Saltspine",          20 },
     { "smgraveyard_vishas",   "Scarlet Monastery Graveyard: level 30 party to Vishas",     189,  1687.27f,   1050.09f,    18.6773f,  90.f, 30,  3983, "Interrogator Vishas",15 },
     { "rfk_aggem",            "Razorfen Kraul: level 31 party to Aggem Thorncurse",        47,   1942.27f,   1544.23f,    83.3055f,  75.f, 31,  4424, "Aggem Thorncurse",   20 },
     { "gnomeregan_electrocutioner", "Gnomeregan: level 32 party to Electrocutioner 6000", 90, -329.098f, -3.20722f, -152.851f, 170.f, 32, 6235, "Electrocutioner 6000", 30 },
@@ -211,7 +213,13 @@ inline constexpr DungeonRow kDungeons[] = {
     { "smlibrary_loksey36",   "Scarlet Monastery Library: level 36 party to Houndmaster Loksey", 189, 253.672f, -206.624f, 18.6773f, 270.f, 36, 3974, "Houndmaster Loksey", 20 },
     { "smarmory_herod",       "Scarlet Monastery Armory: level 36 party to Herod",         189,  1608.1f,   -318.919f,   18.6714f, 270.f, 36,  3975, "Herod",              25 },
     { "smcathedral_mograine", "Scarlet Monastery Cathedral: level 38 party to Mograine",   189,   853.179f, 1319.18f,    18.6714f,  90.f, 38,  3976, "Scarlet Commander Mograine", 25 },
+    // The Drowned City (Forever, map 2970), built without a sniff (2026_11_11_30: every spawn spot INFERRED): the cave landing (world_safe_locs
+    // 1104120) to the first boss up the climb.
+    { "dc_zulalai",           "The Drowned City: level 38 party to Zul'Alai",            2970, -13296.7f, 2232.3f, -47.5f, 91.f, 38, 258905, "Zul'Alai",           25 },
     { "rfd_glutton",          "Razorfen Downs: level 40 party to Glutton",                 129,  2593.68f,   1111.23f,    50.9518f, 270.f, 40,  8567, "Glutton",            25 },
+    // Krol'dok Stronghold (Forever, map 3039), built without a sniff (2026_11_11_33: every spawn spot INFERRED, the trash PLACEHOLDER): the cave
+    // landing (world_safe_locs 1104122) to the first boss on the walk up.
+    { "kroldok_grox",         "Krol'dok Stronghold: level 43 party to Slavecrusher Grox", 3039, -7659.97f, -3713.1f, 157.51f, 18.f, 43, 258966, "Slavecrusher Grox", 25 },
     { "uldaman_revelosh",     "Uldaman: level 44 party to Revelosh",                       70,   -228.859f,    46.1018f,  -46.0186f,  90.f, 44,  6910, "Revelosh",           20 },
     { "maraudon_noxxion",     "Maraudon (orange): level 46 party to Noxxion",              349,  1016.83f,  -458.52f,   -43.4737f, 360.f, 46, 13282, "Noxxion",            25 },
     { "zf_antusul",           "Zul'Farrak: level 48 party to Antu'sul",                    209,  1212.67f,    842.04f,      8.93346f, 360.f, 48,  8127, "Antu'sul",           25 },
