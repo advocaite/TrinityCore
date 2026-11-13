@@ -97,11 +97,13 @@ public:
         {
             InstanceScript::OnCreatureRemove(creature);
             _encounterTracker.OnCreatureRemove(creature);
+            FinishGongSummon(creature->GetGUID(), !creature->IsAlive());
         }
 
         void OnUnitDeath(Unit* unit) override
         {
             _encounterTracker.OnUnitDeath(unit);
+            FinishGongSummon(unit->GetGUID(), true);
         }
 
         void Update(uint32 diff) override
@@ -126,7 +128,7 @@ public:
             {
                 case GO_GONG:
                     _gongGUID = go->GetGUID();
-                    if (_encounter[0] == DONE)
+                    if (GongCompleted() || !_gongSummons.empty())
                         go->SetFlag(GO_FLAG_NOT_SELECTABLE);    // VMaNGOS GO_FLAG_NO_INTERACT (0x10)
                     break;
                 case GO_IDOL_CUP_FIRE:
@@ -144,79 +146,36 @@ public:
         {
             if (type == DATA_GONG_WAVES)
             {
-                _gongWaves = data;
-                switch (_gongWaves)
+                GameObject* gong = instance->GetGameObject(_gongGUID);
+                if (!gong || GongCompleted() || !_gongSummons.empty() || data != _gongWaves + 1 || data > 3)
+                    return;
+
+                static constexpr uint32 entries[] = { CREATURE_TOMB_FIEND, CREATURE_TOMB_REAVER, CREATURE_TUTEN_KASH };
+                static constexpr uint8 counts[] = { 8, 4, 1 };
+                gong->SetFlag(GO_FLAG_NOT_SELECTABLE);
+                _gongWaveLost = false;
+                for (uint8 i = 0; i < counts[_gongWaves]; ++i)
                 {
-                    case 9:
-                    case 14:
-                        if (GameObject* go = instance->GetGameObject(_gongGUID))
-                            go->RemoveFlag(GO_FLAG_NOT_SELECTABLE);
-                        break;
-                    case 1:
-                    case 10:
-                    case 15:
+                    bool const east = i % 2 != 0;
+                    float x = east ? 2546.33f : 2502.635f;
+                    float y = east ? 887.455f : 844.140f;
+                    if (i)
                     {
-                        GameObject* go = instance->GetGameObject(_gongGUID);
-
-                        if (!go)
-                            return;
-
-                        go->SetFlag(GO_FLAG_NOT_SELECTABLE);
-
-                        uint32 creatureEntry = 0;
-                        uint8 summonTimes = 0;
-
-                        switch (_gongWaves)
-                        {
-                            case 1:
-                                creatureEntry = CREATURE_TOMB_FIEND;
-                                summonTimes = 7;
-                                break;
-                            case 10:
-                                creatureEntry = CREATURE_TOMB_REAVER;
-                                summonTimes = 3;
-                                break;
-                            case 15:
-                                creatureEntry = CREATURE_TUTEN_KASH;
-                                break;
-                            default:
-                                break;
-                        }
-
-                        if (Creature* creature = go->SummonCreature(creatureEntry, 2502.635f, 844.140f, 46.896f, 0.633f, TEMPSUMMON_DEAD_DESPAWN))
-                        {
-                            if (_gongWaves == 10 || _gongWaves == 1)
-                            {
-                                float x, y, z;
-                                for (uint8 i = 0; i < summonTimes; ++i)
-                                {
-                                    if (i % 2 == 1)
-                                    {
-                                        x = 2502.635f;
-                                        y = 844.140f;
-                                        z = 46.896f;
-                                    }
-                                    else
-                                    {
-                                        x = 2546.33f;
-                                        y = 887.455f;
-                                        z = 47.69f;
-                                    }
-                                    if (Creature* summon = go->SummonCreature(creatureEntry, x + float(irand(-5, 5)), y + float(irand(-5, 5)), z, 0.633f, TEMPSUMMON_DEAD_DESPAWN))
-                                    {
-                                        summon->SetWalk(false);
-                                        summon->GetMotionMaster()->MovePoint(0, 2533.479f + float(irand(-5, 5)), 870.020f + float(irand(-5, 5)), 47.678f);
-                                    }
-                                }
-                            }
-                            creature->SetWalk(false);
-                            creature->GetMotionMaster()->MovePoint(0, 2533.479f + float(irand(-5, 5)), 870.020f + float(irand(-5, 5)), 47.678f);
-                        }
-                        break;
+                        x += float(irand(-5, 5));
+                        y += float(irand(-5, 5));
                     }
-                    default:
-                        break;
+                    if (Creature* summon = gong->SummonCreature(entries[_gongWaves], x, y,
+                        east ? 47.69f : 46.896f, 0.633f, TEMPSUMMON_DEAD_DESPAWN))
+                    {
+                        _gongSummons.insert(summon->GetGUID());
+                        summon->SetWalk(false);
+                        summon->GetMotionMaster()->MovePoint(0, 2533.479f + float(irand(-5, 5)),
+                            870.020f + float(irand(-5, 5)), 47.678f);
+                    }
                 }
+                if (_gongSummons.empty())
+                    gong->RemoveFlag(GO_FLAG_NOT_SELECTABLE);
+                return;
             }
 
             if (type == BOSS_TUTEN_KASH)
@@ -230,7 +189,7 @@ public:
                     cupFire2->SetLootState(GO_JUST_DEACTIVATED);
             }
 
-            // VMaNGOS saves whenever data == DONE (also for gong wave 3)
+            // Persist the completed boss event.
             if (data == DONE)
                 _savedTutenKash = _encounter[0];
         }
@@ -262,11 +221,38 @@ public:
         }
 
     private:
+        bool GongCompleted() const
+        {
+            return _encounter[0] == DONE || GetBossState(CLASSIC_RFD_ENC_TUTENKASH) == DONE;
+        }
+
+        // The wave's creatures used to count themselves through their stock scripts; those became plain SmartAI
+        // (world 2026_10_16_10), so after the first strike the gong never unlocked. The instance tracks them now: a
+        // wave killed to the last creature is cleared, a wave with a creature gone alive is struck again.
+        void FinishGongSummon(ObjectGuid guid, bool killed)
+        {
+            if (!_gongSummons.erase(guid))
+                return;
+            if (!killed)
+                _gongWaveLost = true;
+            if (!_gongSummons.empty())
+                return;
+            if (!_gongWaveLost && ++_gongWaves == 3)
+            {
+                SetData(BOSS_TUTEN_KASH, DONE);
+                return;
+            }
+            if (GameObject* gong = instance->GetGameObject(_gongGUID))
+                gong->RemoveFlag(GO_FLAG_NOT_SELECTABLE);
+        }
+
+        GuidSet _gongSummons;                          // creatures of the running gong wave
+        bool _gongWaveLost = false;
         ObjectGuid _gongGUID;
         ObjectGuid _cupFire1GUID;
         ObjectGuid _cupFire2GUID;
         uint32 _encounter[CLASSIC_RFD_MAX_ENCOUNTER];
-        uint8 _gongWaves;
+        uint8 _gongWaves;                              // gong waves cleared, 3 = Tuten'kash dead
         PersistentInstanceScriptValue<uint32> _savedTutenKash;
     };
 

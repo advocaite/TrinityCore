@@ -18,6 +18,7 @@
 #include "TransmogMgr.h"
 #include "DB2Stores.h"
 #include "FlatSet.h"
+#include "Log.h"
 #include "MapUtils.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -265,6 +266,13 @@ void TransmogMgr::Load()
     for (TransmogSituationEntry const* transmogSituation : sTransmogSituationStore)
         if (transmogSituation->HasFlag(TransmogSituationFlags::DefaultsToOn))
             DefaultSituations.push_back(transmogSituation);
+
+    // The client sends one entry per slot and slot option when an outfit is saved; a list longer than the packet allows is
+    // refused whole, so a client with more slots than this needs MAX_TRANSMOG_OUTFIT_SLOTS raised.
+    if (AllSlots.size() > WorldPackets::Transmogrification::TransmogOutfitUpdateSlots::MAX_TRANSMOG_OUTFIT_SLOTS)
+        TC_LOG_ERROR("server.loading", "TransmogOutfitSlotInfo.db2 and TransmogOutfitSlotOption.db2 give {} outfit slots, but "
+            "CMSG_TRANSMOG_OUTFIT_UPDATE_SLOTS accepts {}: outfits with every slot cannot be saved.",
+            AllSlots.size(), uint32(WorldPackets::Transmogrification::TransmogOutfitUpdateSlots::MAX_TRANSMOG_OUTFIT_SLOTS));
 }
 
 ItemModifiedAppearanceEntry const* TransmogMgr::GetItemModifiedAppearance(uint32 itemId, uint32 appearanceModId)
