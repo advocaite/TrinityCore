@@ -26,10 +26,13 @@
 #include "Log.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "ScriptedCreature.h"
 #include "ScriptedEscortAI.h"
+#include "SpellAuraEffects.h"
+#include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "classic_script_text.h"
 
@@ -1219,8 +1222,78 @@ struct classic_npc_rigger_gizelton : public ScriptedAI
     }
 };
 
+// 1286814 - Hoof-Shaped Foot Pedal (item 269902). The tooltip: "Transform into a centaur for $d or until you enter combat. While in
+// Desolace, your movement speed is also increased by $s2% and this transformation persists through combat." The client data names
+// no creature for the transform (misc value 0, so the model stayed the player's) and ties neither the speed nor the combat rule to
+// Desolace (the speed worked everywhere): Discord, edward4488, 13 Nov. The interrupt on entering combat is taken off the spell
+// (SpellMgr::LoadSpellInfoCorrections) and done here, outside Desolace only.
+class classic_spell_hoof_shaped_foot_pedal : public AuraScript
+{
+public:
+    static constexpr uint32 ZONE_DESOLACE = 405;
+    // The model: a Kolkar centaur of Desolace. A guess, the client data does not say which centaur (no live sniff of the item yet).
+    static constexpr uint32 NPC_KOLKAR_WAYLAYER = 12976;
+
+    static bool InDesolace(Unit const* unit) { return unit->GetZoneId() == ZONE_DESOLACE; }
+
+private:
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    // Also on SEND_FOR_CLIENT: Unit::RestoreDisplayId re-runs the transform that way after a mount or shapeshift ends.
+    void HandleTransform(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (target->GetTransformSpell() != GetId())
+            return;
+        if (CreatureTemplate const* centaur = sObjectMgr->GetCreatureTemplate(NPC_KOLKAR_WAYLAYER))
+            if (CreatureModel const* model = centaur->GetFirstValidModel())
+                target->SetDisplayId(model->CreatureDisplayID);
+    }
+
+    void CalculateSpeed(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = true;   // the zone hook below recalculates it on entering and leaving Desolace
+        if (Unit* owner = GetUnitOwner())
+            if (!InDesolace(owner))
+                amount = 0;
+    }
+
+    void HandleEnterCombat(bool isNowInCombat)
+    {
+        if (isNowInCombat && !InDesolace(GetTarget()))
+            Remove(AURA_REMOVE_BY_INTERRUPT);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_hoof_shaped_foot_pedal::HandleTransform, EFFECT_0, SPELL_AURA_TRANSFORM, AURA_EFFECT_HANDLE_SEND_FOR_CLIENT_MASK);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_hoof_shaped_foot_pedal::CalculateSpeed, EFFECT_1, SPELL_AURA_MOD_SPEED_ALWAYS);
+        OnEnterLeaveCombat += AuraEnterLeaveCombatFn(classic_spell_hoof_shaped_foot_pedal::HandleEnterCombat);
+    }
+};
+
+// The Foot Pedal's speed follows the zone: on, entering Desolace; off, leaving it.
+class classic_player_hoof_shaped_foot_pedal_zone : public PlayerScript
+{
+public:
+    static constexpr uint32 SPELL_HOOF_SHAPED_FOOT_PEDAL = 1286814;
+
+    classic_player_hoof_shaped_foot_pedal_zone() : PlayerScript("classic_player_hoof_shaped_foot_pedal_zone") { }
+
+    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        if (AuraEffect* speed = player->GetAuraEffect(SPELL_HOOF_SHAPED_FOOT_PEDAL, EFFECT_1))
+            speed->RecalculateAmount();
+    }
+};
+
 void AddSC_classic_desolace()
 {
+    RegisterSpellScript(classic_spell_hoof_shaped_foot_pedal);
+    new classic_player_hoof_shaped_foot_pedal_zone();
     RegisterGameObjectAI(classic_go_hand_of_iruxos_crystal);
     RegisterCreatureAI(classic_npc_melizza_brimbuzzle);
     RegisterCreatureAI(classic_npc_dalinda_malem);
