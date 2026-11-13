@@ -1002,7 +1002,6 @@ public:
         Playerbot::Role role = Playerbot::Role::Unknown;
         uint8 race = 0;
         uint8 gender = uint8(urand(GENDER_MALE, GENDER_FEMALE));
-        bool anyClass = false;
         for (Optional<std::string> const* arg : { &arg2, &arg3, &arg4 })
         {
             if (!*arg)
@@ -1011,8 +1010,8 @@ public:
             bool is_role = false;
             Playerbot::Role const r = ParseRoleWord(word, is_role);
             if (is_role) { role = r; continue; }
-            // "anyclass": the add-on's Quick party picks the classes itself, so with hired bots any free one of the role may come.
-            if (word == "anyclass")                { anyClass = true; continue; }
+            // "anyclass": the add-on's Quick party picks the classes itself, there are no hired bots, so the word is accepted and ignored.
+            if (word == "anyclass")                { continue; }
             if (word == "male" || word == "m")     { gender = GENDER_MALE; continue; }
             if (word == "female" || word == "f")   { gender = GENDER_FEMALE; continue; }
             if (uint8 const parsed = ParseRace(word); parsed && IsClassicRace(parsed)) { race = parsed; continue; }
@@ -1021,100 +1020,16 @@ public:
         }
 
         std::string outMsg;
-        bool const ok = AddCompanionFor(me, sess, cls, role, race, gender, class_arg, outMsg,
-                                        Playerbot::V2::Fleet::Hire::Grade::None, /*finder*/ false, anyClass);
-        if (!outMsg.empty())   // a hired companion that was called instead has said so itself
-            handler->SendSysMessage(outMsg.c_str());
+        bool const ok = AddCompanionFor(me, sess, cls, role, race, gender, class_arg, outMsg);
+        handler->SendSysMessage(outMsg.c_str());
         return ok ? true : Refuse(handler);
-    }
-
-    // A companion of `me`'s account that is not out (not in the group, not called a moment ago) for `role`, the same class first:
-    // in hired mode it comes instead of a new bot. 0 = none. Another class of the same role comes only with `anyClass` (Quick
-    // party): a player who picked a class gets that class (the owner 2026-11-09: Shaman and Paladin bots picked in the add-on,
-    // Priests, Warriors and Druids came instead).
-    static Playerbot::BotId IdleHiredCompanion(Player* me, WorldSession* sess, uint8 cls, Playerbot::Role role, bool anyClass)
-    {
-        using Playerbot::V2::Fleet::HireMgr;
-        uint32 const now = getMSTime();
-        Group const* group = me->GetGroup();
-        Playerbot::BotId fallback = 0;
-        for (Playerbot::BotId id : CompanionsMatching(sess, "all"))
-        {
-            ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(id);
-            if ((group && group->IsMember(guid)) || HireMgr::Instance().RecentlyCalled(id, now) || HireMgr::Instance().IsLoaned(id))
-                continue;   // (a Group Finder loan bot only plays inside the group it was made for)
-            if (Player const* online = ObjectAccessor::FindConnectedPlayer(guid); online && online->GetGroup())
-                continue;   // out with someone else of the account
-            // A companion bound to another character of the account stays with that character: called for this one it joined, the
-            // group check (CompanionGroupHygiene) found its owner character missing and sent it away a second later, and it came at
-            // that character's level (the owner 2026-11-07: his main's level 60 companions for his level 33 alt).
-            if (uint64 const ownerChar = Playerbot::Services::Owners().GetOwner(id).player_guid; ownerChar != 0 && ownerChar != me->GetGUID().GetCounter())
-                continue;
-            Playerbot::Role const declared = Playerbot::Services::Owners().DeclaredRole(id);
-            if (role != Playerbot::Role::Unknown && declared != role)
-                continue;
-            CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(guid);
-            if (!entry)
-                continue;
-            // A companion above the caller's level would come at its own level (bots are levelled up to the owner, never down): a
-            // fitting one is hired instead (the owner 2026-11-07: an account-wide level 60 companion joined his level 33 character).
-            if (entry->Level > me->GetLevel())
-                continue;
-            if (entry->Class == cls)
-                return id;
-            if (anyClass && !fallback && role != Playerbot::Role::Unknown)
-                fallback = id;
-        }
-        return fallback;
     }
 
     // Creates one companion of `cls` (race 0 = pick one) for `me` and logs it in; it joins the owner's group through the
     // normal companion setup. Shared by `.bot add` and the Group Finder bot fill. `outMsg` is what the owner is told.
     static bool AddCompanionFor(Player* me, WorldSession* sess, uint8 cls, Playerbot::Role role, uint8 race, uint8 gender,
-                                std::string const& className, std::string& outMsg,
-                                Playerbot::V2::Fleet::Hire::Grade hireGrade = Playerbot::V2::Fleet::Hire::Grade::None,
-                                bool finder = false, bool anyClass = false)
+                                std::string const& className, std::string& outMsg)
     {
-        namespace Hire = Playerbot::V2::Fleet::Hire;
-        using Playerbot::V2::Fleet::HireMgr;
-        HireMgr& hire = HireMgr::Instance();
-        bool const loan = finder && hireGrade == Hire::Grade::None && hire.MustHire(me);
-        if (!loan && hireGrade == Hire::Grade::None && hire.MustHire(me))
-        {
-            if (Playerbot::BotId const idle = IdleHiredCompanion(me, sess, cls, role, anyClass))
-            {
-                hire.NoteCalled(idle, getMSTime());
-                ChatHandler handler(sess);
-                outMsg.clear();
-                return CallCompanions(&handler, CompanionName(idle), false);
-            }
-            if (!hire.NearbyBroker(me, Hire::Grade::Sellsword))
-            {
-                char const* const roleWord = role == Playerbot::Role::Tank ? "tank" : role == Playerbot::Role::Healer ? "healer" : "fighter";
-                // A picked class is named: "no hired shaman healer free", not "no hired healer free" while a Priest healer sits idle.
-                std::string const what = anyClass ? std::string(roleWord)
-                    : className + (role == Playerbot::Role::Unknown ? "" : role == Playerbot::Role::Dps ? " dps" : " " + std::string(roleWord));
-                outMsg = Trinity::StringFormat("Hired bots only on this realm: you have no hired {} free. Hire one from a Sellsword Captain at an inn or in a capital city (the Group Finder and the dungeon finder still bring bots).", what);
-                return false;
-            }
-            hireGrade = Hire::Grade::Sellsword;
-        }
-        uint64 price = 0;
-        if (hireGrade != Hire::Grade::None)
-        {
-            if (!hire.NearbyBroker(me, hireGrade))
-            { outMsg = Trinity::StringFormat("There is nobody here who hires out a {}.", Hire::GradeName(hireGrade)); return false; }
-            price = HireMgr::PriceHere(me, hireGrade);
-            if (!price)
-            { outMsg = Trinity::StringFormat("A {} only signs on with a level {} hero.", Hire::GradeName(hireGrade), uint32(Playerbot::MaxPlayerLevel())); return false; }
-            if (uint32 const max = HireMgr::MaxPerAccount(); max && Playerbot::Services::Owners().BotsOwnedBy(sess->GetAccountId()).size() >= max)
-            { outMsg = Trinity::StringFormat("You have {} bots already, the most this realm allows. End a contract first.", max); return false; }
-            if (uint32 const max = HireMgr::LegendMaxPerAccount(); hireGrade == Hire::Grade::Legend && max && hire.CountGrade(sess->GetAccountId(), Hire::Grade::Legend) >= max)
-            { outMsg = Trinity::StringFormat("The cartel hires out {} Legend(s) to one hero at a time.", max); return false; }
-            if (!me->HasEnoughMoney(price))
-            { outMsg = Trinity::StringFormat("You need {} to hire a {}.", Hire::MoneyText(price), Hire::GradeName(hireGrade)); return false; }
-        }
-
         if (race && !Playerbot::V2::BotComposition::IsLegalRaceClass(race, cls))
         { outMsg = "That race can't be a " + className + "."; return false; }
         if (race && Player::TeamForRace(race) != me->GetTeam())
