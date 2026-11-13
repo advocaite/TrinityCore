@@ -34,7 +34,7 @@ INSERT IGNORE INTO `creature_loot_template` (`Entry`, `ItemType`, `Item`, `Chanc
 
 -- 3. Vendor items live sells that ours lacks (rows we have and live did not show stay: they may be seasonal or conditional).
 --    Laird in Auberdine sells five raw fish in stacks of 5 that restock; the restock time (15 min) is INFERRED.
-DELETE FROM `npc_vendor` WHERE `VerifiedBuild` = 70888 AND (`entry`,`item`) IN ((3614,4536),(4170,11291),(4200,6289),(4200,6308),(4200,6362),(4200,4603),(4200,8959),(4265,10284),(4265,4471),(4265,4470),(4265,11291),(4265,4536));
+DELETE FROM `npc_vendor` WHERE (`entry`,`item`) IN ((3614,4536),(4170,11291),(4200,6289),(4200,6308),(4200,6362),(4200,4603),(4200,8959),(4265,10284),(4265,4471),(4265,4470),(4265,11291),(4265,4536));
 INSERT INTO `npc_vendor` (`entry`, `slot`, `item`, `maxcount`, `incrtime`, `ExtendedCost`, `type`, `BonusListIDs`, `PlayerConditionID`, `IgnoreFiltering`, `VerifiedBuild`) VALUES
 (3614, 15, 4536, 0, 0, 0, 1, NULL, 0, 0, 70888),
 (4170, 19, 11291, 0, 0, 0, 1, NULL, 0, 0, 70888),
